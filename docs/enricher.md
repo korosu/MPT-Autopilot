@@ -22,6 +22,7 @@ No video generator or special toolchain required.
 ## Requirements
 
 - Python 3.10+
+- [uv](https://github.com/astral-sh/uv) — recommended runner (see below)
 - An API key for any OpenAI-compatible LLM provider
 
 ---
@@ -31,7 +32,6 @@ No video generator or special toolchain required.
 ```bash
 git clone https://github.com/korosu/hashtag-enricher.git
 cd hashtag-enricher
-pip install -r requirements.txt
 cp .env.example .env
 ```
 
@@ -45,28 +45,57 @@ LLM_MODEL=gpt-4o-mini
 
 ---
 
-## Usage
+## Running
+
+### Recommended: uv
+
+Modern Debian/Ubuntu systems restrict installing packages into the system Python directly
+(you may see an `externally-managed-environment` error). The cleanest solution is
+[uv](https://github.com/astral-sh/uv) — a fast Python runner that handles isolated
+environments automatically, with no manual `pip install` needed.
+
+**Install uv** (if you don't have it):
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+**Run** — uv installs dependencies into an isolated environment on the first run:
 
 ```bash
 # Scan current directory — language auto-detected per file
-python enrich.py
+uv run enrich.py
 
 # Scan a specific folder
-python enrich.py --dir ./videos
+uv run enrich.py --dir ./videos
 
 # Process a single file
-python enrich.py --file ./videos/my_clip.mp4
+uv run enrich.py --file ./videos/my_clip.mp4
 
 # Force a specific language for all files (skips LLM language detection → faster)
-python enrich.py --dir ./videos --lang Spanish
-python enrich.py --dir ./videos --lang en        # short codes work too
+uv run enrich.py --dir ./videos --lang Spanish
+uv run enrich.py --dir ./videos --lang en        # short codes work too
 
 # Preview what would be generated without saving
-python enrich.py --dir ./videos --dry-run
+uv run enrich.py --dir ./videos --dry-run
 
 # Re-generate hashtags even if they already exist
-python enrich.py --dir ./videos --force
+uv run enrich.py --dir ./videos --force
 ```
+
+### Alternative: virtual environment
+
+If you prefer not to use uv, create a venv manually:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+
+python enrich.py --dir ./videos
+```
+
+You'll need to activate the venv (`source .venv/bin/activate`) each time you open a new terminal.
 
 ---
 
@@ -154,6 +183,14 @@ always_include:
 ```
 
 `always_include` tags are always prepended to every result, regardless of language.
+
+---
+
+## Updating
+
+```bash
+cd hashtag-enricher && git pull
+```
 
 ---
 
