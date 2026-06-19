@@ -115,6 +115,13 @@ def _parse_tags(raw: str) -> list[str]:
       - Clean JSON array:  ["#shorts", "#history"]
       - Markdown fences:   ```json\n["#shorts"]\n```
       - Fallback:          return []
+
+    Post-processing applied to every tag regardless of LLM compliance:
+      - Forced to lowercase (YouTube stores all tags lowercase; CamelCase
+        like #vidaSaludable and #vidasaludable are the same tag on YouTube,
+        but lowercase is the canonical form users actually search for)
+      - Diacritics/accents are preserved as-is (they matter: #recuperacion
+        and #recuperación are different tags with different audiences)
     """
     text = raw.strip()
 
@@ -128,7 +135,6 @@ def _parse_tags(raw: str) -> list[str]:
     try:
         parsed = json.loads(text)
         if isinstance(parsed, list):
-            # Ensure every item starts with '#' and contains no spaces
             cleaned: list[str] = []
             for item in parsed:
                 if isinstance(item, str):
@@ -136,6 +142,10 @@ def _parse_tags(raw: str) -> list[str]:
                     if not tag.startswith("#"):
                         tag = "#" + tag
                     tag = tag.replace(" ", "")
+                    # Enforce lowercase — safety net even if the prompt is ignored.
+                    # We lowercase only the part after '#' to be explicit,
+                    # but since '#' is not a letter, tag.lower() is equivalent.
+                    tag = tag.lower()
                     if tag and len(tag) > 1:
                         cleaned.append(tag)
             return cleaned
