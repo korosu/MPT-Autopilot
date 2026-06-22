@@ -9,6 +9,7 @@ Two public functions:
 from __future__ import annotations
 
 import json
+import time
 
 import httpx
 
@@ -20,6 +21,11 @@ _CLIENT_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
 # Models that do not accept a 'temperature' parameter (OpenAI o-series reasoning models)
 _NO_TEMPERATURE_PREFIXES = ("o1", "o3", "o4")
 
+# Retry settings for 429 Too Many Requests
+_MAX_RETRIES = 2
+_RETRY_BASE_DELAY = 10.0
+_RETRY_MAX_DELAY = 20.0
+
 
 def _supports_temperature(model: str) -> bool:
     """Return False for reasoning models (o1, o3, o4 families) that reject temperature."""
@@ -29,7 +35,11 @@ def _supports_temperature(model: str) -> bool:
 
 
 def _chat(prompt: str) -> str:
-    """Send a single-turn chat request. Returns the raw text content."""
+    """Send a single-turn chat request. Returns the raw text content.
+
+    Retries automatically on 429 Too Many Requests using exponential backoff.
+    Respects the Retry-After header when the server sends one.
+    """
     url = f"{settings.base_url}/chat/completions"
     headers = {
         "Authorization": f"Bearer {settings.api_key}",
@@ -45,26 +55,52 @@ def _chat(prompt: str) -> str:
     if _supports_temperature(settings.model):
         payload["temperature"] = 0.3
 
-    response = httpx.post(url, headers=headers, json=payload, timeout=_CLIENT_TIMEOUT)
+    last_error: Exception | None = None
 
-    if not response.is_success:
-        # Include response body in the error to make debugging easier
+    for attempt in range(_MAX_RETRIES + 1):
+        response = httpx.post(url, headers=headers, json=payload, timeout=_CLIENT_TIMEOUT)
+
+        if response.status_code == 429:
+            if attempt == _MAX_RETRIES:
+                # Out of retries — fall through to raise below
+                last_error = httpx.HTTPStatusError(
+                    f"429 Too Many Requests — giving up after {_MAX_RETRIES} retries",
+                    request=response.request,
+                    response=response,
+                )
+                break
+
+            # Respect Retry-After if provided, otherwise use exponential backoff
+            retry_after = response.headers.get("Retry-After")
+            if retry_after and retry_after.isdigit():
+                delay = min(float(retry_after), _RETRY_MAX_DELAY)
+            else:
+                delay = min(_RETRY_BASE_DELAY * (2 ** attempt), _RETRY_MAX_DELAY)
+
+            print(f"[llm] 429 rate-limited — waiting {delay:.0f}s before retry {attempt + 1}/{_MAX_RETRIES}...")
+            time.sleep(delay)
+            continue
+
+        if not response.is_success:
+            # Non-429 error — don't retry
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            raise httpx.HTTPStatusError(
+                f"{response.status_code} {response.reason_phrase} — {body}",
+                request=response.request,
+                response=response,
+            )
+
+        data = response.json()
+
         try:
-            body = response.json()
-        except Exception:
-            body = response.text
-        raise httpx.HTTPStatusError(
-            f"{response.status_code} {response.reason_phrase} — {body}",
-            request=response.request,
-            response=response,
-        )
+            return data["choices"][0]["message"]["content"].strip()
+        except (KeyError, IndexError) as exc:
+            raise ValueError(f"Unexpected API response structure: {data}") from exc
 
-    data = response.json()
-
-    try:
-        return data["choices"][0]["message"]["content"].strip()
-    except (KeyError, IndexError) as exc:
-        raise ValueError(f"Unexpected API response structure: {data}") from exc
+    raise last_error  # type: ignore[misc]
 
 
 def detect_language(text: str) -> str:
