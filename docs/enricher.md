@@ -15,7 +15,6 @@ No video generator or special toolchain required.
 - **Optional MoneyPrinterTurbo integration** — if a `script.json` exists next to the video, the richer `video_subject` field is used automatically
 - **Provider-agnostic** — works with OpenAI, Groq, Together, local Ollama, GitHub Models — just change `LLM_BASE_URL`
 - **Safe by default** — never overwrites existing hashtags unless `--force` is passed
-- **Dry-run mode** — preview output without writing anything
 
 ---
 
