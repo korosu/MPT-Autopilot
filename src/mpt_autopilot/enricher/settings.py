@@ -45,7 +45,8 @@ class Settings:
         self.model: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
 
         # Tag generation
-        self.max_tags: int = int(cfg.get("max_tags", 15))
+        self.min_tags: int = int(cfg.get("min_tags", 12))
+        self.max_tags: int = int(cfg.get("max_tags", 20))
         self.always_include: list[str] = cfg.get("always_include", ["#shorts"])
 
         # Prompts

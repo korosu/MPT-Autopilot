@@ -90,16 +90,26 @@ def generate_hashtags(topic: str, language: str) -> list[str]:
     Returns a list of hashtag strings starting with '#'.
     On parse failure returns a minimal fallback list so the caller never crashes.
     """
+    # Tell the LLM exactly which tags to skip so it never generates them itself.
+    # This prevents duplicates regardless of what the user puts in always_include.
+    excluded = ", ".join(settings.always_include)
+
     prompt = settings.prompt_generate.format(
         video_subject=topic,
         language=language,
+        min_tags=settings.min_tags,
         max_tags=settings.max_tags,
+        excluded_tags=excluded,
     )
 
     raw = _chat(prompt)
     tags = _parse_tags(raw)
 
-    # Merge with always_include (prepend, deduplicate, respect order)
+    # Strip any always_include tags the LLM added anyway (case-insensitive safety net)
+    excluded_lower = {t.lower() for t in settings.always_include}
+    tags = [t for t in tags if t.lower() not in excluded_lower]
+
+    # Prepend always_include tags in order, then the LLM-generated content tags
     merged = _merge_always_include(tags, settings.always_include)
     return merged
 
