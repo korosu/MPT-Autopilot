@@ -28,7 +28,7 @@ correct format automatically.
 ## Installation
 
 ```bash
-git clone https://github.com/<you>/shorts-pilot.git
+git clone https://github.com/korosu/shorts-pilot.git
 cd shorts-pilot
 cp .env.example .env
 ```
