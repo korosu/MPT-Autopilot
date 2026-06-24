@@ -15,8 +15,7 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
-_ROOT = Path(__file__).parent.parent.parent.parent
-
+_ROOT = Path.cwd()
 
 @dataclass
 class LangSettings:
