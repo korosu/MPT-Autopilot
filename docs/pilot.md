@@ -140,7 +140,7 @@ You can also define permanent scan paths in `config.yaml` under `scan_dirs` so y
 scan_dirs: [/your/path/to/videos,
             /your/path/to/videos/en,
             /your/path/to/videos/old_videos,
-            /home/windows/videos/en/old_videos]
+            /your/path/to/videos/en/old_videos]
 ```
 
 Then just run:
