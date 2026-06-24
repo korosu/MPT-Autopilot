@@ -40,6 +40,10 @@ class Settings:
     scan_dirs: list[str]
     langs: dict[str, LangSettings]
 
+    # Paths — from config.yaml (optional; CLI flags always take priority)
+    jobs_dir: Path | None
+    seen_dir: Path | None
+
     @property
     def is_anthropic(self) -> bool:
         return "anthropic.com" in self.base_url
@@ -76,6 +80,10 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
     gen = raw.get("generation", {})
     langs_raw = raw.get("langs", {})
     scan_dirs = raw.get("scan_dirs") or []
+    paths_raw = raw.get("paths", {})
+
+    cfg_jobs_dir = paths_raw.get("jobs_dir")
+    cfg_seen_dir = paths_raw.get("seen_dir")
 
     langs: dict[str, LangSettings] = {}
     for code, lr in langs_raw.items():
@@ -88,6 +96,12 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
             job_defaults=lr.get("job_defaults", {}),
         )
 
+    # Resolve relative paths against the config.yaml location, not cwd,
+    # so it behaves the same regardless of where the command is run from.
+    cfg_dir = cfg_path.resolve().parent
+    jobs_dir = (cfg_dir / cfg_jobs_dir).resolve() if cfg_jobs_dir else None
+    seen_dir = (cfg_dir / cfg_seen_dir).resolve() if cfg_seen_dir else jobs_dir
+
     return Settings(
         api_key=_require_env("LLM_API_KEY"),
         base_url=_require_env("LLM_BASE_URL").rstrip("/"),
@@ -96,4 +110,6 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
         refill_threshold=int(gen.get("threshold", 10)),
         scan_dirs=scan_dirs,
         langs=langs,
+        jobs_dir=jobs_dir,
+        seen_dir=seen_dir,
     )

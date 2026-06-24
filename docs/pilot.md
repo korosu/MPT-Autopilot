@@ -68,6 +68,18 @@ uv run refill --lang en --jobs-dir /your/path/to/jobs --force
 uv run refill --lang en --jobs-dir /your/path/to/jobs --count 50
 ```
 
+`--jobs-dir` / `--seen-dir` can be skipped once you set `paths.jobs_dir`
+(and optionally `paths.seen_dir`) in `config.yaml`:
+
+```yaml
+paths:
+  jobs_dir: /your/path/to/jobs
+  seen_dir: /your/path/to/jobs   # optional, defaults to jobs_dir
+```
+
+With that in place, `refill --lang en` is enough. An explicit `--jobs-dir`
+on the command line always takes priority over `config.yaml`.
+
 ### Alternative: virtual environment
 
 ```

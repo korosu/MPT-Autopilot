@@ -5,7 +5,13 @@ refill.py — shorts-pilot entry point.
 Checks how many jobs are pending in jobs_<lang>.yaml and refills
 the queue by generating new video ideas via LLM when it runs low.
 
+Where jobs/seen files live (priority order):
+    1. --jobs-dir / --seen-dir (explicit CLI flags)
+    2. paths.jobs_dir / paths.seen_dir in config.yaml
+    3. current directory
+
 Usage:
+    refill --lang en                                   # uses config.yaml paths, or cwd
     refill --lang en --jobs-dir /your/path/to/jobs
     refill --lang es --jobs-dir /your/path/to/jobs
     refill --lang en --jobs-dir /your/path/to/jobs --force
@@ -90,13 +96,21 @@ def _deduplicate(
 
 def run(
         lang: str,
-        jobs_dir: Path,
-        seen_dir: Path,
+        jobs_dir: Path | None,
+        seen_dir: Path | None,
         force: bool,
         count_override: int | None,
         threshold_override: int | None,
 ) -> int:
     settings = load_settings()
+
+    # Priority: explicit CLI flag > paths.* from config.yaml > current directory.
+    jobs_dir = (jobs_dir or settings.jobs_dir or Path(".")).resolve()
+    seen_dir = (seen_dir or settings.seen_dir or jobs_dir).resolve()
+
+    if not jobs_dir.is_dir():
+        raise FileNotFoundError(f"jobs directory not found: {jobs_dir}")
+
     lang_cfg = settings.lang(lang)
     suffix = lang_cfg.file_suffix
 
@@ -111,7 +125,8 @@ def run(
     pending = jobs.count_pending_from(cfg, seen_set)
 
     seen_file = "seen.txt" if not suffix else f"seen_{suffix.lstrip('_')}.txt"
-    print(f"[{lang}] pending jobs: {pending} | threshold: {threshold} | seen file: {seen_file}")
+    print(f"[{lang}] jobs dir: {jobs_dir}")
+    print(f"[{lang}] pending jobs: {pending} | threshold: {threshold} | seen file: {seen_file} (in {seen_dir})")
 
     if pending >= threshold and not force:
         print(f"[{lang}] Queue is full — nothing to do. (Use --force to override.)")
@@ -156,6 +171,8 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+    refill --lang en
+    refill --lang es
     refill --lang en --jobs-dir /your/path/to/jobs
     refill --lang es --jobs-dir /your/path/to/jobs
     refill --lang en --jobs-dir /your/path/to/jobs --force
@@ -165,10 +182,12 @@ Examples:
     )
     parser.add_argument("--lang", required=True, metavar="LANG",
                         help="Language code (e.g. en, es). Must be defined in config.yaml.")
-    parser.add_argument("--jobs-dir", type=Path, default=Path("."), metavar="PATH",
-                        help="Directory containing jobs_<lang>.yaml files. Default: current directory.")
+    parser.add_argument("--jobs-dir", type=Path, default=None, metavar="PATH",
+                        help="Directory containing jobs_<lang>.yaml files. "
+                             "Default: paths.jobs_dir from config.yaml, else current directory.")
     parser.add_argument("--seen-dir", type=Path, default=None, metavar="PATH",
-                        help="Directory for seen_<lang>.txt files. Default: same as --jobs-dir.")
+                        help="Directory for seen_<lang>.txt files. "
+                             "Default: paths.seen_dir from config.yaml, else --jobs-dir.")
     parser.add_argument("--force", action="store_true",
                         help="Refill even if the queue is above the threshold.")
     parser.add_argument("--count", type=int, default=None, metavar="N",
@@ -185,12 +204,8 @@ Examples:
         print("[ERROR] --threshold must be a non-negative integer")
         sys.exit(1)
 
-    jobs_dir = args.jobs_dir.resolve()
-    seen_dir = (args.seen_dir or jobs_dir).resolve()
-
-    if not jobs_dir.is_dir():
-        print(f"[ERROR] jobs directory not found: {jobs_dir}")
-        sys.exit(1)
+    jobs_dir = args.jobs_dir.resolve() if args.jobs_dir else None
+    seen_dir = args.seen_dir.resolve() if args.seen_dir else None
 
     try:
         added = run(

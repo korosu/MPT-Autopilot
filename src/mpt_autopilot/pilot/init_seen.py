@@ -170,9 +170,12 @@ Examples:
     parser.add_argument(
         "--seen-dir",
         type=Path,
-        default=Path("."),
+        default=None,
         metavar="PATH",
-        help="Directory where seen*.txt files are stored. Default: current directory.",
+        help=(
+            "Directory where seen*.txt files are stored. "
+            "Default: paths.seen_dir from config.yaml, else current directory."
+        ),
     )
 
     args = parser.parse_args()
@@ -183,7 +186,7 @@ Examples:
         print(f"[ERROR] {e}")
         sys.exit(1)
 
-    seen_dir = args.seen_dir.resolve()
+    seen_dir = (args.seen_dir or settings.seen_dir or Path(".")).resolve()
     config_dirs = [Path(d) for d in (settings.scan_dirs or [])]
     cli_dirs = [d.resolve() for d in args.dirs]
     all_dirs = config_dirs + cli_dirs
