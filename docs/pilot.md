@@ -137,9 +137,10 @@ uv run init-seen --lang es --dir /your/path/to/videos
 You can also define permanent scan paths in `config.yaml` under `scan_dirs` so you don't need to pass `--dir` every time:
 
 ```
-scan_dirs:
-  - /your/path/to/videos
-  - /your/path/to/videos/old_videos
+scan_dirs: [/your/path/to/videos,
+            /your/path/to/videos/en,
+            /your/path/to/videos/old_videos,
+            /home/windows/videos/en/old_videos]
 ```
 
 Then just run:
