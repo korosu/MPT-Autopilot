@@ -49,9 +49,9 @@ Your `config.yaml` is gitignored — `git pull` will never overwrite your settin
 
 ## Running
 
-### Recommended: uv
+### Recommended: install with uv
 
-[uv](https://github.com/astral-sh/uv) handles isolated environments automatically — no manual `pip install` needed.
+[uv](https://github.com/astral-sh/uv) handles isolated environments automatically.
 
 **Install uv** (if you don't have it):
 
@@ -59,23 +59,7 @@ Your `config.yaml` is gitignored — `git pull` will never overwrite your settin
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-**Run directly (no install step required):**
-
-```
-# Refill English jobs (triggers when fewer than 10 ideas are pending)
-uv run refill.py --lang en --jobs-dir /your/path/to/jobs
-
-# Refill Spanish
-uv run refill.py --lang es --jobs-dir /your/path/to/jobs
-
-# Force a refill even if the queue is full
-uv run refill.py --lang en --jobs-dir /your/path/to/jobs --force
-
-# Generate 50 new ideas instead of the default 21
-uv run refill.py --lang en --jobs-dir /your/path/to/jobs --count 50
-```
-
-**Or install as CLI commands (optional):**
+**Install shorts-pilot as CLI commands:**
 
 ```
 uv tool install .
@@ -84,8 +68,17 @@ uv tool install .
 After that, `refill` and `init-seen` are available anywhere in your shell:
 
 ```
+# Refill English jobs (triggers when fewer than 10 ideas are pending)
 refill --lang en --jobs-dir /your/path/to/jobs
-init-seen --dir /your/path/to/videos
+
+# Refill Spanish
+refill --lang es --jobs-dir /your/path/to/jobs
+
+# Force a refill even if the queue is full
+refill --lang en --jobs-dir /your/path/to/jobs --force
+
+# Generate 50 new ideas instead of the default 21
+refill --lang en --jobs-dir /your/path/to/jobs --count 50
 ```
 
 ### Alternative: virtual environment
@@ -95,7 +88,7 @@ python3 -m venv .venv
 source .venv/bin/activate       # Windows: .venv\Scripts\activate
 pip install .
 
-python refill.py --lang en --jobs-dir /your/path/to/jobs
+refill --lang en --jobs-dir /your/path/to/jobs
 ```
 
 ---
@@ -125,26 +118,26 @@ Most users keep everything in one `seen.txt`. Multi-language setups with differe
 
 ## Registering existing videos
 
-If you already have generated videos, run `init_seen.py` (or `init-seen` if installed) to scan your folders
+If you already have generated videos, run `init-seen` to scan your folders
 and register them so they won't be generated again. Safe to run multiple times.
 
 **Most users** — just point it at your videos folder, everything goes into `seen.txt`:
 
 ```
-python init_seen.py --dir /your/path/to/videos
+init-seen --dir /your/path/to/videos
 
 # Multiple directories
-python init_seen.py --dir /your/path/to/videos --dir /your/path/to/videos/old
+init-seen --dir /your/path/to/videos --dir /your/path/to/videos/old
 ```
 
 **Multi-language setups** — use `--lang` to filter by suffix and write to separate seen files:
 
 ```
 # English: registers only files without a lang suffix → seen.txt
-python init_seen.py --lang en --dir /your/path/to/videos
+init-seen --lang en --dir /your/path/to/videos
 
 # Spanish: registers only files ending with _es.mp4 → seen_es.txt
-python init_seen.py --lang es --dir /your/path/to/videos
+init-seen --lang es --dir /your/path/to/videos
 ```
 
 You can also define permanent scan paths in `config.yaml` under `scan_dirs` so you don't need to pass `--dir` every time:
@@ -158,7 +151,7 @@ scan_dirs:
 Then just run:
 
 ```
-python init_seen.py
+init-seen
 ```
 
 ---
@@ -172,7 +165,7 @@ generation:
   count: 21       # how many ideas to generate per refill
   threshold: 10   # refill when pending jobs drop below this
 
-# Permanent directories to scan when running init_seen.py
+# Permanent directories to scan when running init-seen
 scan_dirs:
   - /your/path/to/videos
 

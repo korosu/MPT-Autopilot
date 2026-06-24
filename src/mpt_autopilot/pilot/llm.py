@@ -21,7 +21,7 @@ from typing import Any
 
 import requests
 
-from generator.settings import Settings
+from src.shorts_pilot.generator.settings import Settings
 
 _MAX_TOKENS = 8000
 
