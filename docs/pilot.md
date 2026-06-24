@@ -32,6 +32,9 @@ git clone https://github.com/korosu/shorts-pilot.git
 cd shorts-pilot
 cp .env.example .env
 cp config.yaml.example config.yaml
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv python install 3.11
+uv sync
 ```
 
 Open `.env` and fill in your API credentials:
@@ -49,36 +52,20 @@ Your `config.yaml` is gitignored — `git pull` will never overwrite your settin
 
 ## Running
 
-### Recommended: install with uv
-
-[uv](https://github.com/astral-sh/uv) handles isolated environments automatically.
-
-**Install uv** (if you don't have it):
-
-```
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-**Install shorts-pilot as CLI commands:**
-
-```
-uv tool install .
-```
-
-After that, `refill` and `init-seen` are available anywhere in your shell:
+All commands must be run from the `shorts-pilot` directory:
 
 ```
 # Refill English jobs (triggers when fewer than 10 ideas are pending)
-refill --lang en --jobs-dir /your/path/to/jobs
+uv run refill --lang en --jobs-dir /your/path/to/jobs
 
 # Refill Spanish
-refill --lang es --jobs-dir /your/path/to/jobs
+uv run refill --lang es --jobs-dir /your/path/to/jobs
 
 # Force a refill even if the queue is full
-refill --lang en --jobs-dir /your/path/to/jobs --force
+uv run refill --lang en --jobs-dir /your/path/to/jobs --force
 
 # Generate 50 new ideas instead of the default 21
-refill --lang en --jobs-dir /your/path/to/jobs --count 50
+uv run refill --lang en --jobs-dir /your/path/to/jobs --count 50
 ```
 
 ### Alternative: virtual environment
@@ -124,20 +111,20 @@ and register them so they won't be generated again. Safe to run multiple times.
 **Most users** — just point it at your videos folder, everything goes into `seen.txt`:
 
 ```
-init-seen --dir /your/path/to/videos
+uv run init-seen --dir /your/path/to/videos
 
 # Multiple directories
-init-seen --dir /your/path/to/videos --dir /your/path/to/videos/old
+uv run init-seen --dir /your/path/to/videos --dir /your/path/to/videos/old
 ```
 
 **Multi-language setups** — use `--lang` to filter by suffix and write to separate seen files:
 
 ```
 # English: registers only files without a lang suffix → seen.txt
-init-seen --lang en --dir /your/path/to/videos
+uv run init-seen --lang en --dir /your/path/to/videos
 
 # Spanish: registers only files ending with _es.mp4 → seen_es.txt
-init-seen --lang es --dir /your/path/to/videos
+uv run init-seen --lang es --dir /your/path/to/videos
 ```
 
 You can also define permanent scan paths in `config.yaml` under `scan_dirs` so you don't need to pass `--dir` every time:
@@ -151,7 +138,7 @@ scan_dirs:
 Then just run:
 
 ```
-init-seen
+uv run init-seen
 ```
 
 ---
