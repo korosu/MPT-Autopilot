@@ -3,23 +3,23 @@
 init_seen.py — register existing .mp4 files into seen.txt.
 
 Scans directories for .mp4 files and adds their names to the seen file
-so refill.py won't generate duplicate ideas for videos that already exist.
+so refill won't generate duplicate ideas for videos that already exist.
 
 Safe to run multiple times — already-known names are never duplicated.
 
 Without --lang (recommended for most users):
-  Scans all files and registers them into seen.txt. No filtering.
-  Use this if you work with one language or don't separate videos by lang.
+    Scans all files and registers them into seen.txt. No filtering.
+    Use this if you work with one language or don't separate videos by lang.
 
 With --lang:
-  Filters files by the lang's file_suffix from config.yaml and writes
-  to the corresponding seen file (seen.txt, seen_es.txt, etc.).
-  Use this for multi-language setups where each lang has its own seen file.
+    Filters files by the lang's file_suffix from config.yaml and writes
+    to the corresponding seen file (seen.txt, seen_es.txt, etc.).
+    Use this for multi-language setups where each lang has its own seen file.
 
 Usage:
-  python init_seen.py --dir /your/path/to/videos
-  python init_seen.py --dir /videos --dir /videos/old
-  python init_seen.py --lang es --dir /your/path/to/videos
+    init-seen --dir /your/path/to/videos
+    init-seen --dir /videos --dir /videos/old
+    init-seen --lang es --dir /your/path/to/videos
 """
 
 from __future__ import annotations
@@ -29,8 +29,8 @@ import re
 import sys
 from pathlib import Path
 
-from generator import seen
-from generator.settings import load as load_settings
+from src.shorts_pilot.generator import seen
+from src.shorts_pilot.generator.settings import load as load_settings
 
 # Matches language-code suffixes like _es, _en, _de, _fr, _pt, _zh (2-3 chars).
 _LANG_SUFFIX_RE = re.compile(r"_[a-z]{2,3}\.mp4$", re.IGNORECASE)
@@ -72,8 +72,7 @@ def init_all(scan_dirs: list[Path], seen_dir: Path) -> int:
     No --lang mode: register ALL .mp4 files into seen.txt without any filtering.
     Simple and unambiguous for single-language users.
     """
-    print("→ seen.txt  (no lang filter — registering all files)")
-
+    print("→ seen.txt (no lang filter — registering all files)")
     found = collect_mp4_names(*scan_dirs)
     existing = seen.load(seen_dir, "")
     new_entries = found - existing
@@ -92,11 +91,11 @@ def init_all(scan_dirs: list[Path], seen_dir: Path) -> int:
 
 
 def init_lang(
-    lang: str,
-    file_suffix: str,
-    all_suffixes: set[str],
-    scan_dirs: list[Path],
-    seen_dir: Path,
+        lang: str,
+        file_suffix: str,
+        all_suffixes: set[str],
+        scan_dirs: list[Path],
+        seen_dir: Path,
 ) -> int:
     """--lang mode: filter by suffix and write to the matching seen file."""
     seen_filename = "seen.txt" if not file_suffix else f"seen_{file_suffix.lstrip('_')}.txt"
@@ -105,7 +104,6 @@ def init_lang(
     found = collect_mp4_names(*scan_dirs)
     matched = _filter_by_suffix(found, file_suffix, all_suffixes)
     skipped = len(found) - len(matched)
-
     existing = seen.load(seen_dir, file_suffix)
     new_entries = matched - existing
 
@@ -127,24 +125,24 @@ def init_lang(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog="init_seen.py",
+        prog="init-seen",
         description=(
             "Scan directories for existing .mp4 files and register their names "
-            "so refill.py won't generate duplicates. "
+            "so refill won't generate duplicates. "
             "Safe to run multiple times."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Most users: register all videos into seen.txt (no lang filter)
-  python init_seen.py --dir /your/path/to/videos
+    # Most users: register all videos into seen.txt (no lang filter)
+    init-seen --dir /your/path/to/videos
 
-  # Multiple directories
-  python init_seen.py --dir /your/path/to/videos --dir /your/path/to/videos/old
+    # Multiple directories
+    init-seen --dir /your/path/to/videos --dir /your/path/to/videos/old
 
-  # Multi-language: filter by lang and write to separate seen files
-  python init_seen.py --lang en --dir /your/path/to/videos
-  python init_seen.py --lang es --dir /your/path/to/videos
+    # Multi-language: filter by lang and write to separate seen files
+    init-seen --lang en --dir /your/path/to/videos
+    init-seen --lang es --dir /your/path/to/videos
 """,
     )
     parser.add_argument(
@@ -176,6 +174,7 @@ Examples:
         metavar="PATH",
         help="Directory where seen*.txt files are stored. Default: current directory.",
     )
+
     args = parser.parse_args()
 
     try:
@@ -191,7 +190,7 @@ Examples:
 
     if not all_dirs:
         print("[ERROR] No directories to scan.")
-        print("        Pass --dir /path/to/videos or add paths to scan_dirs in config.yaml.")
+        print("  Pass --dir /path/to/videos or add paths to scan_dirs in config.yaml.")
         sys.exit(1)
 
     if args.lang is None:
@@ -204,6 +203,7 @@ Examples:
         except ValueError as e:
             print(f"[ERROR] {e}")
             sys.exit(1)
+
         all_suffixes = {cfg.file_suffix for cfg in settings.langs.values() if cfg.file_suffix}
         added = init_lang(args.lang, lang_cfg.file_suffix, all_suffixes, all_dirs, seen_dir)
 

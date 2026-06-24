@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-from generator.settings import LangSettings
+from src.shorts_pilot.generator.settings import LangSettings
 
 VIDEO_SUBJECT_MAX_CHARS = 500
 
@@ -19,10 +19,10 @@ _MAX_SEEN_IN_PROMPT = 200
 
 
 def build(
-    lang_cfg: LangSettings,
-    already_seen: set[str],
-    count: int,
-    seen_ordered: list[str] | None = None,
+        lang_cfg: LangSettings,
+        already_seen: set[str],
+        count: int,
+        seen_ordered: list[str] | None = None,
 ) -> tuple[str, str]:
     """
     Returns (system_prompt, user_prompt) for the given language and context.

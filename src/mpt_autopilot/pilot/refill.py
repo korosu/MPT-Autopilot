@@ -6,11 +6,11 @@ Checks how many jobs are pending in jobs_<lang>.yaml and refills
 the queue by generating new video ideas via LLM when it runs low.
 
 Usage:
-  python refill.py --lang en --jobs-dir /your/path/to/jobs
-  python refill.py --lang es --jobs-dir /your/path/to/jobs
-  python refill.py --lang en --jobs-dir /your/path/to/jobs --force
-  python refill.py --lang en --jobs-dir /your/path/to/jobs --count 50
-  python refill.py --lang en --jobs-dir /your/path/to/jobs --threshold 5
+    refill --lang en --jobs-dir /your/path/to/jobs
+    refill --lang es --jobs-dir /your/path/to/jobs
+    refill --lang en --jobs-dir /your/path/to/jobs --force
+    refill --lang en --jobs-dir /your/path/to/jobs --count 50
+    refill --lang en --jobs-dir /your/path/to/jobs --threshold 5
 """
 
 from __future__ import annotations
@@ -19,12 +19,11 @@ import argparse
 import sys
 from pathlib import Path
 
-from generator import jobs, seen
-from generator.seen import load_ordered as seen_load_ordered
-from generator.llm import call_llm, parse_json_array
-from generator.prompt import VIDEO_SUBJECT_MAX_CHARS, build as build_prompt
-from generator.settings import load as load_settings
-
+from src.shorts_pilot.generator import jobs, seen
+from src.shorts_pilot.generator.seen import load_ordered as seen_load_ordered
+from src.shorts_pilot.generator.llm import call_llm, parse_json_array
+from src.shorts_pilot.generator.prompt import VIDEO_SUBJECT_MAX_CHARS, build as build_prompt
+from src.shorts_pilot.generator.settings import load as load_settings
 
 # ── Deduplication + cleanup ───────────────────────────────────────────────────
 
@@ -59,9 +58,9 @@ def _normalise(job: dict, expected_suffix: str) -> dict:
 
 
 def _deduplicate(
-    raw_jobs: list[dict],
-    already_known: set[str],
-    expected_suffix: str = "",
+        raw_jobs: list[dict],
+        already_known: set[str],
+        expected_suffix: str = "",
 ) -> list[dict]:
     known = set(already_known)
     result = []
@@ -70,14 +69,18 @@ def _deduplicate(
         if not output_file:
             print(f"  [skip] job missing output_file: {job.get('name', '?')}")
             continue
+
         # Normalise first so we dedup against the corrected filename
         clean = _normalise(job, expected_suffix)
         output_file = clean["output_file"]
+
         if output_file in known:
             print(f"  [skip duplicate] {output_file}")
             continue
+
         if not clean.get("name"):
             clean = {**clean, "name": jobs.safe_name(output_file.replace(".mp4", ""))}
+
         known.add(output_file)
         result.append(clean)
     return result
@@ -86,17 +89,17 @@ def _deduplicate(
 # ── Core logic ────────────────────────────────────────────────────────────────
 
 def run(
-    lang: str,
-    jobs_dir: Path,
-    seen_dir: Path,
-    force: bool,
-    count_override: int | None,
-    threshold_override: int | None,
+        lang: str,
+        jobs_dir: Path,
+        seen_dir: Path,
+        force: bool,
+        count_override: int | None,
+        threshold_override: int | None,
 ) -> int:
     settings = load_settings()
     lang_cfg = settings.lang(lang)
-
     suffix = lang_cfg.file_suffix
+
     seen_set = seen.load(seen_dir, suffix)
     seen_list = seen_load_ordered(seen_dir, suffix)
 
@@ -106,6 +109,7 @@ def run(
     # Load YAML once; derive both pending count and existing names from it.
     cfg = jobs.load(jobs_dir, lang)
     pending = jobs.count_pending_from(cfg, seen_set)
+
     seen_file = "seen.txt" if not suffix else f"seen_{suffix.lstrip('_')}.txt"
     print(f"[{lang}] pending jobs: {pending} | threshold: {threshold} | seen file: {seen_file}")
 
@@ -137,8 +141,9 @@ def run(
 
     jobs.append(jobs_dir, lang, clean_jobs)
     print(f"[{lang}] appended {len(clean_jobs)} jobs to jobs_{lang}.yaml")
+
     # Note: seen.txt is updated by batch_generate.py after each video is rendered,
-    # not here — refill.py only writes to the jobs yaml.
+    # not here — refill only writes to the jobs yaml.
     return len(clean_jobs)
 
 
@@ -146,30 +151,30 @@ def run(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog="refill.py",
+        prog="refill",
         description="Auto-refill your MoneyPrinterTurbo jobs queue with LLM-generated video ideas.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python refill.py --lang en --jobs-dir /your/path/to/jobs
-  python refill.py --lang es --jobs-dir /your/path/to/jobs
-  python refill.py --lang en --jobs-dir /your/path/to/jobs --force
-  python refill.py --lang en --jobs-dir /your/path/to/jobs --count 50
-  python refill.py --lang en --jobs-dir /your/path/to/jobs --threshold 5
+    refill --lang en --jobs-dir /your/path/to/jobs
+    refill --lang es --jobs-dir /your/path/to/jobs
+    refill --lang en --jobs-dir /your/path/to/jobs --force
+    refill --lang en --jobs-dir /your/path/to/jobs --count 50
+    refill --lang en --jobs-dir /your/path/to/jobs --threshold 5
 """,
     )
     parser.add_argument("--lang", required=True, metavar="LANG",
-        help="Language code (e.g. en, es). Must be defined in config.yaml.")
+                        help="Language code (e.g. en, es). Must be defined in config.yaml.")
     parser.add_argument("--jobs-dir", type=Path, default=Path("."), metavar="PATH",
-        help="Directory containing jobs_<lang>.yaml files. Default: current directory.")
+                        help="Directory containing jobs_<lang>.yaml files. Default: current directory.")
     parser.add_argument("--seen-dir", type=Path, default=None, metavar="PATH",
-        help="Directory for seen_<lang>.txt files. Default: same as --jobs-dir.")
+                        help="Directory for seen_<lang>.txt files. Default: same as --jobs-dir.")
     parser.add_argument("--force", action="store_true",
-        help="Refill even if the queue is above the threshold.")
+                        help="Refill even if the queue is above the threshold.")
     parser.add_argument("--count", type=int, default=None, metavar="N",
-        help="Override generation.count from config.yaml.")
+                        help="Override generation.count from config.yaml.")
     parser.add_argument("--threshold", type=int, default=None, metavar="N",
-        help="Override generation.threshold from config.yaml.")
+                        help="Override generation.threshold from config.yaml.")
 
     args = parser.parse_args()
 
