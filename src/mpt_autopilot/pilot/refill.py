@@ -19,11 +19,11 @@ import argparse
 import sys
 from pathlib import Path
 
-from src.shorts_pilot.generator import jobs, seen
-from src.shorts_pilot.generator.seen import load_ordered as seen_load_ordered
-from src.shorts_pilot.generator.llm import call_llm, parse_json_array
-from src.shorts_pilot.generator.prompt import VIDEO_SUBJECT_MAX_CHARS, build as build_prompt
-from src.shorts_pilot.generator.settings import load as load_settings
+from shorts_pilot.generator import jobs, seen
+from shorts_pilot.generator.seen import load_ordered as seen_load_ordered
+from shorts_pilot.generator.llm import call_llm, parse_json_array
+from shorts_pilot.generator.prompt import VIDEO_SUBJECT_MAX_CHARS, build as build_prompt
+from shorts_pilot.generator.settings import load as load_settings
 
 # ── Deduplication + cleanup ───────────────────────────────────────────────────
 

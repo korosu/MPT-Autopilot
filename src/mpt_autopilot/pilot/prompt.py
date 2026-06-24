@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-from src.shorts_pilot.generator.settings import LangSettings
+from shorts_pilot.generator.settings import LangSettings
 
 VIDEO_SUBJECT_MAX_CHARS = 500
 

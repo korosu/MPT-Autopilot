@@ -29,8 +29,8 @@ import re
 import sys
 from pathlib import Path
 
-from src.shorts_pilot.generator import seen
-from src.shorts_pilot.generator.settings import load as load_settings
+from shorts_pilot.generator import seen
+from shorts_pilot.generator.settings import load as load_settings
 
 # Matches language-code suffixes like _es, _en, _de, _fr, _pt, _zh (2-3 chars).
 _LANG_SUFFIX_RE = re.compile(r"_[a-z]{2,3}\.mp4$", re.IGNORECASE)
