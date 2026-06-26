@@ -14,7 +14,9 @@ Usage examples:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+import traceback
 from pathlib import Path
 
 from enricher.config import settings
@@ -46,14 +48,13 @@ def process_file(
     # Skip if hashtags already exist and --force not set
     if not force and meta.json_path.exists():
         try:
-            import json
             with open(meta.json_path, "r", encoding="utf-8") as f:
                 existing = json.load(f)
             if "hashtags" in existing:
                 log.info(f"skip (already enriched): {mp4_path.name}")
                 return "skipped"
-        except Exception:
-            pass  # If we can't read it, proceed and try to write
+        except (json.JSONDecodeError, OSError):
+            log.warn(f"could not read {meta.json_path}, will re-generate")
 
     try:
         # Step 1: resolve language
@@ -90,6 +91,7 @@ def process_file(
 
     except Exception as exc:
         log.error(f"error processing {mp4_path.name}: {exc}")
+        log.error(traceback.format_exc())
         return "error"
 
 
@@ -99,7 +101,14 @@ def process_file(
 
 def collect_mp4s(directory: Path) -> list[Path]:
     """Return all *.mp4 files in directory (non-recursive, sorted)."""
-    return sorted(directory.glob("*.mp4"))
+    files = sorted(directory.glob("*.mp4"))
+    sub_count = len(list(directory.glob("**/*.mp4"))) - len(files)
+    if sub_count > 0:
+        print(
+            f"[hint] {sub_count} mp4(s) found in subdirectories are not included. "
+            "Move them to the top-level directory to process them."
+        )
+    return files
 
 
 # ---------------------------------------------------------------------------

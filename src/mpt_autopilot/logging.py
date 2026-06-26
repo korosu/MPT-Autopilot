@@ -4,6 +4,7 @@ logger.py — simple file + stdout logger with size-based rotation.
 
 from __future__ import annotations
 
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,8 +20,10 @@ class Logger:
         return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     def _rotate_if_needed(self) -> None:
+        """Move the current log to .1.log when it exceeds the size limit."""
         if self._log_file.exists() and self._log_file.stat().st_size > self._max_size:
-            self._log_file.unlink()
+            rotated = self._log_file.with_suffix(".1.log")
+            shutil.move(str(self._log_file), str(rotated))
 
     def _write(self, level: str, msg: str) -> None:
         line = f"[{self._now()}] [{level}] {msg}"
@@ -37,3 +40,4 @@ class Logger:
 
     def error(self, msg: str) -> None:
         self._write("ERROR", msg)
+

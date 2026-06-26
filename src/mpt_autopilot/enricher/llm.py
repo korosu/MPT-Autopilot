@@ -9,29 +9,30 @@ Two public functions:
 from __future__ import annotations
 
 import json
+import re
 import time
 
 import httpx
 
 from enricher.config import settings
 
-# Shared client with a reasonable timeout
+# Shared persistent client — reused across all calls to avoid per-call TLS handshakes
 _CLIENT_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
-
-# Models that do not accept a 'temperature' parameter (OpenAI o-series reasoning models)
-_NO_TEMPERATURE_PREFIXES = ("o1", "o3", "o4")
+_client = httpx.Client(timeout=_CLIENT_TIMEOUT)
 
 # Retry settings for 429 Too Many Requests
 _MAX_RETRIES = 2
 _RETRY_BASE_DELAY = 10.0
 _RETRY_MAX_DELAY = 20.0
 
+# Maximum characters accepted from a user-controlled topic string
+_MAX_TOPIC_LEN = 300
 
-def _supports_temperature(model: str) -> bool:
-    """Return False for reasoning models (o1, o3, o4 families) that reject temperature."""
-    # Check the part after the last '/' to handle namespaced models like "openai/o4-mini"
-    name = model.split("/")[-1].lower()
-    return not any(name.startswith(prefix) for prefix in _NO_TEMPERATURE_PREFIXES)
+
+def _sanitise_topic(raw: str) -> str:
+    """Truncate and strip non-printable characters from a user-supplied topic."""
+    cleaned = "".join(ch for ch in raw if ch.isprintable())
+    return cleaned[:_MAX_TOPIC_LEN]
 
 
 def _chat(prompt: str) -> str:
@@ -51,14 +52,14 @@ def _chat(prompt: str) -> str:
         "max_tokens": 512,
     }
 
-    # Only include temperature for models that support it
-    if _supports_temperature(settings.model):
+    # Use explicit config flag; avoids fragile model-name prefix sniffing
+    if settings.supports_temperature:
         payload["temperature"] = 0.3
 
     last_error: Exception | None = None
 
     for attempt in range(_MAX_RETRIES + 1):
-        response = httpx.post(url, headers=headers, json=payload, timeout=_CLIENT_TIMEOUT)
+        response = _client.post(url, headers=headers, json=payload)
 
         if response.status_code == 429:
             if attempt == _MAX_RETRIES:
@@ -82,13 +83,10 @@ def _chat(prompt: str) -> str:
             continue
 
         if not response.is_success:
-            # Non-429 error — don't retry
-            try:
-                body = response.json()
-            except Exception:
-                body = response.text
+            # Raise with status only — omit body to prevent API key leakage via
+            # providers that echo request headers/auth in error responses.
             raise httpx.HTTPStatusError(
-                f"{response.status_code} {response.reason_phrase} — {body}",
+                f"{response.status_code} {response.reason_phrase}",
                 request=response.request,
                 response=response,
             )
@@ -109,7 +107,8 @@ def detect_language(text: str) -> str:
     Returns a language name string, e.g. "English", "Spanish".
     Falls back to "English" on any error.
     """
-    prompt = settings.prompt_detect_language.format(text=text)
+    safe_text = _sanitise_topic(text)
+    prompt = settings.prompt_detect_language.format(text=safe_text)
     try:
         result = _chat(prompt)
         # Sanitise: keep only the first word/line to guard against verbose answers
@@ -126,12 +125,14 @@ def generate_hashtags(topic: str, language: str) -> list[str]:
     Returns a list of hashtag strings starting with '#'.
     On parse failure returns a minimal fallback list so the caller never crashes.
     """
+    safe_topic = _sanitise_topic(topic)
+
     # Tell the LLM exactly which tags to skip so it never generates them itself.
     # This prevents duplicates regardless of what the user puts in always_include.
     excluded = ", ".join(settings.always_include)
 
     prompt = settings.prompt_generate.format(
-        video_subject=topic,
+        video_subject=safe_topic,
         language=language,
         min_tags=settings.min_tags,
         max_tags=settings.max_tags,
@@ -160,7 +161,8 @@ def _parse_tags(raw: str) -> list[str]:
     Handles:
       - Clean JSON array:  ["#shorts", "#history"]
       - Markdown fences:   ```json\n["#shorts"]\n```
-      - Fallback:          return []
+      - Regex fallback:    extract #word tokens from free-form text
+      - Last resort:       return []
 
     Post-processing applied to every tag regardless of LLM compliance:
       - Forced to lowercase (YouTube stores all tags lowercase; CamelCase
@@ -197,6 +199,12 @@ def _parse_tags(raw: str) -> list[str]:
             return cleaned
     except (json.JSONDecodeError, ValueError):
         pass
+
+    # Regex fallback: LLM returned prose or a non-JSON list — extract #tokens directly.
+    # Matches ASCII word chars plus common accented/diacritic characters (Latin Extended).
+    candidates = re.findall(r"#[\w\u00C0-\u024F]+", raw)
+    if candidates:
+        return [c.lower() for c in candidates if len(c) > 1]
 
     return []
 

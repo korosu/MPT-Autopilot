@@ -28,6 +28,15 @@ def _require_env(key: str) -> str:
     return value
 
 
+def _require_cfg(cfg: dict, key: str) -> str:
+    if key not in cfg:
+        raise KeyError(
+            f"config.yaml is missing required key '{key}'. "
+            f"Check your config against .env.example."
+        )
+    return cfg[key]
+
+
 def _load_yaml() -> dict:
     if not _CONFIG_FILE.exists():
         raise FileNotFoundError(f"config.yaml not found at {_CONFIG_FILE}")
@@ -47,11 +56,19 @@ class Settings:
         # Tag generation
         self.min_tags: int = int(cfg.get("min_tags", 12))
         self.max_tags: int = int(cfg.get("max_tags", 20))
+        if self.min_tags >= self.max_tags:
+            raise ValueError(
+                f"config.yaml: min_tags ({self.min_tags}) must be less than "
+                f"max_tags ({self.max_tags})."
+            )
         self.always_include: list[str] = cfg.get("always_include", ["#shorts"])
 
-        # Prompts
-        self.prompt_detect_language: str = cfg["prompt_detect_language"]
-        self.prompt_generate: str = cfg["prompt_generate"]
+        # Prompts — required keys; use _require_cfg for actionable error messages
+        self.prompt_detect_language: str = _require_cfg(cfg, "prompt_detect_language")
+        self.prompt_generate: str = _require_cfg(cfg, "prompt_generate")
+
+        # Temperature support — explicit opt-out in config.yaml overrides heuristic
+        self.supports_temperature: bool = cfg.get("supports_temperature", True)
 
         # Logging
         self.log_dir: Path = _ROOT / "logs"
@@ -59,5 +76,24 @@ class Settings:
         self.max_log_size: int = 5 * 1024 * 1024  # 5 MB
 
 
-# Singleton — imported everywhere as `from enricher.config import settings`
-settings = Settings()
+# Singleton — instantiated lazily so tests can import modules without a real .env
+_settings: Settings | None = None
+
+
+def _get_settings() -> Settings:
+    global _settings
+    if _settings is None:
+        _settings = Settings()
+    return _settings
+
+
+# Convenience attribute — behaviour-compatible with the old `settings = Settings()`
+# but now deferred until first access.
+class _LazySettings:
+    """Proxy that instantiates Settings on first attribute access."""
+
+    def __getattr__(self, name: str):  # type: ignore[override]
+        return getattr(_get_settings(), name)
+
+
+settings: Settings = _LazySettings()  # type: ignore[assignment]

@@ -9,6 +9,8 @@ If the file does not exist, it is created with only the 'hashtags' key.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,6 +41,10 @@ def write_hashtags(
     """
     Write (or merge) hashtags_block into json_path.
 
+    Uses an atomic write (write to a sibling temp file, then os.replace) so
+    that a crash or SIGINT between open and close never leaves a corrupt or
+    zero-byte file.
+
     Args:
         json_path:       Target .json file path.
         hashtags_block:  The dict returned by build_hashtags_block().
@@ -60,5 +66,17 @@ def write_hashtags(
         print(f"  {json.dumps({'hashtags': hashtags_block}, ensure_ascii=False, indent=4)}")
         return
 
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(existing, f, ensure_ascii=False, indent=2)
+    # Atomic write: serialise to a sibling temp file then rename.
+    # os.replace() is atomic on POSIX and Win32 (same filesystem).
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=json_path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            json.dump(existing, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, json_path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
