@@ -18,11 +18,11 @@ import sys
 import traceback
 from pathlib import Path
 
-from enricher.config import settings
-from enricher.logger import Logger
-from enricher.llm import detect_language, generate_hashtags
-from enricher.reader import resolve_meta
-from enricher.writer import build_hashtags_block, write_hashtags
+from hashtag_enricher.enricher.config import settings
+from hashtag_enricher.enricher.logger import Logger
+from hashtag_enricher.enricher.llm import detect_language, generate_hashtags
+from hashtag_enricher.enricher.reader import resolve_meta
+from hashtag_enricher.enricher.writer import build_hashtags_block, write_hashtags
 
 log = Logger(settings.log_file, settings.max_log_size)
 
@@ -114,7 +114,7 @@ def collect_mp4s(directory: Path) -> list[Path]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="enrich.py",
+        prog="enrich",
         description="Generate YouTube/TikTok hashtags for video files using an LLM.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\

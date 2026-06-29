@@ -70,20 +70,20 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ```bash
 # Scan current directory — language auto-detected per file
-uv run enrich.py
+uv run enrich
 
 # Scan a specific folder
-uv run enrich.py --dir /home/user/videos
+uv run enrich --dir /home/user/videos
 
 # Process a single file
-uv run enrich.py --file /home/user/videos/my_clip.mp4
+uv run enrich --file /home/user/videos/my_clip.mp4
 
 # Force a specific language for all files (skips LLM language detection → faster)
-uv run enrich.py --dir /home/user/videos --lang Spanish
-uv run enrich.py --dir /home/user/videos --lang en        # short codes work too
+uv run enrich --dir /home/user/videos --lang Spanish
+uv run enrich --dir /home/user/videos --lang en        # short codes work too
 
 # Re-generate hashtags even if they already exist
-uv run enrich.py --dir /home/user/videos --force
+uv run enrich --dir /home/user/videos --force
 ```
 
 ### Alternative: virtual environment
@@ -93,9 +93,9 @@ If you prefer not to use uv, create a venv manually:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -e .
 
-python enrich.py --dir /home/user/videos
+enrich --dir /home/user/videos
 ```
 
 You'll need to activate the venv (`source .venv/bin/activate`) each time you open a new terminal.

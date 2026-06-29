@@ -10,12 +10,9 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
-# Resolve paths relative to the project root (parent of this package)
-_ROOT = Path(__file__).parent.parent
-_ENV_FILE = _ROOT / ".env"
-_CONFIG_FILE = _ROOT / "config.yaml"
+_ROOT = Path.cwd()
 
-load_dotenv(_ENV_FILE)
+load_dotenv(_ROOT / ".env")
 
 
 def _require_env(key: str) -> str:
@@ -38,12 +35,13 @@ def _require_cfg(cfg: dict, key: str) -> str:
 
 
 def _load_yaml() -> dict:
-    if not _CONFIG_FILE.exists():
+    config_file = _ROOT / "config.yaml"
+    if not config_file.exists():
         raise FileNotFoundError(
-            f"config.yaml not found at {_CONFIG_FILE}\n"
+            f"config.yaml not found at {config_file}\n"
             f"Copy config.yaml.example to config.yaml and adjust as needed."
         )
-    with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
+    with open(config_file, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -90,7 +88,6 @@ def _get_settings() -> Settings:
     return _settings
 
 
-# Convenience attribute — deferred until first access.
 class _LazySettings:
     """Proxy that instantiates Settings on first attribute access."""
 

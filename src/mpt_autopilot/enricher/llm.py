@@ -14,8 +14,8 @@ import time
 
 import httpx
 
-from enricher.config import settings
-from enricher.logger import Logger
+from hashtag_enricher.enricher.config import settings
+from hashtag_enricher.enricher.logger import Logger
 
 # Shared persistent client — reused across all calls to avoid per-call TLS handshakes
 _CLIENT_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
