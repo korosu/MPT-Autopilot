@@ -3,12 +3,11 @@
 enrich.py — hashtag-enricher entry point.
 
 Usage examples:
-  python enrich.py                              # scan current directory, auto-detect language
-  python enrich.py --dir ./videos              # scan a specific folder
-  python enrich.py --file ./videos/clip.mp4    # single file
-  python enrich.py --dir ./videos --lang Spanish   # force language, skip LLM detection
-  python enrich.py --dir ./videos --dry-run    # preview without writing
-  python enrich.py --dir ./videos --force      # re-generate even if hashtags already exist
+  uv run enrich.py                              # scan current directory, auto-detect language
+  uv run enrich.py --dir ./videos              # scan a specific folder
+  uv run enrich.py --file ./videos/clip.mp4    # single file
+  uv run enrich.py --dir ./videos --lang Spanish   # force language, skip LLM detection
+  uv run enrich.py --dir ./videos --force      # re-generate even if hashtags already exist
 """
 
 from __future__ import annotations
@@ -35,7 +34,6 @@ log = Logger(settings.log_file, settings.max_log_size)
 def process_file(
     mp4_path: Path,
     lang_override: str | None,
-    dry_run: bool,
     force: bool,
 ) -> str:
     """
@@ -82,11 +80,10 @@ def process_file(
             source=meta.source,
         )
 
-        # Step 4: write (or dry-run preview)
-        write_hashtags(meta.json_path, block, dry_run=dry_run)
+        # Step 4: write
+        write_hashtags(meta.json_path, block)
 
-        if not dry_run:
-            log.info(f"ok: {mp4_path.name} → {len(tags)} tags ({meta.source})")
+        log.info(f"ok: {mp4_path.name} → {len(tags)} tags ({meta.source})")
         return "ok"
 
     except Exception as exc:
@@ -104,7 +101,7 @@ def collect_mp4s(directory: Path) -> list[Path]:
     files = sorted(directory.glob("*.mp4"))
     sub_count = len(list(directory.glob("**/*.mp4"))) - len(files)
     if sub_count > 0:
-        print(
+        log.info(
             f"[hint] {sub_count} mp4(s) found in subdirectories are not included. "
             "Move them to the top-level directory to process them."
         )
@@ -118,16 +115,15 @@ def collect_mp4s(directory: Path) -> list[Path]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="enrich.py",
-        description="Generate YouTube hashtags for video files using an LLM.",
+        description="Generate YouTube/TikTok hashtags for video files using an LLM.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog="""\
 Examples:
-  python enrich.py                              scan current directory
-  python enrich.py --dir ./videos              scan a folder
-  python enrich.py --file clip.mp4             single file
-  python enrich.py --dir ./videos --lang es    force Spanish
-  python enrich.py --dir ./videos --dry-run    preview only
-  python enrich.py --dir ./videos --force      re-generate existing hashtags
+  uv run enrich.py                              scan current directory
+  uv run enrich.py --dir ./videos              scan a folder
+  uv run enrich.py --file clip.mp4             single file
+  uv run enrich.py --dir ./videos --lang es    force Spanish
+  uv run enrich.py --dir ./videos --force      re-generate existing hashtags
         """,
     )
 
@@ -155,11 +151,6 @@ Examples:
         ),
     )
     parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Preview what would be written without saving anything",
-    )
-    parser.add_argument(
         "--force",
         action="store_true",
         help="Re-generate hashtags even if they already exist in the json file",
@@ -172,12 +163,8 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    dry_run: bool = args.dry_run
     force: bool = args.force
     lang_override: str | None = args.lang
-
-    if dry_run:
-        print("[dry-run mode — nothing will be written]")
 
     # Collect files to process
     if args.file:
@@ -197,7 +184,7 @@ def main() -> None:
         mp4_files = collect_mp4s(directory)
 
     if not mp4_files:
-        print("No *.mp4 files found.")
+        log.info("No *.mp4 files found.")
         sys.exit(0)
 
     log.info(f"=== hashtag-enricher: {len(mp4_files)} file(s) to process ===")
@@ -206,7 +193,7 @@ def main() -> None:
     counts: dict[str, int] = {"ok": 0, "skipped": 0, "error": 0}
 
     for mp4_path in mp4_files:
-        result = process_file(mp4_path, lang_override, dry_run, force)
+        result = process_file(mp4_path, lang_override, force)
         counts[result] += 1
 
     # Summary

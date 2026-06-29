@@ -32,14 +32,17 @@ def _require_cfg(cfg: dict, key: str) -> str:
     if key not in cfg:
         raise KeyError(
             f"config.yaml is missing required key '{key}'. "
-            f"Check your config against .env.example."
+            f"Check your config.yaml against the defaults in config.yaml.example."
         )
     return cfg[key]
 
 
 def _load_yaml() -> dict:
     if not _CONFIG_FILE.exists():
-        raise FileNotFoundError(f"config.yaml not found at {_CONFIG_FILE}")
+        raise FileNotFoundError(
+            f"config.yaml not found at {_CONFIG_FILE}\n"
+            f"Copy config.yaml.example to config.yaml and adjust as needed."
+        )
     with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
@@ -76,7 +79,7 @@ class Settings:
         self.max_log_size: int = 5 * 1024 * 1024  # 5 MB
 
 
-# Singleton — instantiated lazily so tests can import modules without a real .env
+# Singleton — instantiated lazily so modules can be imported without a real .env
 _settings: Settings | None = None
 
 
@@ -87,8 +90,7 @@ def _get_settings() -> Settings:
     return _settings
 
 
-# Convenience attribute — behaviour-compatible with the old `settings = Settings()`
-# but now deferred until first access.
+# Convenience attribute — deferred until first access.
 class _LazySettings:
     """Proxy that instantiates Settings on first attribute access."""
 

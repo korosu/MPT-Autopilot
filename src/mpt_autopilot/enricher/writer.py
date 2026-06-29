@@ -36,7 +36,6 @@ def build_hashtags_block(
 def write_hashtags(
     json_path: Path,
     hashtags_block: dict,
-    dry_run: bool = False,
 ) -> None:
     """
     Write (or merge) hashtags_block into json_path.
@@ -48,7 +47,6 @@ def write_hashtags(
     Args:
         json_path:       Target .json file path.
         hashtags_block:  The dict returned by build_hashtags_block().
-        dry_run:         If True, print what would be written but do nothing.
     """
     # Load existing data if file exists
     existing: dict = {}
@@ -60,11 +58,6 @@ def write_hashtags(
             existing = {}
 
     existing["hashtags"] = hashtags_block
-
-    if dry_run:
-        print(f"  [dry-run] would write to {json_path}:")
-        print(f"  {json.dumps({'hashtags': hashtags_block}, ensure_ascii=False, indent=4)}")
-        return
 
     # Atomic write: serialise to a sibling temp file then rename.
     # os.replace() is atomic on POSIX and Win32 (same filesystem).
@@ -79,4 +72,3 @@ def write_hashtags(
         except OSError:
             pass
         raise
-

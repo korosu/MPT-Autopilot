@@ -1,5 +1,9 @@
 # hashtag-enricher
 
+[![lint](https://github.com/korosu/hashtag-enricher/actions/workflows/lint.yml/badge.svg)](https://github.com/korosu/hashtag-enricher/actions/workflows/lint.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 Generate relevant YouTube/TikTok hashtags for your video files using an LLM API.
 
 Point it at a folder of `.mp4` files — it figures out the topic from the filename,
@@ -32,6 +36,7 @@ No video generator or special toolchain required.
 git clone https://github.com/korosu/hashtag-enricher.git
 cd hashtag-enricher
 cp .env.example .env
+cp config.yaml.example config.yaml
 ```
 
 Open `.env` and add your API key:
@@ -41,6 +46,8 @@ LLM_API_KEY=sk-...
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_MODEL=gpt-4o-mini
 ```
+
+Edit `config.yaml` if you want to adjust tag limits or the always-included tags (the defaults work fine out of the box).
 
 ---
 
@@ -104,7 +111,7 @@ For each `*.mp4` file, a `{video_name}.json` is created (or updated) next to it:
   "hashtags": {
     "tags_list": ["#shorts", "#romanempire", "#historyfacts", "#ancientrome"],
     "tags_string": "#shorts #romanempire #historyfacts #ancientrome",
-    "generated_at": "2025-06-17T14:00:00Z",
+    "generated_at": "2026-06-26T14:00:00Z",
     "model": "gpt-4o-mini",
     "detected_language": "English",
     "source": "filename"
@@ -169,10 +176,11 @@ Hashtags go into both `description` (YouTube displays the first 3 above the titl
 
 ## Configuration
 
-Edit `config.yaml` to change tag limits, always-included tags, or prompt wording:
+Copy `config.yaml.example` to `config.yaml` and edit as needed:
 
 ```yaml
-max_tags: 15
+min_tags: 12
+max_tags: 20
 
 always_include:
   - "#shorts"

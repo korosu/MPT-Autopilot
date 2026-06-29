@@ -15,6 +15,7 @@ import time
 import httpx
 
 from enricher.config import settings
+from enricher.logger import Logger
 
 # Shared persistent client — reused across all calls to avoid per-call TLS handshakes
 _CLIENT_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
@@ -27,6 +28,16 @@ _RETRY_MAX_DELAY = 20.0
 
 # Maximum characters accepted from a user-controlled topic string
 _MAX_TOPIC_LEN = 300
+
+# Lazy logger — instantiated on first use to avoid triggering settings at import time
+_log: Logger | None = None
+
+
+def _get_log() -> Logger:
+    global _log
+    if _log is None:
+        _log = Logger(settings.log_file, settings.max_log_size)
+    return _log
 
 
 def _sanitise_topic(raw: str) -> str:
@@ -78,7 +89,10 @@ def _chat(prompt: str) -> str:
             else:
                 delay = min(_RETRY_BASE_DELAY * (2 ** attempt), _RETRY_MAX_DELAY)
 
-            print(f"[llm] 429 rate-limited — waiting {delay:.0f}s before retry {attempt + 1}/{_MAX_RETRIES}...")
+            _get_log().warn(
+                f"429 rate-limited — waiting {delay:.0f}s before retry "
+                f"{attempt + 1}/{_MAX_RETRIES}"
+            )
             time.sleep(delay)
             continue
 
