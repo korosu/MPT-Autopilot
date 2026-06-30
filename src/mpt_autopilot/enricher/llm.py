@@ -1,9 +1,11 @@
 """
 llm.py — all communication with the LLM API.
 
-Two public functions:
-  detect_language(text)           → str  e.g. "English"
-  generate_hashtags(topic, lang)  → list[str]  e.g. ["#shorts", "#history", ...]
+Public functions:
+  detect_language(text)           → str          e.g. "English"
+  generate_hashtags(topic, lang)  → list[str]    e.g. ["#ostrichfacts", ...]
+  detect_and_generate(topic)      → tuple[str, list[str]]  (language, tags)
+                                    Single-call variant — preferred for efficiency.
 """
 
 from __future__ import annotations
@@ -16,20 +18,22 @@ import httpx
 
 from hashtag_enricher.enricher.config import settings
 from hashtag_enricher.enricher.logger import Logger
+from hashtag_enricher.enricher.postprocess import validate_and_filter, check_platform_limit
 
-# Shared persistent client — reused across all calls to avoid per-call TLS handshakes
+# ── Shared persistent client ──────────────────────────────────────────────────
+# Reused across all calls to avoid per-call TLS handshakes.
 _CLIENT_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
 _client = httpx.Client(timeout=_CLIENT_TIMEOUT)
 
-# Retry settings for 429 Too Many Requests
+# ── Retry settings ────────────────────────────────────────────────────────────
 _MAX_RETRIES = 2
 _RETRY_BASE_DELAY = 10.0
 _RETRY_MAX_DELAY = 20.0
 
-# Maximum characters accepted from a user-controlled topic string
+# ── Input limits ──────────────────────────────────────────────────────────────
 _MAX_TOPIC_LEN = 300
 
-# Lazy logger — instantiated on first use to avoid triggering settings at import time
+# ── Lazy logger ───────────────────────────────────────────────────────────────
 _log: Logger | None = None
 
 
@@ -46,10 +50,13 @@ def _sanitise_topic(raw: str) -> str:
     return cleaned[:_MAX_TOPIC_LEN]
 
 
-def _chat(prompt: str) -> str:
-    """Send a single-turn chat request. Returns the raw text content.
+# ── Core HTTP helper ──────────────────────────────────────────────────────────
 
-    Retries automatically on 429 Too Many Requests using exponential backoff.
+def _chat(prompt: str) -> str:
+    """
+    Send a single-turn chat request. Returns the raw text content.
+
+    Retries automatically on 429 Too Many Requests with exponential backoff.
     Respects the Retry-After header when the server sends one.
     """
     url = f"{settings.base_url}/chat/completions"
@@ -63,7 +70,6 @@ def _chat(prompt: str) -> str:
         "max_tokens": 512,
     }
 
-    # Use explicit config flag; avoids fragile model-name prefix sniffing
     if settings.supports_temperature:
         payload["temperature"] = 0.3
 
@@ -74,7 +80,6 @@ def _chat(prompt: str) -> str:
 
         if response.status_code == 429:
             if attempt == _MAX_RETRIES:
-                # Out of retries — fall through to raise below
                 last_error = httpx.HTTPStatusError(
                     f"429 Too Many Requests — giving up after {_MAX_RETRIES} retries",
                     request=response.request,
@@ -82,7 +87,6 @@ def _chat(prompt: str) -> str:
                 )
                 break
 
-            # Respect Retry-After if provided, otherwise use exponential backoff
             retry_after = response.headers.get("Retry-After")
             if retry_after and retry_after.isdigit():
                 delay = min(float(retry_after), _RETRY_MAX_DELAY)
@@ -97,8 +101,7 @@ def _chat(prompt: str) -> str:
             continue
 
         if not response.is_success:
-            # Raise with status only — omit body to prevent API key leakage via
-            # providers that echo request headers/auth in error responses.
+            # Omit body to prevent API key leakage via provider error responses.
             raise httpx.HTTPStatusError(
                 f"{response.status_code} {response.reason_phrase}",
                 request=response.request,
@@ -115,17 +118,22 @@ def _chat(prompt: str) -> str:
     raise last_error  # type: ignore[misc]
 
 
+# ── Public API ────────────────────────────────────────────────────────────────
+
 def detect_language(text: str) -> str:
     """
     Ask the LLM what language the given text is in.
     Returns a language name string, e.g. "English", "Spanish".
     Falls back to "English" on any error.
+
+    Note: prefer detect_and_generate() when you also need tags — it saves one
+    API round-trip by detecting language and generating tags in a single call.
     """
     safe_text = _sanitise_topic(text)
     prompt = settings.prompt_detect_language.format(text=safe_text)
     try:
         result = _chat(prompt)
-        # Sanitise: keep only the first word/line to guard against verbose answers
+        # Keep only the first word/line to guard against verbose LLM answers.
         language = result.splitlines()[0].strip().rstrip(".")
         return language if language else "English"
     except Exception:
@@ -138,52 +146,137 @@ def generate_hashtags(topic: str, language: str) -> list[str]:
 
     Returns a list of hashtag strings starting with '#'.
     On parse failure returns a minimal fallback list so the caller never crashes.
+
+    Note: prefer detect_and_generate() when language detection is also needed —
+    it saves one API round-trip.
     """
     safe_topic = _sanitise_topic(topic)
 
-    # Tell the LLM exactly which tags to skip so it never generates them itself.
-    # This prevents duplicates regardless of what the user puts in always_include.
-    excluded = ", ".join(settings.always_include)
+    # Tell the LLM which tags to skip so it never generates them.
+    excluded = _build_excluded_string()
 
     prompt = settings.prompt_generate.format(
         video_subject=safe_topic,
         language=language,
+        platform=settings.platform,
         min_tags=settings.min_tags,
         max_tags=settings.max_tags,
+        max_tag_length=settings.max_tag_length,
         excluded_tags=excluded,
     )
 
     raw = _chat(prompt)
+    return _process_raw_tags(raw)
+
+
+def detect_and_generate(topic: str, language_hint: str | None = None) -> tuple[str, list[str]]:
+    """
+    Detect the language of the topic AND generate hashtags in a SINGLE API call.
+
+    This is the preferred function when language is not known in advance — it
+    saves one LLM round-trip compared to calling detect_language() separately.
+
+    Args:
+        topic:          The video topic/subject string.
+        language_hint:  If provided, skip language detection and use this directly.
+
+    Returns:
+        (language: str, tags: list[str])
+    """
+    if language_hint:
+        # Language is already known — skip detection, generate only
+        tags = generate_hashtags(topic, language_hint)
+        return language_hint, tags
+
+    safe_topic = _sanitise_topic(topic)
+    excluded = _build_excluded_string()
+
+    # Combined detect+generate prompt — fully defined in config.yaml as
+    # prompt_detect_and_generate, the same way prompt_generate is.
+    combined_prompt = settings.prompt_detect_and_generate.format(
+        video_subject=safe_topic,
+        platform=settings.platform,
+        min_tags=settings.min_tags,
+        max_tags=settings.max_tags,
+        max_tag_length=settings.max_tag_length,
+        excluded_tags=excluded,
+    )
+
+    try:
+        raw = _chat(combined_prompt)
+        language, tags = _parse_combined_response(raw)
+        tags = _finalize_tags(tags)
+        return language, tags
+    except Exception as exc:
+        _get_log().warn(
+            f"detect_and_generate() failed ({exc}), falling back to two-call mode"
+        )
+        # Graceful fallback: two separate calls
+        language = detect_language(safe_topic)
+        tags = generate_hashtags(safe_topic, language)
+        return language, tags
+
+
+# ── Internal helpers ──────────────────────────────────────────────────────────
+
+def _build_excluded_string() -> str:
+    """Build the comma-separated excluded-tags string for prompt injection."""
+    excluded_set = list(settings.always_include) + list(settings.banned_tags)
+    return ", ".join(excluded_set)
+
+
+def _process_raw_tags(raw: str) -> list[str]:
+    """Parse raw LLM output and apply all post-processing filters."""
     tags = _parse_tags(raw)
+    return _finalize_tags(tags)
 
-    # Strip any always_include tags the LLM added anyway (case-insensitive safety net)
+
+def _finalize_tags(tags: list[str]) -> list[str]:
+    """
+    Apply post-processing filters and merge always_include tags.
+
+    Steps:
+    1. validate_and_filter — length, banned, dedup, hard_limit
+    2. Strip any always_include tags the LLM added anyway
+    3. Prepend always_include in order
+    """
+    # 1. Validate and filter
+    filtered = validate_and_filter(
+        tags,
+        max_tag_length=settings.max_tag_length,
+        banned_tags=settings.banned_tags,
+        hard_limit=settings.hard_limit,
+    )
+
+    # 2. Strip always_include duplicates (LLM may have added them despite instructions)
     excluded_lower = {t.lower() for t in settings.always_include}
-    tags = [t for t in tags if t.lower() not in excluded_lower]
+    filtered = [t for t in filtered if t.lower() not in excluded_lower]
 
-    # Prepend always_include tags in order, then the LLM-generated content tags
-    merged = _merge_always_include(tags, settings.always_include)
+    # 3. Merge: always_include first, then LLM-generated content tags
+    merged = _merge_always_include(filtered, settings.always_include)
+
+    # 4. Final platform limit check (warn but don't crash)
+    is_safe, warning = check_platform_limit(len(merged), settings.platform)
+    if not is_safe:
+        _get_log().warn(warning)
+
     return merged
 
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
 
 def _parse_tags(raw: str) -> list[str]:
     """
     Parse the LLM response into a list of hashtag strings.
-    Handles:
-      - Clean JSON array:  ["#shorts", "#history"]
-      - Markdown fences:   ```json\n["#shorts"]\n```
-      - Regex fallback:    extract #word tokens from free-form text
-      - Last resort:       return []
 
-    Post-processing applied to every tag regardless of LLM compliance:
-      - Forced to lowercase (YouTube stores all tags lowercase; CamelCase
-        like #vidaSaludable and #vidasaludable are the same tag on YouTube,
-        but lowercase is the canonical form users actually search for)
-      - Diacritics/accents are preserved as-is (they matter: #recuperacion
-        and #recuperación are different tags with different audiences)
+    Handles (in priority order):
+      1. Clean JSON array:    ["#shorts", "#history"]
+      2. Markdown fences:     ```json\\n["#shorts"]\\n```
+      3. JSON object:         {"tags": ["#shorts", "#history"]} (combined prompt fallback)
+      4. Regex fallback:      extract #word tokens from free-form text
+      5. Last resort:         return []
+
+    Post-processing:
+      - Forced to lowercase (canonical form on all platforms)
+      - Diacritics/accents are preserved (they matter: #recuperacion ≠ #recuperación)
     """
     text = raw.strip()
 
@@ -194,38 +287,90 @@ def _parse_tags(raw: str) -> list[str]:
             line for line in lines if not line.startswith("```")
         ).strip()
 
+    # Try JSON parse
     try:
         parsed = json.loads(text)
+
+        # Case A: plain JSON array  ["#tag1", "#tag2"]
         if isinstance(parsed, list):
-            cleaned: list[str] = []
-            for item in parsed:
-                if isinstance(item, str):
-                    tag = item.strip()
-                    if not tag.startswith("#"):
-                        tag = "#" + tag
-                    tag = tag.replace(" ", "")
-                    # Enforce lowercase — safety net even if the prompt is ignored.
-                    # We lowercase only the part after '#' to be explicit,
-                    # but since '#' is not a letter, tag.lower() is equivalent.
-                    tag = tag.lower()
-                    if tag and len(tag) > 1:
-                        cleaned.append(tag)
-            return cleaned
+            return _clean_tag_list(parsed)
+
+        # Case B: JSON object {"tags": [...]} or {"language": "...", "tags": [...]}
+        if isinstance(parsed, dict):
+            tag_list = parsed.get("tags", [])
+            if isinstance(tag_list, list):
+                return _clean_tag_list(tag_list)
+
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Regex fallback: LLM returned prose or a non-JSON list — extract #tokens directly.
-    # Matches ASCII word chars plus common accented/diacritic characters (Latin Extended).
-    candidates = re.findall(r"#[\w\u00C0-\u024F]+", raw)
+    # Regex fallback — works for:
+    #   - Numbered lists:  1. #tag
+    #   - Prose output:    "Use #tag and #other"
+    #   - Any Unicode script (Unicode flag ensures \w matches all letters)
+    candidates = re.findall(r"#\w+", raw, re.UNICODE)
     if candidates:
-        return [c.lower() for c in candidates if len(c) > 1]
+        return [c.lower() for c in candidates if len(c) > 2]
 
     return []
 
 
+def _parse_combined_response(raw: str) -> tuple[str, list[str]]:
+    """
+    Parse the combined detect+generate JSON response.
+
+    Expected format: {"language": "English", "tags": ["#tag1", "#tag2"]}
+
+    Returns:
+        (language, tags) — with fallback to "English" on error.
+    """
+    text = raw.strip()
+
+    # Strip markdown fences
+    if text.startswith("```"):
+        lines = text.splitlines()
+        text = "\n".join(
+            line for line in lines if not line.startswith("```")
+        ).strip()
+
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            language = str(parsed.get("language", "English")).strip().rstrip(".")
+            tag_list = parsed.get("tags", [])
+            if isinstance(tag_list, list):
+                tags = _clean_tag_list(tag_list)
+                return language or "English", tags
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Fallback: try to extract language and tags separately from raw text
+    lang_match = re.search(
+        r'"language"\s*:\s*"([^"]+)"', raw, re.IGNORECASE
+    )
+    language = lang_match.group(1).strip() if lang_match else "English"
+    tags = _parse_tags(raw)
+    return language, tags
+
+
+def _clean_tag_list(items: list) -> list[str]:
+    """Normalise a list of raw strings into clean lowercase hashtags."""
+    result: list[str] = []
+    for item in items:
+        if not isinstance(item, str):
+            continue
+        tag = item.strip()
+        if not tag.startswith("#"):
+            tag = "#" + tag
+        tag = tag.replace(" ", "").lower()
+        if len(tag) > 2:  # '#' + at least 2 characters
+            result.append(tag)
+    return result
+
+
 def _merge_always_include(tags: list[str], always: list[str]) -> list[str]:
     """
-    Ensure always_include tags appear first (in order), without duplicates.
+    Prepend always_include tags in order, without duplicates.
     Case-insensitive dedup.
     """
     seen: set[str] = set()

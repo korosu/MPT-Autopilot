@@ -20,12 +20,15 @@ def build_hashtags_block(
     language: str,
     model: str,
     source: str,
+    platform: str = "youtube",
 ) -> dict:
     """Build the dict that will be stored under the 'hashtags' key."""
     tags_string = " ".join(tags_list)
     return {
         "tags_list": tags_list,
         "tags_string": tags_string,
+        "tag_count": len(tags_list),
+        "platform": platform,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "model": model,
         "detected_language": language,

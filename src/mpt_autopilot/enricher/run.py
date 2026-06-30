@@ -3,11 +3,12 @@
 enrich.py — hashtag-enricher entry point.
 
 Usage examples:
-  uv run enrich.py                              # scan current directory, auto-detect language
-  uv run enrich.py --dir ./videos              # scan a specific folder
-  uv run enrich.py --file ./videos/clip.mp4    # single file
-  uv run enrich.py --dir ./videos --lang Spanish   # force language, skip LLM detection
-  uv run enrich.py --dir ./videos --force      # re-generate even if hashtags already exist
+  uv run enrich                                      # scan current directory
+  uv run enrich --dir ./videos                       # scan a specific folder
+  uv run enrich --file ./videos/clip.mp4             # single file
+  uv run enrich --dir ./videos --lang Spanish        # force language (skips detection)
+  uv run enrich --dir ./videos --platform tiktok     # target TikTok
+  uv run enrich --dir ./videos --force               # re-generate existing
 """
 
 from __future__ import annotations
@@ -20,30 +21,38 @@ from pathlib import Path
 
 from hashtag_enricher.enricher.config import settings
 from hashtag_enricher.enricher.logger import Logger
-from hashtag_enricher.enricher.llm import detect_language, generate_hashtags
+from hashtag_enricher.enricher.llm import detect_and_generate, generate_hashtags
 from hashtag_enricher.enricher.reader import resolve_meta
 from hashtag_enricher.enricher.writer import build_hashtags_block, write_hashtags
 
-log = Logger(settings.log_file, settings.max_log_size)
+# Initialise logger lazily (avoids triggering settings at import time)
+_log: Logger | None = None
 
 
-# ---------------------------------------------------------------------------
-# Core processing
-# ---------------------------------------------------------------------------
+def _get_log() -> Logger:
+    global _log
+    if _log is None:
+        _log = Logger(settings.log_file, settings.max_log_size)
+    return _log
+
+
+# ── Core processing ───────────────────────────────────────────────────────────
 
 def process_file(
     mp4_path: Path,
     lang_override: str | None,
     force: bool,
+    platform_override: str | None = None,
 ) -> str:
     """
     Process a single mp4 file.
 
     Returns one of: "ok" | "skipped" | "error"
     """
+    log = _get_log()
     meta = resolve_meta(mp4_path, lang_override=lang_override)
 
-    # Skip if hashtags already exist and --force not set
+    # ── Skip if already enriched (unless --force) ─────────────────────────────
     if not force and meta.json_path.exists():
         try:
             with open(meta.json_path, "r", encoding="utf-8") as f:
@@ -55,35 +64,42 @@ def process_file(
             log.warn(f"could not read {meta.json_path}, will re-generate")
 
     try:
-        # Step 1: resolve language
+        # ── Resolve platform ──────────────────────────────────────────────────
+        platform = platform_override or settings.platform
+
+        # ── Generate hashtags ─────────────────────────────────────────────────
+        # If a language is already known (--lang flag, or video_language in an
+        # existing script.json), generate_hashtags() is called directly — this
+        # is a SINGLE API call and never triggers language detection.
+        # Only when no language is known does detect_and_generate() run, which
+        # detects the language AND generates tags in one combined API call.
         if meta.language_hint:
             language = meta.language_hint
-            log.info(f"lang='{language}' (provided) | topic='{meta.topic}' | {mp4_path.name}")
+            tags = generate_hashtags(meta.topic, language)
         else:
-            log.info(f"detecting language for: {mp4_path.name}")
-            language = detect_language(meta.topic)
-            log.info(f"lang='{language}' (detected) | topic='{meta.topic}'")
-
-        # Step 2: generate hashtags
-        tags = generate_hashtags(meta.topic, language)
+            language, tags = detect_and_generate(meta.topic)
 
         if not tags:
-            # Fallback: minimal safe output so the file is still useful
             log.warn(f"LLM returned empty tags for {mp4_path.name}, using fallback")
-            tags = ["#shorts"]
+            tags = list(settings.always_include) or ["#shorts"]
 
-        # Step 3: build result block
+        # ── Build and write output ────────────────────────────────────────────
         block = build_hashtags_block(
             tags_list=tags,
             language=language,
             model=settings.model,
             source=meta.source,
+            platform=platform,
         )
-
-        # Step 4: write
         write_hashtags(meta.json_path, block)
 
-        log.info(f"ok: {mp4_path.name} → {len(tags)} tags ({meta.source})")
+        tags_str = " ".join(tags)
+        lang_origin = "provided" if meta.language_hint else "detected"
+        log.info(
+            f"ok: {mp4_path.name} → {tags_str} "
+            f"({len(tags)} tags, lang={language} [{lang_origin}], "
+            f"platform={platform}, source={meta.source})"
+        )
         return "ok"
 
     except Exception as exc:
@@ -92,12 +108,11 @@ def process_file(
         return "error"
 
 
-# ---------------------------------------------------------------------------
-# Scanning helpers
-# ---------------------------------------------------------------------------
+# ── Scanning helpers ──────────────────────────────────────────────────────────
 
 def collect_mp4s(directory: Path) -> list[Path]:
     """Return all *.mp4 files in directory (non-recursive, sorted)."""
+    log = _get_log()
     files = sorted(directory.glob("*.mp4"))
     sub_count = len(list(directory.glob("**/*.mp4"))) - len(files)
     if sub_count > 0:
@@ -108,22 +123,21 @@ def collect_mp4s(directory: Path) -> list[Path]:
     return files
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
+# ── CLI ───────────────────────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="enrich",
-        description="Generate YouTube/TikTok hashtags for video files using an LLM.",
+        description="Generate YouTube/TikTok/Instagram hashtags for video files using an LLM.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Examples:
-  uv run enrich.py                              scan current directory
-  uv run enrich.py --dir ./videos              scan a folder
-  uv run enrich.py --file clip.mp4             single file
-  uv run enrich.py --dir ./videos --lang es    force Spanish
-  uv run enrich.py --dir ./videos --force      re-generate existing hashtags
+  uv run enrich                              scan current directory
+  uv run enrich --dir ./videos              scan a folder
+  uv run enrich --file clip.mp4             single file
+  uv run enrich --dir ./videos --lang es    force Spanish (skips detection)
+  uv run enrich --dir ./videos --platform tiktok   target TikTok (3–5 tags)
+  uv run enrich --dir ./videos --force      re-generate existing hashtags
         """,
     )
 
@@ -147,7 +161,19 @@ Examples:
         default=None,
         help=(
             "Force a specific language for all files, e.g. 'English', 'Spanish', 'ru'. "
+            "Skips LLM language detection entirely (single API call instead of two). "
             "If omitted, language is detected automatically per file."
+        ),
+    )
+    parser.add_argument(
+        "--platform",
+        metavar="PLATFORM",
+        choices=["youtube", "tiktok", "instagram"],
+        default=None,
+        help=(
+            "Target platform: youtube (default), tiktok, instagram. "
+            "Overrides the 'platform' setting in config.yaml. "
+            "Affects tag count limits (all platforms: 3–5 optimal)."
         ),
     )
     parser.add_argument(
@@ -163,10 +189,13 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
+    log = _get_log()
+
     force: bool = args.force
     lang_override: str | None = args.lang
+    platform_override: str | None = args.platform
 
-    # Collect files to process
+    # ── Collect files ─────────────────────────────────────────────────────────
     if args.file:
         target = args.file.resolve()
         if not target.exists():
@@ -187,19 +216,31 @@ def main() -> None:
         log.info("No *.mp4 files found.")
         sys.exit(0)
 
-    log.info(f"=== hashtag-enricher: {len(mp4_files)} file(s) to process ===")
+    effective_platform = platform_override or settings.platform
+    log.info(
+        f"=== hashtag-enricher: {len(mp4_files)} file(s) | "
+        f"platform={effective_platform} | "
+        f"tags={settings.min_tags}–{settings.max_tags} ==="
+    )
 
-    # Process
+    # ── Process ───────────────────────────────────────────────────────────────
     counts: dict[str, int] = {"ok": 0, "skipped": 0, "error": 0}
 
     for mp4_path in mp4_files:
-        result = process_file(mp4_path, lang_override, force)
+        result = process_file(
+            mp4_path,
+            lang_override=lang_override,
+            force=force,
+            platform_override=platform_override,
+        )
         counts[result] += 1
 
-    # Summary
-    log.info("=" * 50)
-    log.info(f"Done. ok={counts['ok']}  skipped={counts['skipped']}  error={counts['error']}")
-    log.info("=" * 50)
+    # ── Summary ───────────────────────────────────────────────────────────────
+    log.info("=" * 55)
+    log.info(
+        f"Done. ok={counts['ok']}  skipped={counts['skipped']}  error={counts['error']}"
+    )
+    log.info("=" * 55)
 
     if counts["error"] > 0:
         sys.exit(1)

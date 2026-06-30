@@ -1,43 +1,75 @@
 """
-logger.py — simple file + stdout logger with size-based rotation.
+logger.py — file + stdout logger with size-based rotation.
+
+Uses Python's standard logging module with RotatingFileHandler
+for reliable multi-file rotation (keeps up to 3 backup files).
 """
 
 from __future__ import annotations
 
-import shutil
+import logging
 import sys
-from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 
 class Logger:
+    """
+    Thin wrapper around Python's standard logging that mirrors the
+    original info/warn/error interface used throughout the codebase.
+    """
+
     def __init__(self, log_file: Path, max_size: int) -> None:
-        self._log_file = log_file
-        self._max_size = max_size
         log_file.parent.mkdir(parents=True, exist_ok=True)
 
-    def _now(self) -> str:
-        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        self._logger = logging.getLogger("hashtag_enricher")
 
-    def _rotate_if_needed(self) -> None:
-        """Move the current log to .1.log when it exceeds the size limit."""
-        if self._log_file.exists() and self._log_file.stat().st_size > self._max_size:
-            rotated = self._log_file.with_suffix(".1.log")
-            shutil.move(str(self._log_file), str(rotated))
+        # Guard against duplicate handlers when instantiated multiple times
+        if self._logger.handlers:
+            return
 
-    def _write(self, level: str, msg: str) -> None:
-        line = f"[{self._now()}] [{level}] {msg}"
-        print(line, file=sys.stdout if level != "ERROR" else sys.stderr)
-        self._rotate_if_needed()
-        with open(self._log_file, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        self._logger.setLevel(logging.DEBUG)
+
+        fmt = logging.Formatter(
+            "[%(asctime)s] [%(levelname)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+
+        # Rotating file handler — keeps 3 backup files
+        fh = RotatingFileHandler(
+            log_file,
+            maxBytes=max_size,
+            backupCount=3,
+            encoding="utf-8",
+        )
+        fh.setFormatter(fmt)
+        fh.setLevel(logging.DEBUG)
+        self._logger.addHandler(fh)
+
+        # Stdout for INFO/WARN, stderr for ERROR
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setFormatter(fmt)
+        sh.setLevel(logging.DEBUG)
+        sh.addFilter(_BelowError())
+        self._logger.addHandler(sh)
+
+        err_h = logging.StreamHandler(sys.stderr)
+        err_h.setFormatter(fmt)
+        err_h.setLevel(logging.ERROR)
+        self._logger.addHandler(err_h)
 
     def info(self, msg: str) -> None:
-        self._write("INFO", msg)
+        self._logger.info(msg)
 
     def warn(self, msg: str) -> None:
-        self._write("WARN", msg)
+        self._logger.warning(msg)
 
     def error(self, msg: str) -> None:
-        self._write("ERROR", msg)
+        self._logger.error(msg)
 
+
+class _BelowError(logging.Filter):
+    """Pass only records below ERROR level (for stdout handler)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno < logging.ERROR

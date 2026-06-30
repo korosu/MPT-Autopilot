@@ -10,6 +10,8 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
+from hashtag_enricher.enricher.postprocess import PLATFORM_HARD_LIMITS
+
 _ROOT = Path.cwd()
 
 load_dotenv(_ROOT / ".env")
@@ -49,35 +51,76 @@ class Settings:
     def __init__(self) -> None:
         cfg = _load_yaml()
 
-        # LLM connection
+        # ── LLM connection ────────────────────────────────────────────────────
         self.api_key: str = _require_env("LLM_API_KEY")
-        self.base_url: str = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+        self.base_url: str = os.getenv(
+            "LLM_BASE_URL", "https://api.openai.com/v1"
+        ).rstrip("/")
         self.model: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
 
-        # Tag generation
-        self.min_tags: int = int(cfg.get("min_tags", 12))
-        self.max_tags: int = int(cfg.get("max_tags", 20))
+        # ── Platform ──────────────────────────────────────────────────────────
+        self.platform: str = cfg.get("platform", "youtube").lower()
+        valid_platforms = set(PLATFORM_HARD_LIMITS.keys())
+        if self.platform not in valid_platforms:
+            raise ValueError(
+                f"config.yaml: platform must be one of {sorted(valid_platforms)}, "
+                f"got '{self.platform}'"
+            )
+
+        # Hard limit imposed by the platform (not user-configurable)
+        self.hard_limit: int = PLATFORM_HARD_LIMITS[self.platform]
+
+        # ── Tag count ────────────────────────────────────────────────────────
+        self.min_tags: int = int(cfg.get("min_tags", 3))
+        self.max_tags: int = int(cfg.get("max_tags", 5))
+
+        if self.min_tags < 1:
+            raise ValueError(
+                f"config.yaml: min_tags ({self.min_tags}) must be at least 1."
+            )
         if self.min_tags >= self.max_tags:
             raise ValueError(
                 f"config.yaml: min_tags ({self.min_tags}) must be less than "
                 f"max_tags ({self.max_tags})."
             )
+        if self.max_tags > self.hard_limit:
+            raise ValueError(
+                f"config.yaml: max_tags ({self.max_tags}) exceeds the "
+                f"{self.platform} platform hard limit ({self.hard_limit}). "
+                f"Reduce max_tags to {self.hard_limit} or less to avoid "
+                f"having ALL hashtags silently ignored."
+            )
+
+        # ── Tag quality filters ───────────────────────────────────────────────
+        self.max_tag_length: int = int(cfg.get("max_tag_length", 20))
+        if self.max_tag_length < 2:
+            raise ValueError(
+                f"config.yaml: max_tag_length ({self.max_tag_length}) must be at least 2."
+            )
+
+        raw_banned: list[str] = cfg.get("banned_tags", [])
+        self.banned_tags: frozenset[str] = frozenset(t.lower() for t in raw_banned)
+
+        # ── Always-include tags ───────────────────────────────────────────────
         self.always_include: list[str] = cfg.get("always_include", ["#shorts"])
 
-        # Prompts — required keys; use _require_cfg for actionable error messages
+        # ── Prompts ───────────────────────────────────────────────────────────
         self.prompt_detect_language: str = _require_cfg(cfg, "prompt_detect_language")
         self.prompt_generate: str = _require_cfg(cfg, "prompt_generate")
+        self.prompt_detect_and_generate: str = _require_cfg(cfg, "prompt_detect_and_generate")
 
-        # Temperature support — explicit opt-out in config.yaml overrides heuristic
+        # ── Temperature support ───────────────────────────────────────────────
+        # Set to false for reasoning models (o1, o3, o4-mini) that reject temperature.
         self.supports_temperature: bool = cfg.get("supports_temperature", True)
 
-        # Logging
+        # ── Logging ───────────────────────────────────────────────────────────
         self.log_dir: Path = _ROOT / "logs"
         self.log_file: Path = self.log_dir / "enricher.log"
         self.max_log_size: int = 5 * 1024 * 1024  # 5 MB
 
 
-# Singleton — instantiated lazily so modules can be imported without a real .env
+# ── Lazy singleton ────────────────────────────────────────────────────────────
+
 _settings: Settings | None = None
 
 
