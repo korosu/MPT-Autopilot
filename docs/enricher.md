@@ -118,11 +118,11 @@ You'll need to activate the venv (`source .venv/bin/activate`) each time you ope
 Each major short-form video platform enforces its own hashtag limits — exceed
 them and the platform either ignores all your hashtags or demotes the post:
 
-| `--platform` value | Hard limit | What happens if you exceed it |
+| `--platform` value | Hard limit |
 |---|---|---|
-| `youtube` (default) | 15 | YouTube **silently ignores every hashtag** on the video |
-| `tiktok` | 5 | TikTok rejects or demotes the post |
-| `instagram` | 5 | Instagram rejects or demotes the post |
+| `youtube` (default) | 15 |
+| `tiktok` | 5 | 
+| `instagram` | 5 |
 
 By default, `min_tags`/`max_tags` in `config.yaml` are set to **3–5**, which is
 within the safe range for all three platforms regardless of which one you target.
