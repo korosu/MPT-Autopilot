@@ -1,0 +1,50 @@
+# Copy this file to jobs.yaml (or jobs_en.yaml, jobs_es.yaml, etc.) and edit.
+# jobs.yaml is gitignored — your video topics stay private.
+
+# Default MoneyPrinterTurbo API parameters applied to every job below.
+# Any field can be overridden per-job.
+defaults:
+  video_language: "English"
+  voice_name: "en-US-AriaNeural-Female"
+  video_source: "pexels"
+  video_clip_duration: 5
+  video_aspect: "9:16"
+  subtitle_enabled: true
+  subtitle_position: "bottom"
+  font_size: 60
+  bgm_type: "random"
+  bgm_volume: 0.2
+
+# Individual jobs.
+# Required per job:
+#   name        — label used in logs and Telegram alerts
+#   output_file — saved filename, must be unique (added to seen.txt after success)
+# Everything else overrides defaults for that job only.
+jobs:
+  - name: "Morning Routine Tips"
+    output_file: "morning_routine_tips.mp4"
+    enabled: true
+    video_subject: "5 simple morning routine tips to boost productivity"
+
+  - name: "Sleep Better Tonight"
+    output_file: "sleep_better_tonight.mp4"
+    enabled: true
+    video_subject: "How to fall asleep faster and wake up energized"
+
+  - name: "Focus Hacks"
+    output_file: "focus_hacks.mp4"
+    enabled: true
+    video_subject: "3 science-backed tricks to improve focus and concentration"
+
+  - name: "Stress Relief Breathing"
+    output_file: "stress_relief_breathing.mp4"
+    enabled: false
+    video_subject: "Box breathing technique to reduce stress in 5 minutes"
+
+  # Per-job override example — different language and voice
+  - name: "Consejos de productividad"
+    output_file: "consejos_productividad_es.mp4"
+    enabled: false
+    video_subject: "5 consejos para mejorar tu productividad al instante"
+    video_language: "Spanish"
+    voice_name: "es-ES-ElviraNeural-Female"
