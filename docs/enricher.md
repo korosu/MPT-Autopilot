@@ -119,7 +119,7 @@ Each major short-form video platform enforces its own hashtag limits — exceed
 them and the platform either ignores all your hashtags or demotes the post:
 
 | `--platform` value | Hard limit |
-|---|---|---|
+|---|---|
 | `youtube` (default) | 15 |
 | `tiktok` | 5 | 
 | `instagram` | 5 |
