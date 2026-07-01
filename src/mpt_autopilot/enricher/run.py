@@ -20,8 +20,8 @@ import traceback
 from pathlib import Path
 
 from hashtag_enricher.enricher.config import settings
-from hashtag_enricher.enricher.logger import Logger
 from hashtag_enricher.enricher.llm import detect_and_generate, generate_hashtags
+from hashtag_enricher.enricher.logger import Logger
 from hashtag_enricher.enricher.reader import resolve_meta
 from hashtag_enricher.enricher.writer import build_hashtags_block, write_hashtags
 

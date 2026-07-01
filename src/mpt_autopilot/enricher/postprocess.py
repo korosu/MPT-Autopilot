@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import re
 
-
 # ── Default constants (overridden by Settings values passed in) ───────────────
 
 _DEFAULT_MAX_TAG_LENGTH = 20

@@ -3,7 +3,8 @@ reader.py — resolves the video topic and optional language hint from a given m
 
 Priority:
   topic   → script.json params.video_subject  >  filename stem
-  lang    → caller-supplied --lang flag        >  script.json params.video_language  >  None (LLM detects)
+  lang    → caller-supplied --lang flag        >  script.json params.video_language
+            >  None (LLM detects)
 """
 
 from __future__ import annotations

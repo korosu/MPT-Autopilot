@@ -21,7 +21,7 @@ import httpx
 
 from hashtag_enricher.enricher.config import settings
 from hashtag_enricher.enricher.logger import Logger
-from hashtag_enricher.enricher.postprocess import validate_and_filter, check_platform_limit
+from hashtag_enricher.enricher.postprocess import check_platform_limit, validate_and_filter
 
 # ── Shared persistent client ──────────────────────────────────────────────────
 # Reused across all calls to avoid per-call TLS handshakes.
