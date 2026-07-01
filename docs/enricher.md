@@ -19,6 +19,8 @@ No video generator or special toolchain required.
   same API call that generates the hashtags (see [Language detection](#language-detection))
 - **Platform-aware** — target YouTube, TikTok, or Instagram; tag counts and limits adjust
   automatically (see [Platforms](#platforms))
+- **Research-backed defaults** — generates 3–5 hashtags per video by default, matching
+  2025–2026 best practices and each platform's actual hard limits
 - **Optional MoneyPrinterTurbo integration** — if a `script.json` exists next to the video, the richer `video_subject` field is used automatically
 - **Provider-agnostic** — works with OpenAI, Groq, Together, local Ollama, GitHub Models — just change `LLM_BASE_URL`
 - **Safe by default** — never overwrites existing hashtags unless `--force` is passed
@@ -113,13 +115,21 @@ You'll need to activate the venv (`source .venv/bin/activate`) each time you ope
 
 ## Platforms
 
-Each platform has its own tag count limit:
+Each major short-form video platform enforces its own hashtag limits — exceed
+them and the platform either ignores all your hashtags or demotes the post:
 
-| `--platform` value | Limit |
-|---|---|
-| `youtube` (default) | 60 |
-| `tiktok` | 5 |
-| `instagram` | 5 |
+| `--platform` value | Hard limit | What happens if you exceed it |
+|---|---|---|
+| `youtube` (default) | 15 | YouTube **silently ignores every hashtag** on the video |
+| `tiktok` | 5 | TikTok rejects or demotes the post |
+| `instagram` | 5 | Instagram rejects or demotes the post |
+
+By default, `min_tags`/`max_tags` in `config.yaml` are set to **3–5**, which is
+within the safe range for all three platforms regardless of which one you target.
+If you set `max_tags` higher than your chosen platform's hard limit,
+`hashtag-enricher` will refuse to start and tell you exactly what to lower it to —
+this is intentional, so you never end up shipping a video whose hashtags get
+silently dropped.
 
 Select the platform either in `config.yaml` (`platform: tiktok`) or per-run with
 `--platform tiktok`, which overrides the config file for that invocation only.
@@ -206,7 +216,7 @@ json_file="${name}.json"
 meta_file="${name}_meta.json"
 
 if jq -e '.hashtags' "$json_file" > /dev/null 2>&1; then
-    tags_json=$(jq -c '[.hashtags.tags_list[]? | ltrimstr("#")] | unique' "$json_file")
+    tags_json=$(jq -c '[.hashtags.tags_list[]? | ltrimstr("#")] | unique | .[0:15]' "$json_file")
     description=$(jq -r '.hashtags.tags_string // ""' "$json_file")
 else
     tags_json='["shorts"]'
@@ -262,9 +272,8 @@ always_include:
 - **`always_include`** — tags always prepended to every result, regardless of
   language, in the order listed.
 
-You can also edit the `prompt_detect_language`, `prompt_detect_and_generate`, and
-`prompt_generate` templates in `config.yaml` directly if you want to change the
-generation strategy itself.
+You can also edit the `prompt_detect_language` and `prompt_generate` templates in
+`config.yaml` directly if you want to change the generation strategy itself.
 
 ---
 
