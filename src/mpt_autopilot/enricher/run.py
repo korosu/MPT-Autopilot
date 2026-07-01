@@ -38,6 +38,7 @@ def _get_log() -> Logger:
 
 # ── Core processing ───────────────────────────────────────────────────────────
 
+
 def process_file(
     mp4_path: Path,
     lang_override: str | None,
@@ -110,6 +111,7 @@ def process_file(
 
 # ── Scanning helpers ──────────────────────────────────────────────────────────
 
+
 def collect_mp4s(directory: Path) -> list[Path]:
     """Return all *.mp4 files in directory (non-recursive, sorted)."""
     log = _get_log()
@@ -124,6 +126,7 @@ def collect_mp4s(directory: Path) -> list[Path]:
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -237,9 +240,7 @@ def main() -> None:
 
     # ── Summary ───────────────────────────────────────────────────────────────
     log.info("=" * 55)
-    log.info(
-        f"Done. ok={counts['ok']}  skipped={counts['skipped']}  error={counts['error']}"
-    )
+    log.info(f"Done. ok={counts['ok']}  skipped={counts['skipped']}  error={counts['error']}")
     log.info("=" * 55)
 
     if counts["error"] > 0:

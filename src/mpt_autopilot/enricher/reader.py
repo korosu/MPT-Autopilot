@@ -19,9 +19,9 @@ from pathlib import Path
 class VideoMeta:
     topic: str
     language_hint: str | None  # None means "auto-detect via LLM"
-    source: str                # "script_json" | "filename"
+    source: str  # "script_json" | "filename"
     mp4_path: Path
-    json_path: Path            # path where output will be written (may not exist yet)
+    json_path: Path  # path where output will be written (may not exist yet)
 
 
 _LANG_CODE_MAP: dict[str, str] = {

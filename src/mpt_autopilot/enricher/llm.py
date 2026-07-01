@@ -55,6 +55,7 @@ def _sanitise_topic(raw: str) -> str:
 
 # ── Core HTTP helper ──────────────────────────────────────────────────────────
 
+
 def _chat(prompt: str) -> str:
     """
     Send a single-turn chat request. Returns the raw text content.
@@ -94,11 +95,10 @@ def _chat(prompt: str) -> str:
             if retry_after and retry_after.isdigit():
                 delay = min(float(retry_after), _RETRY_MAX_DELAY)
             else:
-                delay = min(_RETRY_BASE_DELAY * (2 ** attempt), _RETRY_MAX_DELAY)
+                delay = min(_RETRY_BASE_DELAY * (2**attempt), _RETRY_MAX_DELAY)
 
             _get_log().warn(
-                f"429 rate-limited — waiting {delay:.0f}s before retry "
-                f"{attempt + 1}/{_MAX_RETRIES}"
+                f"429 rate-limited — waiting {delay:.0f}s before retry {attempt + 1}/{_MAX_RETRIES}"
             )
             time.sleep(delay)
             continue
@@ -122,6 +122,7 @@ def _chat(prompt: str) -> str:
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 
 def detect_language(text: str) -> str:
     """
@@ -209,9 +210,7 @@ def detect_and_generate(topic: str) -> tuple[str, list[str]]:
         tags = _finalize_tags(tags)
         return language, tags
     except Exception as exc:
-        _get_log().warn(
-            f"detect_and_generate() failed ({exc}), falling back to two-call mode"
-        )
+        _get_log().warn(f"detect_and_generate() failed ({exc}), falling back to two-call mode")
         # Graceful fallback: two separate calls
         language = detect_language(safe_topic)
         tags = generate_hashtags(safe_topic, language)
@@ -219,6 +218,7 @@ def detect_and_generate(topic: str) -> tuple[str, list[str]]:
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
+
 
 def _build_excluded_string() -> str:
     """Build the comma-separated excluded-tags string for prompt injection."""
@@ -284,9 +284,7 @@ def _parse_tags(raw: str) -> list[str]:
     # Strip markdown code fences if present
     if text.startswith("```"):
         lines = text.splitlines()
-        text = "\n".join(
-            line for line in lines if not line.startswith("```")
-        ).strip()
+        text = "\n".join(line for line in lines if not line.startswith("```")).strip()
 
     # Try JSON parse
     try:
@@ -330,9 +328,7 @@ def _parse_combined_response(raw: str) -> tuple[str, list[str]]:
     # Strip markdown fences
     if text.startswith("```"):
         lines = text.splitlines()
-        text = "\n".join(
-            line for line in lines if not line.startswith("```")
-        ).strip()
+        text = "\n".join(line for line in lines if not line.startswith("```")).strip()
 
     try:
         parsed = json.loads(text)
@@ -346,9 +342,7 @@ def _parse_combined_response(raw: str) -> tuple[str, list[str]]:
         pass
 
     # Fallback: try to extract language and tags separately from raw text
-    lang_match = re.search(
-        r'"language"\s*:\s*"([^"]+)"', raw, re.IGNORECASE
-    )
+    lang_match = re.search(r'"language"\s*:\s*"([^"]+)"', raw, re.IGNORECASE)
     language = lang_match.group(1).strip() if lang_match else "English"
     tags = _parse_tags(raw)
     return language, tags

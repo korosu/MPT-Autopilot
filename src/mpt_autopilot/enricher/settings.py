@@ -53,9 +53,7 @@ class Settings:
 
         # ── LLM connection ────────────────────────────────────────────────────
         self.api_key: str = _require_env("LLM_API_KEY")
-        self.base_url: str = os.getenv(
-            "LLM_BASE_URL", "https://api.openai.com/v1"
-        ).rstrip("/")
+        self.base_url: str = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
         self.model: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
 
         # ── Platform ──────────────────────────────────────────────────────────
@@ -75,9 +73,7 @@ class Settings:
         self.max_tags: int = int(cfg.get("max_tags", 5))
 
         if self.min_tags < 1:
-            raise ValueError(
-                f"config.yaml: min_tags ({self.min_tags}) must be at least 1."
-            )
+            raise ValueError(f"config.yaml: min_tags ({self.min_tags}) must be at least 1.")
         if self.min_tags >= self.max_tags:
             raise ValueError(
                 f"config.yaml: min_tags ({self.min_tags}) must be less than "
