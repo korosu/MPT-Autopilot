@@ -17,18 +17,18 @@ _DEFAULT_MAX_TAG_LENGTH = 20
 _DEFAULT_HARD_LIMIT = 60
 
 PLATFORM_HARD_LIMITS: dict[str, int] = {
-    "youtube": 20,
+    "youtube": 60,
     "tiktok": 5,
     "instagram": 5,
 }
 
 
 def validate_and_filter(
-    tags: list[str],
-    *,
-    max_tag_length: int = _DEFAULT_MAX_TAG_LENGTH,
-    banned_tags: frozenset[str] | None = None,
-    hard_limit: int = _DEFAULT_HARD_LIMIT,
+        tags: list[str],
+        *,
+        max_tag_length: int = _DEFAULT_MAX_TAG_LENGTH,
+        banned_tags: frozenset[str] | None = None,
+        hard_limit: int = _DEFAULT_HARD_LIMIT,
 ) -> list[str]:
     """
     Clean and validate a list of hashtag strings.
@@ -93,8 +93,8 @@ def validate_and_filter(
 
 
 def check_platform_limit(
-    total_tag_count: int,
-    platform: str,
+        total_tag_count: int,
+        platform: str,
 ) -> tuple[bool, str]:
     """
     Check whether the total tag count (always_include + generated) is within

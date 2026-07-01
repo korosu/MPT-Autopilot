@@ -140,10 +140,6 @@ Select the platform either in `config.yaml` (`platform: tiktok`) or per-run with
   same as the explicit-language path above, just with the language inferred instead
   of supplied.
 
-In both cases you get exactly **one** LLM call per video — `--lang` is purely about
-*whether* that call needs to figure out the language itself, not about making an
-extra call.
-
 ---
 
 ## Output

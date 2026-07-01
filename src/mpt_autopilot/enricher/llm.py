@@ -5,7 +5,10 @@ Public functions:
   detect_language(text)           → str          e.g. "English"
   generate_hashtags(topic, lang)  → list[str]    e.g. ["#ostrichfacts", ...]
   detect_and_generate(topic)      → tuple[str, list[str]]  (language, tags)
-                                    Single-call variant — preferred for efficiency.
+                                    Single-call variant — preferred when the
+                                    language isn't already known. If the caller
+                                    already knows the language, call
+                                    generate_hashtags() directly instead.
 """
 
 from __future__ import annotations
@@ -169,25 +172,23 @@ def generate_hashtags(topic: str, language: str) -> list[str]:
     return _process_raw_tags(raw)
 
 
-def detect_and_generate(topic: str, language_hint: str | None = None) -> tuple[str, list[str]]:
+def detect_and_generate(topic: str) -> tuple[str, list[str]]:
     """
     Detect the language of the topic AND generate hashtags in a SINGLE API call.
 
     This is the preferred function when language is not known in advance — it
     saves one LLM round-trip compared to calling detect_language() separately.
 
+    Note: if the language is already known (e.g. via --lang or script.json's
+    video_language), the caller should call generate_hashtags() directly
+    instead — this function is only for the auto-detect path.
+
     Args:
-        topic:          The video topic/subject string.
-        language_hint:  If provided, skip language detection and use this directly.
+        topic:  The video topic/subject string.
 
     Returns:
         (language: str, tags: list[str])
     """
-    if language_hint:
-        # Language is already known — skip detection, generate only
-        tags = generate_hashtags(topic, language_hint)
-        return language_hint, tags
-
     safe_topic = _sanitise_topic(topic)
     excluded = _build_excluded_string()
 
