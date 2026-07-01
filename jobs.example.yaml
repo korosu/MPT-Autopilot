@@ -1,19 +1,61 @@
 # Copy this file to jobs.yaml (or jobs_en.yaml, jobs_es.yaml, etc.) and edit.
 # jobs.yaml is gitignored — your video topics stay private.
+#
+# `defaults` below lists every MoneyPrinterTurbo VideoParams field. You don't
+# need to set them all — anything you delete here just isn't sent, and
+# MoneyPrinterTurbo falls back to its own server-side default. This file is
+# intentionally exhaustive so you have a single place to see what's tunable.
 
-# Default MoneyPrinterTurbo API parameters applied to every job below.
-# Any field can be overridden per-job.
 defaults:
-  video_language: "English"
-  voice_name: "en-US-AriaNeural-Female"
-  video_source: "pexels"
-  video_clip_duration: 5
+  # ── Voice ────────────────────────────────────────────────────────────────
+  # `voice` resolves a friendly alias from voices.yaml (copy
+  # voices.example.yaml first) into both tts_server and voice_name together,
+  # so the two can never drift out of sync. You can set tts_server /
+  # voice_name directly instead if you'd rather skip presets entirely.
+  voice: "gemini_puck"
+  voice_volume: 1
+  voice_rate: 1.1
+
+  # ── Script / subject ─────────────────────────────────────────────────────
+  video_subject: ""
+  video_script: ""
+  video_terms: ""
+  video_script_prompt: ""
+  custom_system_prompt: ""
+  paragraph_number: 3
+  video_language: "en"
+
+  # ── Video assembly ───────────────────────────────────────────────────────
   video_aspect: "9:16"
+  video_concat_mode: "random"
+  video_transition_mode: "None"
+  video_clip_duration: 4
+  video_count: 1
+  video_source: "pexels"
+  video_materials:
+    - provider: "pexels"
+      url: ""
+      duration: 0
+  custom_audio_file: ""
+
+  # ── Background music ─────────────────────────────────────────────────────
+  bgm_type: "random"
+  bgm_file: ""
+  bgm_volume: 0.2
+
+  # ── Subtitles ────────────────────────────────────────────────────────────
   subtitle_enabled: true
   subtitle_position: "bottom"
+  custom_position: 50
+  font_name: "STHeitiMedium.ttc"
   font_size: 60
-  bgm_type: "random"
-  bgm_volume: 0.2
+  text_fore_color: "#FFFFFF"
+  text_background_color: true
+  stroke_color: "#000000"
+  stroke_width: 2
+
+  # ── Rendering ────────────────────────────────────────────────────────────
+  n_threads: 2
 
 # Individual jobs.
 # Required per job:
@@ -21,30 +63,43 @@ defaults:
 #   output_file — saved filename, must be unique (added to seen.txt after success)
 # Everything else overrides defaults for that job only.
 jobs:
-  - name: "Morning Routine Tips"
-    output_file: "morning_routine_tips.mp4"
+  - name: "what_air_traffic_controllers_never_tell_passengers_en"
+    output_file: "what_air_traffic_controllers_never_tell_passengers_en.mp4"
+    enabled: true
+    video_subject: "What Air Traffic Controllers Never Tell Passengers"
+    video_clip_duration: 4
+    video_concat_mode: "random"
+    voice: "gemini_aoede"   # overrides tts_server + voice_name together
+    voice_rate: 1.1
+    bgm_type: "random"
+    bgm_volume: 0.15
+    paragraph_number: 2
+
+  - name: "morning_routine_tips_en"
+    output_file: "morning_routine_tips_en.mp4"
     enabled: true
     video_subject: "5 simple morning routine tips to boost productivity"
 
-  - name: "Sleep Better Tonight"
-    output_file: "sleep_better_tonight.mp4"
-    enabled: true
+  - name: "sleep_better_tonight_en"
+    output_file: "sleep_better_tonight_en.mp4"
+    enabled: false
     video_subject: "How to fall asleep faster and wake up energized"
 
-  - name: "Focus Hacks"
-    output_file: "focus_hacks.mp4"
-    enabled: true
-    video_subject: "3 science-backed tricks to improve focus and concentration"
-
-  - name: "Stress Relief Breathing"
-    output_file: "stress_relief_breathing.mp4"
-    enabled: false
-    video_subject: "Box breathing technique to reduce stress in 5 minutes"
-
-  # Per-job override example — different language and voice
-  - name: "Consejos de productividad"
+  # Per-job override example — Spanish via gTTS (language-code voices, no
+  # named personas) instead of the Gemini default
+  - name: "consejos_productividad_es"
     output_file: "consejos_productividad_es.mp4"
     enabled: false
     video_subject: "5 consejos para mejorar tu productividad al instante"
-    video_language: "Spanish"
-    voice_name: "es-ES-ElviraNeural-Female"
+    video_language: "es"
+    voice: "gtts_es"
+
+  # Skipping presets entirely and setting tts_server / voice_name directly
+  # also works — `voice` is purely a convenience layer
+  - name: "sin_presets_es"
+    output_file: "sin_presets_es.mp4"
+    enabled: false
+    video_subject: "5 consejos de productividad"
+    video_language: "es"
+    tts_server: "gtts"
+    voice_name: "gtts:es"

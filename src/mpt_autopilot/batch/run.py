@@ -25,7 +25,7 @@ from pathlib import Path
 
 import yaml
 
-from mpt_batch.engine import notify, seen
+from mpt_batch.engine import notify, seen, voices
 from mpt_batch.engine.api import submit_job, wait_for_task
 from mpt_batch.engine.settings import Settings
 from mpt_batch.engine.settings import load as load_settings
@@ -101,6 +101,8 @@ def cleanup_task(task_id: str, settings: Settings) -> None:
 
 
 def cleanup_cache(settings: Settings) -> None:
+    if not settings.cache_cleanup_enabled:
+        return
     cache_dir = settings.mpt_storage / "cache_videos"
     if not cache_dir.exists():
         return
@@ -114,12 +116,13 @@ def cleanup_cache(settings: Settings) -> None:
 # ── Single job (with retries) ─────────────────────────────────────────────────
 
 
-def run_job(job: dict, defaults: dict, settings: Settings) -> bool:
+def run_job(job: dict, defaults: dict, voice_pool: dict, settings: Settings) -> bool:
     """Run one job with retry logic. Returns True on success."""
     payload = {
         **defaults,
         **{k: v for k, v in job.items() if k not in ("name", "enabled", "output_file")},
     }
+    payload = voices.resolve(payload, voice_pool)
 
     for attempt in range(1, settings.max_retries + 1):
         task_id: str | None = None
@@ -155,6 +158,7 @@ def run(jobs_path: Path, settings: Settings, *, dry_run: bool) -> None:
     defaults: dict = jobs_cfg.get("defaults", {})
     jobs: list[dict] = jobs_cfg.get("jobs", [])
     already_seen = seen.load(settings.seen_file)
+    voice_pool = voices.load_pool(settings.voices_file)
 
     log(
         f"=== mpt-batch: {len(jobs)} jobs | {len(already_seen)} already seen ===",
@@ -168,10 +172,16 @@ def run(jobs_path: Path, settings: Settings, *, dry_run: bool) -> None:
             name = job.get("name", job.get("output_file", "?"))
             if not job.get("enabled", True):
                 print(f"  ⏸  {name} (disabled)")
-            elif job["output_file"] in already_seen:
+                continue
+            if job["output_file"] in already_seen:
                 print(f"  ✓  {name} (already done)")
-            else:
+                continue
+            merged = {**defaults, **{k: v for k, v in job.items() if k != "name"}}
+            try:
+                voices.resolve(merged, voice_pool)
                 print(f"  →  {name}")
+            except KeyError as exc:
+                print(f"  ✗  {name} — {exc}")
         return
 
     settings.output_dir.mkdir(parents=True, exist_ok=True)
@@ -194,13 +204,17 @@ def run(jobs_path: Path, settings: Settings, *, dry_run: bool) -> None:
             log(f"skip: {job['output_file']} (in seen registry)", settings)
             continue
 
-        success = run_job(job, defaults, settings)
+        success = run_job(job, defaults, voice_pool, settings)
 
         if success:
             ok.append(name)
             consecutive_failures = 0
             seen.add(settings.seen_file, job["output_file"])
-            if len(ok) % settings.cache_cleanup_interval == 0:
+            if (
+                settings.cache_cleanup_enabled
+                and settings.cache_cleanup_interval > 0
+                and len(ok) % settings.cache_cleanup_interval == 0
+            ):
                 log(f"periodic cache cleanup after {len(ok)} videos", settings)
                 cleanup_cache(settings)
         else:

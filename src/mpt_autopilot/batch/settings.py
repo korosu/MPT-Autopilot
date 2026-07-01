@@ -27,6 +27,9 @@ class Settings:
     output_dir: Path
     seen_file: Path
 
+    # Voice presets — from config.yaml (optional, voices.yaml may not exist)
+    voices_file: Path
+
     # Logging — from config.yaml
     log_file: Path
     log_max_bytes: int
@@ -39,6 +42,9 @@ class Settings:
     max_retries: int
     retry_delay_seconds: int
     max_consecutive_failures: int
+
+    # Cache cleanup — from config.yaml
+    cache_cleanup_enabled: bool
     cache_cleanup_interval: int
 
     # Telegram — token/chat_id from .env (optional), prefix from config.yaml
@@ -85,6 +91,7 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
         mpt_storage=_resolve(str(_require_cfg(cfg, "mpt_storage"))),
         output_dir=_resolve(cfg.get("output_dir", "./exports")),
         seen_file=_resolve(cfg.get("seen_file", "./seen.txt")),
+        voices_file=_resolve(cfg.get("voices_file", "./voices.yaml")),
         log_file=_resolve(cfg.get("log_file", "./logs/batch.log")),
         log_max_bytes=int(cfg.get("log_max_mb", 10)) * 1024 * 1024,
         max_wait_seconds=int(cfg.get("max_wait_seconds", 2400)),
@@ -92,6 +99,7 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
         max_retries=int(cfg.get("max_retries", 3)),
         retry_delay_seconds=int(cfg.get("retry_delay_seconds", 180)),
         max_consecutive_failures=int(cfg.get("max_consecutive_failures", 3)),
+        cache_cleanup_enabled=bool(cfg.get("cache_cleanup_enabled", True)),
         cache_cleanup_interval=int(cfg.get("cache_cleanup_interval", 6)),
         telegram_token=os.getenv("TELEGRAM_TOKEN", "").strip(),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),

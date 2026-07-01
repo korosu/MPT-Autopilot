@@ -15,10 +15,11 @@ interrupted session is always safe.
 ## Features
 
 - **YAML job list** — define as many videos as you want, with per-job parameter overrides
+- **Voice presets** — name your favorite voices once in `voices.yaml`, reference them by alias
 - **Resumable** — tracks finished videos in `seen.txt`; safe to re-run after interruption
 - **Retry logic** — configurable retries per job with a delay between attempts
 - **Abort on API failure** — stops after N consecutive failures so you don't waste hours
-- **Cache cleanup** — periodically clears MoneyPrinterTurbo's `cache_videos/` to free disk
+- **Configurable cache cleanup** — periodically clears MoneyPrinterTurbo's `cache_videos/`, or disable it entirely
 - **Telegram alerts** — optional notifications on start, finish, and abort
 - **Multiple profiles** — run with different jobs files for different languages or accounts
 
@@ -40,6 +41,7 @@ cd mpt-batch
 cp .env.example .env
 cp config.yaml.example config.yaml
 cp jobs.example.yaml jobs.yaml
+cp voices.example.yaml voices.yaml   # optional — see "Voices" below
 ```
 
 Telegram alerts are optional — open `.env` and leave it empty to disable them, or fill in:
@@ -122,12 +124,15 @@ The seen file is a plain-text file — one filename per line — that tracks whi
 
 ## Jobs file format
 
+`defaults` accepts any MoneyPrinterTurbo `VideoParams` field — voice, video assembly, subtitles, background music, rendering. A minimal example:
+
 ```yaml
 defaults:
-  video_language: "English"
-  voice_name: "en-US-AriaNeural-Female"
-  video_clip_duration: 5
-  # any MoneyPrinterTurbo API parameter
+  video_language: "en"
+  voice: "gemini_puck"        # resolved via voices.yaml — see "Voices" below
+  voice_rate: 1.1
+  video_clip_duration: 4
+  paragraph_number: 3
 
 jobs:
   - name: "Morning Routine Tips"
@@ -145,11 +150,55 @@ jobs:
     output_file: "consejos_es.mp4"
     enabled: true
     video_subject: "5 consejos de productividad"
-    video_language: "Spanish"
-    voice_name: "es-ES-ElviraNeural-Female"
+    video_language: "es"
+    voice: "gtts_es"
 ```
 
-Full example in [`jobs.example.yaml`](jobs.example.yaml).
+[`jobs.example.yaml`](jobs.example.yaml) lists every field (script/subject, video assembly, subtitles, background music, rendering) with the values MoneyPrinterTurbo itself defaults to, so you have one place to see everything that's tunable.
+
+---
+
+## Voices
+
+Your MoneyPrinterTurbo setup selects the TTS engine via a `tts_server` field, and `voice_name` itself encodes the provider as a `"provider:voice"` prefix. Each provider names its voices completely differently:
+
+| Provider | `tts_server` | Example `voice_name` | Cost |
+|---|---|---|---|
+| gTTS (Google Translate TTS) | `gtts` | `gtts:en` | Free, no key |
+| Gemini TTS | `gemini` | `gemini:puck` | Paid, needs Gemini API key on the server |
+
+(Other providers your MoneyPrinterTurbo fork supports follow the same `tts_server` + `"provider:voice"` shape — check its `voice.py` for the exact values it expects.)
+
+Remembering both fields by hand for every job gets old fast, so mpt-batch supports named aliases via `voices.yaml`, each resolving to **both** fields together so they can never drift out of sync:
+
+```yaml
+# voices.yaml
+gemini:
+  gemini_puck:
+    tts_server: "gemini"
+    voice_name: "gemini:puck"
+  gemini_aoede:
+    tts_server: "gemini"
+    voice_name: "gemini:aoede"
+```
+
+Then in `jobs.yaml`, reference the alias instead of setting both fields by hand:
+
+```yaml
+defaults:
+  voice: "gemini_puck"
+
+jobs:
+  - name: "Focus Hacks"
+    output_file: "focus_hacks.mp4"
+    voice: "gemini_aoede"   # overrides tts_server + voice_name together, just for this job
+```
+
+`tts_server` / `voice_name` still work directly if you'd rather skip presets entirely — `voice` is purely a convenience that resolves to both fields before the job is submitted. `--dry-run` validates every alias up front, so a typo shows up immediately instead of failing mid-batch.
+
+A starter pool with confirmed voices for gTTS and Gemini is in [`voices.example.yaml`](voices.example.yaml).
+
+**Paid providers need their own setup on the MoneyPrinterTurbo server itself** — a Gemini API key, for example, goes in *MoneyPrinterTurbo's* own config, not in mpt-batch. This tool only resolves the alias to `tts_server` / `voice_name`; it has no way to configure or verify the MoneyPrinterTurbo server's TTS backend.
 
 ---
 
@@ -170,6 +219,8 @@ run re-generating a video the other already produced.
 ## Telegram alerts
 
 Set `TELEGRAM_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`. Alerts are sent when a batch starts, finishes, and on abort. Leave both empty to disable.
+
+This is a one-way notifier — mpt-batch pushes plain `sendMessage` calls to the Telegram Bot API directly, the same way a `curl` command would. It doesn't listen for commands and isn't tied to any interactive bot project; if you also run a Telegram bot for VPS management, the two are independent and can share the same token without conflicting.
 
 The prefix shown in every alert (`[mpt-batch] Batch done`) can be changed in `config.yaml`:
 
@@ -194,6 +245,19 @@ max_consecutive_failures: 3
 
 ---
 
+## Cache cleanup
+
+MoneyPrinterTurbo accumulates stock footage in `cache_videos/` as it generates videos, which can grow large over a long batch. mpt-batch can clear it for you:
+
+```yaml
+cache_cleanup_enabled: true     # set to false to never touch cache_videos/
+cache_cleanup_interval: 6       # also clean every N successful videos
+```
+
+Cleanup always runs once at the end of a batch (when enabled). `cache_cleanup_interval` additionally triggers it periodically during a long run so disk usage doesn't grow unbounded; set it to `0` to only clean at the very end.
+
+---
+
 ## Running on a schedule (cron)
 
 ```bash
@@ -209,7 +273,7 @@ max_consecutive_failures: 3
 cd mpt-batch && git pull
 ```
 
-Your `config.yaml`, `jobs.yaml`, and `seen.txt` are gitignored and will not be affected.
+Your `config.yaml`, `jobs.yaml`, `voices.yaml`, and `seen.txt` are gitignored and will not be affected.
 
 ---
 
