@@ -14,14 +14,12 @@ import re
 # ── Default constants (overridden by Settings values passed in) ───────────────
 
 _DEFAULT_MAX_TAG_LENGTH = 20
-_DEFAULT_HARD_LIMIT = 15
+_DEFAULT_HARD_LIMIT = 60
 
-# Platform hard limits imposed by each platform (not configurable by users —
-# these are external constraints enforced by YouTube/TikTok/Instagram themselves).
 PLATFORM_HARD_LIMITS: dict[str, int] = {
-    "youtube": 15,   # Exceed 15 → YouTube ignores ALL hashtags silently
-    "tiktok": 5,     # TikTok enforces 5-tag limit (introduced 2025)
-    "instagram": 5,  # Instagram hard cap of 5 (enforced Dec 2025)
+    "youtube": 20,
+    "tiktok": 5,
+    "instagram": 5,
 }
 
 
@@ -99,25 +97,22 @@ def check_platform_limit(
     platform: str,
 ) -> tuple[bool, str]:
     """
-    Check whether the total tag count (always_include + generated) is safe
-    for the target platform.
+    Check whether the total tag count (always_include + generated) is within
+    the target platform's tag-count limit. This is a safety-net check —
+    validate_and_filter() already truncates to hard_limit, so this should
+    only ever fire if something upstream bypassed it.
 
     Returns:
         (is_safe: bool, warning_message: str)
         warning_message is empty when is_safe is True.
     """
-    hard_limit = PLATFORM_HARD_LIMITS.get(platform, 15)
+    hard_limit = PLATFORM_HARD_LIMITS.get(platform, _DEFAULT_HARD_LIMIT)
 
     if total_tag_count > hard_limit:
-        msg = (
-            f"WARNING: {total_tag_count} total tags exceed the {platform} "
-            f"hard limit of {hard_limit}. "
+        return False, (
+            f"{total_tag_count} total tags exceed the {platform} limit "
+            f"of {hard_limit}."
         )
-        if platform == "youtube":
-            msg += "YouTube will ignore ALL hashtags on this video."
-        elif platform in ("tiktok", "instagram"):
-            msg += f"{platform.capitalize()} will reject or demote the post."
-        return False, msg
 
     return True, ""
 

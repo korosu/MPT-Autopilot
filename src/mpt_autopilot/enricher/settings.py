@@ -86,9 +86,8 @@ class Settings:
         if self.max_tags > self.hard_limit:
             raise ValueError(
                 f"config.yaml: max_tags ({self.max_tags}) exceeds the "
-                f"{self.platform} platform hard limit ({self.hard_limit}). "
-                f"Reduce max_tags to {self.hard_limit} or less to avoid "
-                f"having ALL hashtags silently ignored."
+                f"{self.platform} limit of {self.hard_limit}. "
+                f"Lower max_tags to {self.hard_limit} or less."
             )
 
         # ── Tag quality filters ───────────────────────────────────────────────
