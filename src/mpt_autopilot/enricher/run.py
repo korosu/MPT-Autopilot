@@ -40,10 +40,10 @@ def _get_log() -> Logger:
 
 
 def process_file(
-        mp4_path: Path,
-        lang_override: str | None,
-        force: bool,
-        platform_override: str | None = None,
+    mp4_path: Path,
+    lang_override: str | None,
+    force: bool,
+    platform_override: str | None = None,
 ) -> str:
     """
     Process a single mp4 file.
