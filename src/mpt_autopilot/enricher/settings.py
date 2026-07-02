@@ -10,7 +10,7 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
-from hashtag_enricher.enricher.postprocess import PLATFORM_HARD_LIMITS
+from hashtag_enricher.enricher.postprocess import PLATFORM_HARD_LIMITS, platform_hard_limit
 
 _ROOT = Path.cwd()
 
@@ -47,6 +47,44 @@ def _load_yaml() -> dict:
         return yaml.safe_load(f)
 
 
+def validate_tag_budget(platform: str, max_tags: int, always_include_count: int) -> int:
+    """
+    Ensure max_tags + always_include_count actually fits within a platform's
+    hard limit.
+
+    always_include tags are prepended by the code on top of the LLM's
+    max_tags-worth of content tags (see llm.py's _merge_always_include), so
+    the two must be budgeted together — max_tags alone being under the hard
+    limit is not sufficient.
+
+    Used both at Settings() init (for the configured `platform`) and by
+    enrich.py when `--platform` overrides the config at runtime, so the two
+    call sites can never drift apart.
+
+    Args:
+        platform:              Platform name (must be a PLATFORM_HARD_LIMITS key).
+        max_tags:               config.yaml's max_tags.
+        always_include_count:   len(config.yaml's always_include).
+
+    Returns:
+        The platform's hard limit, on success.
+
+    Raises:
+        ValueError: if max_tags + always_include_count exceeds the platform's
+            hard limit.
+    """
+    hard_limit = platform_hard_limit(platform)
+    total = max_tags + always_include_count
+    if total > hard_limit:
+        raise ValueError(
+            f"max_tags ({max_tags}) + always_include ({always_include_count} tag(s)) "
+            f"= {total} exceeds the {platform} limit of {hard_limit}. "
+            f"Lower max_tags in config.yaml, trim always_include, or choose a "
+            f"different platform."
+        )
+    return hard_limit
+
+
 class Settings:
     def __init__(self) -> None:
         cfg = _load_yaml()
@@ -66,7 +104,7 @@ class Settings:
             )
 
         # Hard limit imposed by the platform (not user-configurable)
-        self.hard_limit: int = PLATFORM_HARD_LIMITS[self.platform]
+        self.hard_limit: int = platform_hard_limit(self.platform)
 
         # ── Tag count ────────────────────────────────────────────────────────
         self.min_tags: int = int(cfg.get("min_tags", 3))
@@ -98,6 +136,11 @@ class Settings:
 
         # ── Always-include tags ───────────────────────────────────────────────
         self.always_include: list[str] = cfg.get("always_include", ["#shorts"])
+
+        # always_include is added by the code on top of max_tags-worth of LLM
+        # content tags (never counted *within* min_tags/max_tags), so the two
+        # budgets together still have to fit under the platform's hard limit.
+        validate_tag_budget(self.platform, self.max_tags, len(self.always_include))
 
         # ── Prompts ───────────────────────────────────────────────────────────
         self.prompt_detect_language: str = _require_cfg(cfg, "prompt_detect_language")

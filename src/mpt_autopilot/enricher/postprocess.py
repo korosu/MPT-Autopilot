@@ -22,12 +22,27 @@ PLATFORM_HARD_LIMITS: dict[str, int] = {
 }
 
 
+def platform_hard_limit(platform: str) -> int:
+    """
+    Return the hard tag-count limit for a given platform.
+
+    Single source of truth for PLATFORM_HARD_LIMITS lookups so callers
+    (config.py, llm.py, enrich.py) never drift from each other when a
+    platform is looked up dynamically (e.g. via --platform).
+
+    Falls back to _DEFAULT_HARD_LIMIT for an unrecognised platform name —
+    callers that need strict validation should check membership themselves
+    (see config.py's platform allow-list check).
+    """
+    return PLATFORM_HARD_LIMITS.get(platform, _DEFAULT_HARD_LIMIT)
+
+
 def validate_and_filter(
-    tags: list[str],
-    *,
-    max_tag_length: int = _DEFAULT_MAX_TAG_LENGTH,
-    banned_tags: frozenset[str] | None = None,
-    hard_limit: int = _DEFAULT_HARD_LIMIT,
+        tags: list[str],
+        *,
+        max_tag_length: int = _DEFAULT_MAX_TAG_LENGTH,
+        banned_tags: frozenset[str] | None = None,
+        hard_limit: int = _DEFAULT_HARD_LIMIT,
 ) -> list[str]:
     """
     Clean and validate a list of hashtag strings.
@@ -92,8 +107,8 @@ def validate_and_filter(
 
 
 def check_platform_limit(
-    total_tag_count: int,
-    platform: str,
+        total_tag_count: int,
+        platform: str,
 ) -> tuple[bool, str]:
     """
     Check whether the total tag count (always_include + generated) is within
@@ -105,7 +120,7 @@ def check_platform_limit(
         (is_safe: bool, warning_message: str)
         warning_message is empty when is_safe is True.
     """
-    hard_limit = PLATFORM_HARD_LIMITS.get(platform, _DEFAULT_HARD_LIMIT)
+    hard_limit = platform_hard_limit(platform)
 
     if total_tag_count > hard_limit:
         return False, (f"{total_tag_count} total tags exceed the {platform} limit of {hard_limit}.")

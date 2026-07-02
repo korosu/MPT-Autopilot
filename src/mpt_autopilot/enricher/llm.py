@@ -2,13 +2,19 @@
 llm.py — all communication with the LLM API.
 
 Public functions:
-  detect_language(text)           → str          e.g. "English"
-  generate_hashtags(topic, lang)  → list[str]    e.g. ["#ostrichfacts", ...]
-  detect_and_generate(topic)      → tuple[str, list[str]]  (language, tags)
-                                    Single-call variant — preferred when the
-                                    language isn't already known. If the caller
-                                    already knows the language, call
-                                    generate_hashtags() directly instead.
+  detect_language(text)                     → str    e.g. "English"
+  generate_hashtags(topic, lang, platform)   → list[str]    e.g. ["#ostrichfacts", ...]
+  detect_and_generate(topic, platform)       → tuple[str, list[str]]  (language, tags)
+                                              Single-call variant — preferred when the
+                                              language isn't already known. If the caller
+                                              already knows the language, call
+                                              generate_hashtags() directly instead.
+
+`platform` is optional on generate_hashtags()/detect_and_generate(): it defaults
+to settings.platform (config.yaml), but callers pass it explicitly whenever
+--platform overrides the config for a run (see enrich.py) — this is what makes
+the {platform} prompt placeholder and the platform hard-limit actually track
+--platform instead of silently generating under the config.yaml platform.
 """
 
 from __future__ import annotations
@@ -21,7 +27,11 @@ import httpx
 
 from hashtag_enricher.enricher.config import settings
 from hashtag_enricher.enricher.logger import Logger
-from hashtag_enricher.enricher.postprocess import check_platform_limit, validate_and_filter
+from hashtag_enricher.enricher.postprocess import (
+    check_platform_limit,
+    platform_hard_limit,
+    validate_and_filter,
+)
 
 # ── Shared persistent client ──────────────────────────────────────────────────
 # Reused across all calls to avoid per-call TLS handshakes.
@@ -144,9 +154,17 @@ def detect_language(text: str) -> str:
         return "English"
 
 
-def generate_hashtags(topic: str, language: str) -> list[str]:
+def generate_hashtags(topic: str, language: str, platform: str | None = None) -> list[str]:
     """
     Ask the LLM to generate hashtags for the given topic in the given language.
+
+    Args:
+        topic:     The video topic/subject string.
+        language:  Target language name, e.g. "English".
+        platform:  Overrides settings.platform for this call (e.g. --platform).
+                   Affects both the {platform} prompt placeholder and the
+                   hard limit used to truncate/validate the result. Defaults
+                   to settings.platform when omitted.
 
     Returns a list of hashtag strings starting with '#'.
     On parse failure returns a minimal fallback list so the caller never crashes.
@@ -155,6 +173,7 @@ def generate_hashtags(topic: str, language: str) -> list[str]:
     it saves one API round-trip.
     """
     safe_topic = _sanitise_topic(topic)
+    effective_platform = platform or settings.platform
 
     # Tell the LLM which tags to skip so it never generates them.
     excluded = _build_excluded_string()
@@ -162,7 +181,7 @@ def generate_hashtags(topic: str, language: str) -> list[str]:
     prompt = settings.prompt_generate.format(
         video_subject=safe_topic,
         language=language,
-        platform=settings.platform,
+        platform=effective_platform,
         min_tags=settings.min_tags,
         max_tags=settings.max_tags,
         max_tag_length=settings.max_tag_length,
@@ -170,10 +189,10 @@ def generate_hashtags(topic: str, language: str) -> list[str]:
     )
 
     raw = _chat(prompt)
-    return _process_raw_tags(raw)
+    return _process_raw_tags(raw, platform=effective_platform)
 
 
-def detect_and_generate(topic: str) -> tuple[str, list[str]]:
+def detect_and_generate(topic: str, platform: str | None = None) -> tuple[str, list[str]]:
     """
     Detect the language of the topic AND generate hashtags in a SINGLE API call.
 
@@ -185,19 +204,24 @@ def detect_and_generate(topic: str) -> tuple[str, list[str]]:
     instead — this function is only for the auto-detect path.
 
     Args:
-        topic:  The video topic/subject string.
+        topic:     The video topic/subject string.
+        platform:  Overrides settings.platform for this call (e.g. --platform).
+                   Affects both the {platform} prompt placeholder and the
+                   hard limit used to truncate/validate the result. Defaults
+                   to settings.platform when omitted.
 
     Returns:
         (language: str, tags: list[str])
     """
     safe_topic = _sanitise_topic(topic)
+    effective_platform = platform or settings.platform
     excluded = _build_excluded_string()
 
     # Combined detect+generate prompt — fully defined in config.yaml as
     # prompt_detect_and_generate, the same way prompt_generate is.
     combined_prompt = settings.prompt_detect_and_generate.format(
         video_subject=safe_topic,
-        platform=settings.platform,
+        platform=effective_platform,
         min_tags=settings.min_tags,
         max_tags=settings.max_tags,
         max_tag_length=settings.max_tag_length,
@@ -207,13 +231,13 @@ def detect_and_generate(topic: str) -> tuple[str, list[str]]:
     try:
         raw = _chat(combined_prompt)
         language, tags = _parse_combined_response(raw)
-        tags = _finalize_tags(tags)
+        tags = _finalize_tags(tags, platform=effective_platform)
         return language, tags
     except Exception as exc:
         _get_log().warn(f"detect_and_generate() failed ({exc}), falling back to two-call mode")
         # Graceful fallback: two separate calls
         language = detect_language(safe_topic)
-        tags = generate_hashtags(safe_topic, language)
+        tags = generate_hashtags(safe_topic, language, platform=effective_platform)
         return language, tags
 
 
@@ -226,27 +250,44 @@ def _build_excluded_string() -> str:
     return ", ".join(excluded_set)
 
 
-def _process_raw_tags(raw: str) -> list[str]:
+def _process_raw_tags(raw: str, platform: str | None = None) -> list[str]:
     """Parse raw LLM output and apply all post-processing filters."""
     tags = _parse_tags(raw)
-    return _finalize_tags(tags)
+    return _finalize_tags(tags, platform=platform)
 
 
-def _finalize_tags(tags: list[str]) -> list[str]:
+def _finalize_tags(tags: list[str], platform: str | None = None) -> list[str]:
     """
     Apply post-processing filters and merge always_include tags.
 
     Steps:
-    1. validate_and_filter — length, banned, dedup, hard_limit
+    1. validate_and_filter — length, banned, dedup, hard_limit (with room
+       reserved for always_include, see content_tag_limit below)
     2. Strip any always_include tags the LLM added anyway
     3. Prepend always_include in order
+
+    Args:
+        tags:      Raw parsed tag list from the LLM response.
+        platform:  Overrides settings.platform for the hard_limit used here
+                    (e.g. when called from a --platform-overridden run).
+                    Defaults to settings.platform when omitted.
     """
+    effective_platform = platform or settings.platform
+    effective_hard_limit = platform_hard_limit(effective_platform)
+
+    # Reserve room for always_include, which is merged in on top of the LLM's
+    # content tags below (step 3) — otherwise an LLM that ignores max_tags and
+    # returns more content tags than instructed could push the merged total
+    # past the platform limit, even though config.py's validate_tag_budget()
+    # already guarantees max_tags + always_include fits it on the happy path.
+    content_tag_limit = max(effective_hard_limit - len(settings.always_include), 0)
+
     # 1. Validate and filter
     filtered = validate_and_filter(
         tags,
         max_tag_length=settings.max_tag_length,
         banned_tags=settings.banned_tags,
-        hard_limit=settings.hard_limit,
+        hard_limit=content_tag_limit,
     )
 
     # 2. Strip always_include duplicates (LLM may have added them despite instructions)
@@ -257,7 +298,7 @@ def _finalize_tags(tags: list[str]) -> list[str]:
     merged = _merge_always_include(filtered, settings.always_include)
 
     # 4. Final platform limit check (warn but don't crash)
-    is_safe, warning = check_platform_limit(len(merged), settings.platform)
+    is_safe, warning = check_platform_limit(len(merged), effective_platform)
     if not is_safe:
         _get_log().warn(warning)
 

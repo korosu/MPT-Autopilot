@@ -122,7 +122,15 @@ Each platform has its own tag count limit:
 | `instagram` | 5 |
 
 Select the platform either in `config.yaml` (`platform: tiktok`) or per-run with
-`--platform tiktok`, which overrides the config file for that invocation only.
+`--platform tiktok`, which overrides the config file for that invocation only —
+this changes both the prompt sent to the LLM and the hard limit tags are
+truncated to, not just the `platform` field recorded in the output JSON.
+
+Before processing any files, the tool checks that `max_tags + always_include`
+(from `config.yaml`) actually fits the effective platform's limit, and exits
+with an error if it doesn't — e.g. the default `max_tags: 5` plus the default
+`always_include: ["#shorts"]` is 6 tags, which doesn't fit tiktok/instagram's
+limit of 5. Lower `max_tags` or trim `always_include` to fix it.
 
 ---
 
@@ -247,8 +255,10 @@ always_include:
 - **`platform`** — which platform's limits to enforce (`youtube`, `tiktok`, or
   `instagram`). Can be overridden per-run with `--platform`. See [Platforms](#platforms).
 - **`min_tags` / `max_tags`** — how many hashtags the LLM should generate, not
-  counting `always_include`. Must stay within the chosen platform's hard limit, or
-  the tool will refuse to start.
+  counting `always_include`. `max_tags` plus the number of `always_include` tags
+  must together stay within the chosen platform's hard limit, or the tool will
+  refuse to start (checked for both `config.yaml`'s `platform` and any
+  `--platform` override).
 - **`max_tag_length`** — hashtags longer than this (counting only the part after
   `#`) are filtered out after generation.
 - **`banned_tags`** — hashtags that are always excluded from the output, no matter
@@ -256,7 +266,9 @@ always_include:
   fill in with whatever you personally don't want; the tool doesn't impose an
   opinion here.
 - **`always_include`** — tags always prepended to every result, regardless of
-  language, in the order listed.
+  language, in the order listed. These count toward the platform's hard limit
+  alongside `max_tags` (see above), even though they don't count toward
+  `min_tags`/`max_tags` themselves.
 
 You can also edit the `prompt_detect_language`, `prompt_detect_and_generate`, and
 `prompt_generate` templates in `config.yaml` directly if you want to change the

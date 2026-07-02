@@ -19,7 +19,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from hashtag_enricher.enricher.config import settings
+from hashtag_enricher.enricher.config import settings, validate_tag_budget
 from hashtag_enricher.enricher.llm import detect_and_generate, generate_hashtags
 from hashtag_enricher.enricher.logger import Logger
 from hashtag_enricher.enricher.reader import resolve_meta
@@ -40,10 +40,10 @@ def _get_log() -> Logger:
 
 
 def process_file(
-    mp4_path: Path,
-    lang_override: str | None,
-    force: bool,
-    platform_override: str | None = None,
+        mp4_path: Path,
+        lang_override: str | None,
+        force: bool,
+        platform_override: str | None = None,
 ) -> str:
     """
     Process a single mp4 file.
@@ -74,11 +74,15 @@ def process_file(
         # is a SINGLE API call and never triggers language detection.
         # Only when no language is known does detect_and_generate() run, which
         # detects the language AND generates tags in one combined API call.
+        # `platform` is passed explicitly to both so the {platform} prompt
+        # placeholder and the tag hard-limit follow --platform, not just
+        # config.yaml's platform setting (main() has already validated that
+        # max_tags + always_include fits this platform before we get here).
         if meta.language_hint:
             language = meta.language_hint
-            tags = generate_hashtags(meta.topic, language)
+            tags = generate_hashtags(meta.topic, language, platform=platform)
         else:
-            language, tags = detect_and_generate(meta.topic)
+            language, tags = detect_and_generate(meta.topic, platform=platform)
 
         if not tags:
             log.warn(f"LLM returned empty tags for {mp4_path.name}, using fallback")
@@ -175,8 +179,8 @@ Examples:
         default=None,
         help=(
             "Target platform: youtube (default), tiktok, instagram. "
-            "Overrides the 'platform' setting in config.yaml. "
-            "Affects tag count limits (all platforms: 3–5 optimal)."
+            "Overrides the 'platform' setting in config.yaml for this run — "
+            "affects both the prompt and the tag count hard limit."
         ),
     )
     parser.add_argument(
@@ -220,6 +224,19 @@ def main() -> None:
         sys.exit(0)
 
     effective_platform = platform_override or settings.platform
+
+    # config.py already validated this for settings.platform at startup, but
+    # --platform can point at a *different*, possibly stricter, platform
+    # (e.g. config.yaml says youtube, --platform tiktok caps at 5). Re-check
+    # here so a bad combination fails fast for the whole run instead of
+    # silently over-generating and getting truncated per-file later.
+    if platform_override:
+        try:
+            validate_tag_budget(platform_override, settings.max_tags, len(settings.always_include))
+        except ValueError as exc:
+            log.error(f"--platform {platform_override}: {exc}")
+            sys.exit(1)
+
     log.info(
         f"=== hashtag-enricher: {len(mp4_files)} file(s) | "
         f"platform={effective_platform} | "
