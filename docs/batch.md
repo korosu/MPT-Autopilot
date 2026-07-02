@@ -87,6 +87,9 @@ uv run batch --dry-run
 
 # Show seen registry stats
 uv run batch --status
+
+# Browse/search available voice aliases (see Voices below)
+uv run batch --list-voices es_
 ```
 
 ### Alternative: virtual environment
@@ -159,16 +162,47 @@ jobs:
 
 ## Voices
 
-Your MoneyPrinterTurbo setup selects the TTS engine via a `tts_server` field, and `voice_name` itself encodes the provider as a `"provider:voice"` prefix. Each provider names its voices completely differently:
+MoneyPrinterTurbo selects the voice purely from the shape of `voice_name` — a `"provider:voice"` prefix for paid providers, or a plain Edge TTS voice ID (e.g. `es-ES-ElviraNeural`) for the free default:
 
-| Provider | `tts_server` | Example `voice_name` | Cost |
-|---|---|---|---|
-| gTTS (Google Translate TTS) | `gtts` | `gtts:en` | Free, no key |
-| Gemini TTS | `gemini` | `gemini:puck` | Paid, needs Gemini API key on the server |
+| Provider | Example `voice_name` | Cost |
+|---|---|---|
+| Edge TTS ("Azure TTS V1" in the WebUI) | `es-ES-ElviraNeural-Female` | Free, no key |
+| Gemini TTS | `gemini:puck` | Paid, needs Gemini API key on the server |
+| SiliconFlow / MiMo / ElevenLabs / Azure TTS V2 | see MoneyPrinterTurbo's `voice.py` | Paid, needs their own key on the server |
 
-(Other providers your MoneyPrinterTurbo fork supports follow the same `tts_server` + `"provider:voice"` shape — check its `voice.py` for the exact values it expects.)
+mpt-batch bundles **all 314 Edge TTS voices** (every language MoneyPrinterTurbo's Edge TTS list covers) as ready-to-use aliases — nothing to configure. Browse or search them:
 
-Remembering both fields by hand for every job gets old fast, so `config.yaml` has a `voices:` section where each named alias resolves to **both** fields together, so they can never drift out of sync. It ships pre-filled with a working set for gTTS and Gemini — nothing extra to set up, just start using aliases in `jobs.yaml`:
+```bash
+uv run batch --list-voices          # all 314+ voices
+uv run batch --list-voices es_      # just the es_* locales (Spain, Mexico, Argentina, ...)
+uv run batch --list-voices gemini   # your config.yaml presets
+```
+
+```
+$ uv run batch --list-voices es_es
+3 voice(s) matching 'es_es':
+
+  es_es_alvaro                             voice_name=es-ES-AlvaroNeural-Male
+  es_es_elvira                             voice_name=es-ES-ElviraNeural-Female
+  es_es_ximena                             voice_name=es-ES-XimenaNeural-Female
+
+Use in jobs.yaml as:  voice: "<alias>"
+```
+
+Use any alias directly in `jobs.yaml` — no `config.yaml` editing required:
+
+```yaml
+defaults:
+  voice: "es_es_elvira"   # es-ES-ElviraNeural (Female)
+
+jobs:
+  - name: "Consejos de productividad"
+    output_file: "consejos_productividad.mp4"
+    video_language: "es"
+    voice: "es_mx_dalia"   # overrides just for this job
+```
+
+`config.yaml`'s `voices:` section is for **extra** presets on top of the bundled ones: paid providers (ships with a working Gemini set), or a bundled Edge voice with a custom rate/volume:
 
 ```yaml
 # config.yaml
@@ -177,26 +211,16 @@ voices:
     gemini_puck:
       tts_server: "gemini"
       voice_name: "gemini:puck"
-    gemini_aoede:
-      tts_server: "gemini"
-      voice_name: "gemini:aoede"
+
+  # Override a bundled voice's pace — same alias name wins over the built-in one
+  slower_spanish:
+    es_es_elvira:
+      tts_server: "edge"
+      voice_name: "es-ES-ElviraNeural-Female"
+      voice_rate: 0.9
 ```
 
-Then in `jobs.yaml`, reference the alias instead of setting both fields by hand:
-
-```yaml
-defaults:
-  voice: "gemini_puck"
-
-jobs:
-  - name: "Focus Hacks"
-    output_file: "focus_hacks.mp4"
-    voice: "gemini_aoede"   # overrides tts_server + voice_name together, just for this job
-```
-
-`tts_server` / `voice_name` still work directly in a job if you'd rather skip presets entirely — `voice` is purely a convenience that resolves to both fields before the job is submitted. `--dry-run` validates every alias up front, so a typo shows up immediately instead of failing mid-batch.
-
-Add, rename, or remove presets by editing the `voices:` section in your own `config.yaml` — since it's gitignored, your changes are never overwritten by `git pull`.
+`tts_server` / `voice_name` still work directly in a job if you'd rather skip aliases entirely — `voice` is purely a convenience that resolves to both fields before the job is submitted. `--dry-run` validates every alias up front, so a typo shows up immediately instead of failing mid-batch.
 
 **Paid providers need their own setup on the MoneyPrinterTurbo server itself** — a Gemini API key, for example, goes in *MoneyPrinterTurbo's* own config, not in mpt-batch. This tool only resolves the alias to `tts_server` / `voice_name`; it has no way to configure or verify the MoneyPrinterTurbo server's TTS backend.
 

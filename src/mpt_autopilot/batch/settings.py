@@ -29,8 +29,9 @@ class Settings:
     output_dir: Path
     seen_file: Path
 
-    # Voice presets — from config.yaml's `voices:` section, already flattened
-    # into {alias: {tts_server, voice_name, ...}}. Empty dict if undefined.
+    # Voice presets — every bundled Edge TTS voice plus config.yaml's `voices:`
+    # section on top (config.yaml wins on name collisions), already flattened
+    # into {alias: {tts_server, voice_name, ...}}. See engine/voices.py.
     voice_pool: dict[str, dict]
 
     # Logging — from config.yaml
@@ -94,7 +95,7 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
         mpt_storage=_resolve(str(_require_cfg(cfg, "mpt_storage"))),
         output_dir=_resolve(cfg.get("output_dir", "./exports")),
         seen_file=_resolve(cfg.get("seen_file", "./seen.txt")),
-        voice_pool=voices.build_pool(cfg.get("voices", {})),
+        voice_pool=voices.build_full_pool(cfg.get("voices", {})),
         log_file=_resolve(cfg.get("log_file", "./logs/batch.log")),
         log_max_bytes=int(cfg.get("log_max_mb", 10)) * 1024 * 1024,
         max_wait_seconds=int(cfg.get("max_wait_seconds", 2400)),

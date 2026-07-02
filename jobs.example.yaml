@@ -86,14 +86,15 @@ jobs:
     enabled: false
     video_subject: "How to fall asleep faster and wake up energized"
 
-  # Per-job override example — Spanish via gTTS (language-code voices, no
-  # named personas) instead of the Gemini default
+  # Per-job override example — Spanish via a bundled Edge TTS voice instead
+  # of the Gemini default. Run `uv run batch --list-voices es` to see all
+  # 45 Spanish variants (Spain, Mexico, Argentina, ...) and pick another.
   - name: "consejos_productividad_es"
     output_file: "consejos_productividad_es.mp4"
     enabled: false
     video_subject: "5 consejos para mejorar tu productividad al instante"
     video_language: "es"
-    voice: "gtts_es"
+    voice: "es_es_elvira"
 
   # Skipping presets entirely and setting tts_server / voice_name directly
   # also works — `voice` is purely a convenience layer
@@ -102,5 +103,5 @@ jobs:
     enabled: false
     video_subject: "5 consejos de productividad"
     video_language: "es"
-    tts_server: "gtts"
-    voice_name: "gtts:es"
+    tts_server: "edge"
+    voice_name: "es-MX-DaliaNeural-Female"

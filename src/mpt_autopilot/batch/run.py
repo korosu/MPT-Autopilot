@@ -289,6 +289,7 @@ Examples:
     batch --config /path/to/config.yaml --jobs jobs_en.yaml
     batch --dry-run
     batch --status
+    batch --list-voices es
 """,
     )
     parser.add_argument(
@@ -311,7 +312,36 @@ Examples:
         help="Preview which jobs would run without generating anything",
     )
     parser.add_argument("--status", action="store_true", help="Show seen registry stats and exit")
+    parser.add_argument(
+        "--list-voices",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="FILTER",
+        help=(
+            "List available voice aliases (bundled Edge TTS voices + your "
+            "config.yaml presets) and exit. Optionally filter by a substring, "
+            "e.g. `--list-voices es` or `--list-voices gemini`."
+        ),
+    )
     return parser
+
+
+def list_voices(settings: Settings, filter_str: str) -> None:
+    filter_str = filter_str.lower().strip()
+    matches = {
+        alias: fields
+        for alias, fields in sorted(settings.voice_pool.items())
+        if filter_str in alias.lower() or filter_str in fields.get("voice_name", "").lower()
+    }
+    if not matches:
+        print(f"No voices matched '{filter_str}'.")
+        return
+    suffix = f" matching '{filter_str}'" if filter_str else ""
+    print(f"{len(matches)} voice(s){suffix}:\n")
+    for alias, fields in matches.items():
+        print(f"  {alias:<40} voice_name={fields.get('voice_name', '?')}")
+    print('\nUse in jobs.yaml as:  voice: "<alias>"')
 
 
 def main() -> None:
@@ -329,6 +359,10 @@ def main() -> None:
         print(f"Total entries: {len(entries)}\n")
         for name in entries:
             print(f"  {name}")
+        return
+
+    if args.list_voices is not None:
+        list_voices(settings, args.list_voices)
         return
 
     if not args.jobs.exists():
