@@ -1,0 +1,98 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from yt_uploader.engine.settings import (
+    Account,
+    Defaults,
+    Settings,
+    find_uploader_binary,
+    validate_account_ready,
+)
+
+
+def _settings(uploader_binary: Path) -> Settings:
+    return Settings(
+        uploader_binary=uploader_binary,
+        meta_dir=Path("./meta"),
+        sleep_between_uploads=0,
+        uploaded_dir_name="old_videos",
+        defaults=Defaults(),
+        notify_enabled=False,
+        telegram_token="",
+        telegram_chat_id="",
+        accounts={},
+    )
+
+
+def test_find_uploader_binary_absolute_path_exists(tmp_path):
+    binary = tmp_path / "youtubeuploader"
+    binary.write_text("#!/bin/bash\n")
+    binary.chmod(0o755)
+    assert find_uploader_binary(binary) == binary
+
+
+def test_find_uploader_binary_absolute_path_missing(tmp_path):
+    assert find_uploader_binary(tmp_path / "nope") is None
+
+
+def test_find_uploader_binary_resolves_via_path(monkeypatch, tmp_path):
+    fake = tmp_path / "toolname"
+    fake.write_text("#!/bin/bash\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    resolved = find_uploader_binary(Path("toolname"))
+    assert resolved is not None
+    assert resolved.name == "toolname"
+
+
+def test_find_uploader_binary_not_on_path(monkeypatch, tmp_path):
+    monkeypatch.setenv("PATH", str(tmp_path))  # empty dir, nothing to find
+    assert find_uploader_binary(Path("definitely-not-a-real-tool")) is None
+
+
+def test_validate_account_ready_ok(tmp_path):
+    binary = tmp_path / "youtubeuploader"
+    binary.write_text("#!/bin/bash\n")
+    binary.chmod(0o755)
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text("{}")
+
+    settings = _settings(binary)
+    account = Account(
+        name="en",
+        videos_dir=tmp_path,
+        client_secrets=secrets,
+        token_file=tmp_path / "token",  # deliberately absent - must not matter
+    )
+    assert validate_account_ready(settings, account) is None
+
+
+def test_validate_account_ready_missing_binary(tmp_path):
+    settings = _settings(tmp_path / "does-not-exist")
+    account = Account(
+        name="en",
+        videos_dir=tmp_path,
+        client_secrets=tmp_path / "secrets.json",
+        token_file=tmp_path / "token",
+    )
+    problem = validate_account_ready(settings, account)
+    assert problem is not None
+    assert "uploader_binary" in problem
+
+
+def test_validate_account_ready_missing_client_secrets(tmp_path):
+    binary = tmp_path / "youtubeuploader"
+    binary.write_text("#!/bin/bash\n")
+    binary.chmod(0o755)
+
+    settings = _settings(binary)
+    account = Account(
+        name="en",
+        videos_dir=tmp_path,
+        client_secrets=tmp_path / "missing_secrets.json",
+        token_file=tmp_path / "token",
+    )
+    problem = validate_account_ready(settings, account)
+    assert problem is not None
+    assert "client_secrets" in problem

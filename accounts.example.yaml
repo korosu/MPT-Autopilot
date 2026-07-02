@@ -1,0 +1,17 @@
+# yt-shorts-uploader accounts
+# Copy to accounts.yaml and edit. Real accounts.yaml is gitignored - it points
+# at OAuth credentials, which are secrets.
+#
+# Each key is an account name, used with: upload --account <name>
+# There's no limit on how many you define - one per YouTube channel.
+
+accounts:
+  en:
+    videos_dir: "/your/path/to/videos/en"
+    client_secrets: "/root/youtubeuploader/client_secrets_en.json"
+    token_file: "/root/youtubeuploader/request.token.en"
+
+  es:
+    videos_dir: "/your/path/to/videos/es"
+    client_secrets: "/root/youtubeuploader/client_secrets_es.json"
+    token_file: "/root/youtubeuploader/request.token.es"
