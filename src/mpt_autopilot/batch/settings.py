@@ -1,8 +1,8 @@
 """
 engine/settings.py
 
-Loads .env (Telegram credentials, optional) and config.yaml (everything else)
-into a single Settings object used across the package.
+Loads .env (Telegram credentials, optional) and config.yaml (everything else,
+including voice presets) into a single Settings object used across the package.
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ from pathlib import Path
 
 import yaml
 from dotenv import load_dotenv
+
+from mpt_batch.engine import voices
 
 _ROOT = Path.cwd()
 
@@ -27,8 +29,9 @@ class Settings:
     output_dir: Path
     seen_file: Path
 
-    # Voice presets — from config.yaml (optional, voices.yaml may not exist)
-    voices_file: Path
+    # Voice presets — from config.yaml's `voices:` section, already flattened
+    # into {alias: {tts_server, voice_name, ...}}. Empty dict if undefined.
+    voice_pool: dict[str, dict]
 
     # Logging — from config.yaml
     log_file: Path
@@ -91,7 +94,7 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
         mpt_storage=_resolve(str(_require_cfg(cfg, "mpt_storage"))),
         output_dir=_resolve(cfg.get("output_dir", "./exports")),
         seen_file=_resolve(cfg.get("seen_file", "./seen.txt")),
-        voices_file=_resolve(cfg.get("voices_file", "./voices.yaml")),
+        voice_pool=voices.build_pool(cfg.get("voices", {})),
         log_file=_resolve(cfg.get("log_file", "./logs/batch.log")),
         log_max_bytes=int(cfg.get("log_max_mb", 10)) * 1024 * 1024,
         max_wait_seconds=int(cfg.get("max_wait_seconds", 2400)),

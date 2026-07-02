@@ -34,6 +34,12 @@ from mpt_batch.engine.settings import load as load_settings
 
 
 def log(msg: str, settings: Settings, *, to_file: bool = True) -> None:
+    """
+    Print + append to log_file. Rotation is simple deletion, not archiving:
+    once the file exceeds log_max_bytes, it's discarded entirely and a fresh
+    one starts — there's no log.1/.log.2 history kept. Fine for a batch
+    runner where the point is "don't fill the disk", not long-term audit.
+    """
     line = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
     print(line)
     if not to_file:
@@ -41,7 +47,7 @@ def log(msg: str, settings: Settings, *, to_file: bool = True) -> None:
     log_file = settings.log_file
     log_file.parent.mkdir(parents=True, exist_ok=True)
     if log_file.exists() and log_file.stat().st_size > settings.log_max_bytes:
-        log_file.unlink()
+        log_file.unlink()  # delete-and-restart, not archive — see docstring
     with open(log_file, "a", encoding="utf-8") as f:
         f.write(f"{line}\n")
 
@@ -117,7 +123,17 @@ def cleanup_cache(settings: Settings) -> None:
 
 
 def run_job(job: dict, defaults: dict, voice_pool: dict, settings: Settings) -> bool:
-    """Run one job with retry logic. Returns True on success."""
+    """
+    Run one job with retry logic. Returns True on success, False if all
+    retries are exhausted — never raises, so one bad job can't crash the batch.
+
+    Retries exist for transient failures (a dropped connection, MPT briefly
+    unavailable, a one-off broken/stuck task from api.wait_for_task) — the
+    kind of thing that's likely to succeed on a second or third try. They do
+    nothing for a persistent problem (bad credentials, MPT genuinely down);
+    that's what max_consecutive_failures in run() is for — it aborts the
+    whole batch instead of retrying every single job into the same wall.
+    """
     payload = {
         **defaults,
         **{k: v for k, v in job.items() if k not in ("name", "enabled", "output_file")},
@@ -158,7 +174,7 @@ def run(jobs_path: Path, settings: Settings, *, dry_run: bool) -> None:
     defaults: dict = jobs_cfg.get("defaults", {})
     jobs: list[dict] = jobs_cfg.get("jobs", [])
     already_seen = seen.load(settings.seen_file)
-    voice_pool = voices.load_pool(settings.voices_file)
+    voice_pool = settings.voice_pool
 
     log(
         f"=== mpt-batch: {len(jobs)} jobs | {len(already_seen)} already seen ===",

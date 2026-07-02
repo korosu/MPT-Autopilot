@@ -8,18 +8,23 @@ and `voice_name`, which itself encodes the provider as a "provider:voice"
 prefix (e.g. "gemini:puck"). Each provider names its voices differently, so
 remembering both fields by hand for every job gets old fast.
 
-voices.yaml lets you define short aliases instead, each resolving to BOTH
-fields together so they can never drift out of sync:
+The `voices:` section of config.yaml lets you define short aliases instead,
+each resolving to BOTH fields together so they can never drift out of sync:
 
-    gemini:
-      gemini_puck:
-        tts_server: "gemini"
-        voice_name: "gemini:puck"
+    voices:
+      gemini:
+        gemini_puck:
+          tts_server: "gemini"
+          voice_name: "gemini:puck"
 
 Then in jobs.yaml:
 
     defaults:
       voice: "gemini_puck"
+
+config.yaml.example ships with a working set of presets already filled in,
+so this works out of the box — you only need to touch the `voices:` section
+if you want to add, rename, or change one.
 
 This module only resolves the alias to the underlying field(s) — it has no
 opinion about which provider is "best" and does not validate that the
@@ -29,42 +34,32 @@ providers need their own credentials there, see README).
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import yaml
-
 # Fields a voice preset is allowed to set on the API payload.
 _ALLOWED_FIELDS = {"tts_server", "voice_name", "voice_rate", "voice_volume"}
 
 
-def load_pool(path: Path) -> dict[str, dict]:
+def build_pool(voices_cfg: dict) -> dict[str, dict]:
     """
-    Flatten voices.yaml into a single {alias: {voice_name, ...}} pool.
-    The top-level provider keys (edge, azure_v2, siliconflow, gemini, ...)
+    Flatten config.yaml's `voices:` section into a single {alias: {tts_server,
+    voice_name, ...}} pool. The top-level provider keys (gtts, gemini, ...)
     exist only for readability — aliases must be unique across all of them.
-    Returns an empty pool if the file doesn't exist (voices.yaml is optional).
+    Returns an empty pool if the section is missing or empty (voices are optional).
     """
-    if not path.exists():
-        return {}
-
-    with open(path, "r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f) or {}
-
     pool: dict[str, dict] = {}
-    for provider, aliases in raw.items():
+    for provider, aliases in (voices_cfg or {}).items():
         if not isinstance(aliases, dict):
             continue
         for alias, fields in aliases.items():
             if alias in pool:
                 raise ValueError(
-                    f"voices.yaml: alias '{alias}' is defined more than once "
-                    f"(last seen under '{provider}') — alias names must be unique."
+                    f"config.yaml: voice alias '{alias}' is defined more than once "
+                    f"(last seen under voices.{provider}) — alias names must be unique."
                 )
             unknown = set(fields) - _ALLOWED_FIELDS
             if unknown:
                 raise ValueError(
-                    f"voices.yaml: alias '{alias}' under '{provider}' has unsupported "
-                    f"field(s) {sorted(unknown)} — allowed: {sorted(_ALLOWED_FIELDS)}"
+                    f"config.yaml: voice alias '{alias}' under voices.{provider} has "
+                    f"unsupported field(s) {sorted(unknown)} — allowed: {sorted(_ALLOWED_FIELDS)}"
                 )
             pool[alias] = dict(fields)
 
@@ -85,8 +80,8 @@ def resolve(payload: dict, pool: dict[str, dict]) -> dict:
 
     if alias not in pool:
         raise KeyError(
-            f"voice alias '{alias}' not found in voices.yaml. "
-            f"Known aliases: {sorted(pool) or '(none — copy voices.example.yaml)'}"
+            f"voice alias '{alias}' not found in config.yaml's voices: section. "
+            f"Known aliases: {sorted(pool) or '(none defined)'}"
         )
 
     for field, value in pool[alias].items():

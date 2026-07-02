@@ -8,10 +8,11 @@
 
 defaults:
   # ── Voice ────────────────────────────────────────────────────────────────
-  # `voice` resolves a friendly alias from voices.yaml (copy
-  # voices.example.yaml first) into both tts_server and voice_name together,
-  # so the two can never drift out of sync. You can set tts_server /
-  # voice_name directly instead if you'd rather skip presets entirely.
+  # `voice` resolves a friendly alias from config.yaml's `voices:` section
+  # into both tts_server and voice_name together, so the two can never drift
+  # out of sync. Ships with working presets already — see config.yaml.example.
+  # You can set tts_server / voice_name directly instead if you'd rather
+  # skip presets entirely.
   voice: "gemini_puck"
   voice_volume: 1
   voice_rate: 1.1

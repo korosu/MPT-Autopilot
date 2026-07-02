@@ -15,7 +15,7 @@ interrupted session is always safe.
 ## Features
 
 - **YAML job list** — define as many videos as you want, with per-job parameter overrides
-- **Voice presets** — name your favorite voices once in `voices.yaml`, reference them by alias
+- **Voice presets** — friendly aliases for `tts_server` + `voice_name`, pre-filled in `config.yaml` and ready to use
 - **Resumable** — tracks finished videos in `seen.txt`; safe to re-run after interruption
 - **Retry logic** — configurable retries per job with a delay between attempts
 - **Abort on API failure** — stops after N consecutive failures so you don't waste hours
@@ -41,7 +41,6 @@ cd mpt-batch
 cp .env.example .env
 cp config.yaml.example config.yaml
 cp jobs.example.yaml jobs.yaml
-cp voices.example.yaml voices.yaml   # optional — see "Voices" below
 ```
 
 Telegram alerts are optional — open `.env` and leave it empty to disable them, or fill in:
@@ -51,7 +50,7 @@ TELEGRAM_TOKEN=123456:ABC...
 TELEGRAM_CHAT_ID=987654321
 ```
 
-Open `config.yaml` and set `mpt_storage` to your MoneyPrinterTurbo storage path. Open `jobs.yaml` and add your own video topics.
+Open `config.yaml` and set `mpt_storage` to your MoneyPrinterTurbo storage path — it also ships with a ready-to-use `voices:` section, no extra setup needed there. Open `jobs.yaml` and add your own video topics.
 
 ---
 
@@ -129,7 +128,7 @@ The seen file is a plain-text file — one filename per line — that tracks whi
 ```yaml
 defaults:
   video_language: "en"
-  voice: "gemini_puck"        # resolved via voices.yaml — see "Voices" below
+  voice: "gemini_puck"        # alias from config.yaml's voices: section — see "Voices" below
   voice_rate: 1.1
   video_clip_duration: 4
   paragraph_number: 3
@@ -169,17 +168,18 @@ Your MoneyPrinterTurbo setup selects the TTS engine via a `tts_server` field, an
 
 (Other providers your MoneyPrinterTurbo fork supports follow the same `tts_server` + `"provider:voice"` shape — check its `voice.py` for the exact values it expects.)
 
-Remembering both fields by hand for every job gets old fast, so mpt-batch supports named aliases via `voices.yaml`, each resolving to **both** fields together so they can never drift out of sync:
+Remembering both fields by hand for every job gets old fast, so `config.yaml` has a `voices:` section where each named alias resolves to **both** fields together, so they can never drift out of sync. It ships pre-filled with a working set for gTTS and Gemini — nothing extra to set up, just start using aliases in `jobs.yaml`:
 
 ```yaml
-# voices.yaml
-gemini:
-  gemini_puck:
-    tts_server: "gemini"
-    voice_name: "gemini:puck"
-  gemini_aoede:
-    tts_server: "gemini"
-    voice_name: "gemini:aoede"
+# config.yaml
+voices:
+  gemini:
+    gemini_puck:
+      tts_server: "gemini"
+      voice_name: "gemini:puck"
+    gemini_aoede:
+      tts_server: "gemini"
+      voice_name: "gemini:aoede"
 ```
 
 Then in `jobs.yaml`, reference the alias instead of setting both fields by hand:
@@ -194,9 +194,9 @@ jobs:
     voice: "gemini_aoede"   # overrides tts_server + voice_name together, just for this job
 ```
 
-`tts_server` / `voice_name` still work directly if you'd rather skip presets entirely — `voice` is purely a convenience that resolves to both fields before the job is submitted. `--dry-run` validates every alias up front, so a typo shows up immediately instead of failing mid-batch.
+`tts_server` / `voice_name` still work directly in a job if you'd rather skip presets entirely — `voice` is purely a convenience that resolves to both fields before the job is submitted. `--dry-run` validates every alias up front, so a typo shows up immediately instead of failing mid-batch.
 
-A starter pool with confirmed voices for gTTS and Gemini is in [`voices.example.yaml`](voices.example.yaml).
+Add, rename, or remove presets by editing the `voices:` section in your own `config.yaml` — since it's gitignored, your changes are never overwritten by `git pull`.
 
 **Paid providers need their own setup on the MoneyPrinterTurbo server itself** — a Gemini API key, for example, goes in *MoneyPrinterTurbo's* own config, not in mpt-batch. This tool only resolves the alias to `tts_server` / `voice_name`; it has no way to configure or verify the MoneyPrinterTurbo server's TTS backend.
 
@@ -273,7 +273,7 @@ Cleanup always runs once at the end of a batch (when enabled). `cache_cleanup_in
 cd mpt-batch && git pull
 ```
 
-Your `config.yaml`, `jobs.yaml`, `voices.yaml`, and `seen.txt` are gitignored and will not be affected.
+Your `config.yaml`, `jobs.yaml`, and `seen.txt` are gitignored and will not be affected.
 
 ---
 
