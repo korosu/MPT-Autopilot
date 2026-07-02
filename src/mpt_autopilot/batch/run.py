@@ -77,7 +77,12 @@ def copy_result(task_data: dict, output_file: str, settings: Settings) -> str:
         if fallback.exists():
             source_video = fallback
             log(f"  using fallback path: {fallback}", settings)
-            notify.alert(f"⚠️ Fallback path used for {output_file}", settings)
+            notify.alert(
+                f"Fallback path used for '{output_file}' (task_id={task_id})\n"
+                f"API-reported video path was missing; used the default task "
+                f"directory instead: {fallback}",
+                settings,
+            )
         else:
             raise FileNotFoundError(
                 f"Video not found.\n  API path: {api_candidate}\n  Fallback: {fallback}"
@@ -176,6 +181,12 @@ def run(jobs_path: Path, settings: Settings, *, dry_run: bool) -> None:
     already_seen = seen.load(settings.seen_file)
     voice_pool = settings.voice_pool
 
+    disabled_count = sum(1 for j in jobs if not j.get("enabled", True))
+    already_done_count = sum(
+        1 for j in jobs if j.get("enabled", True) and j.get("output_file") in already_seen
+    )
+    to_run_count = len(jobs) - disabled_count - already_done_count
+
     log(
         f"=== mpt-batch: {len(jobs)} jobs | {len(already_seen)} already seen ===",
         settings,
@@ -187,28 +198,34 @@ def run(jobs_path: Path, settings: Settings, *, dry_run: bool) -> None:
         for job in jobs:
             name = job.get("name", job.get("output_file", "?"))
             if not job.get("enabled", True):
-                print(f"  ⏸  {name} (disabled)")
+                print(f"  disabled  {name}")
                 continue
             if job["output_file"] in already_seen:
-                print(f"  ✓  {name} (already done)")
+                print(f"  done      {name} (already done)")
                 continue
             merged = {**defaults, **{k: v for k, v in job.items() if k != "name"}}
             try:
                 voices.resolve(merged, voice_pool)
-                print(f"  →  {name}")
+                print(f"  run       {name}")
             except KeyError as exc:
-                print(f"  ✗  {name} — {exc}")
+                print(f"  error     {name} - {exc}")
         return
 
     settings.output_dir.mkdir(parents=True, exist_ok=True)
-    notify.alert(f"🚀 Batch started: {len(jobs)} jobs", settings)
+    start_time = time.time()
+    notify.alert(
+        f"Batch started: {jobs_path.name}\n"
+        f"Total jobs: {len(jobs)}  To run: {to_run_count}  "
+        f"Already done: {already_done_count}  Disabled: {disabled_count}",
+        settings,
+    )
 
     ok: list[str] = []
     failed: list[str] = []
     skipped: list[str] = []
     consecutive_failures = 0
 
-    for job in jobs:
+    for index, job in enumerate(jobs, start=1):
         name = job.get("name", job.get("output_file", "?"))
 
         if not job.get("enabled", True):
@@ -243,14 +260,29 @@ def run(jobs_path: Path, settings: Settings, *, dry_run: bool) -> None:
                     settings,
                 )
                 notify.alert(
-                    f"🔴 ABORT: {consecutive_failures} consecutive failures\n"
-                    f"API may be down or token expired.",
+                    f"Batch aborted: {consecutive_failures} consecutive failures "
+                    f"(last: {name})\n"
+                    f"Progress: {index}/{len(jobs)} jobs processed — "
+                    f"{len(ok)} succeeded, {len(failed)} failed so far.\n"
+                    f"Likely cause: API unreachable or an invalid/expired token. "
+                    f"Remaining jobs were not attempted.",
                     settings,
                 )
                 break
 
     cleanup_cache(settings)
-    _print_summary(ok, failed, skipped, settings)
+    _print_summary(ok, failed, skipped, settings, started_at=start_time)
+
+
+def _format_duration(seconds: float) -> str:
+    total = int(seconds)
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h {minutes}m {secs}s"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
 
 
 def _print_summary(
@@ -258,20 +290,32 @@ def _print_summary(
     failed: list[str],
     skipped: list[str],
     settings: Settings,
+    *,
+    started_at: float,
 ) -> None:
-    log("=" * 50, settings)
-    log(f"DONE  ✓ {len(ok)}  ✗ {len(failed)}  → {len(skipped)}", settings)
-    for name in ok:
-        log(f"  ✓ {name}", settings)
-    for name in failed:
-        log(f"  ✗ {name}", settings)
-    log("=" * 50, settings)
+    duration = _format_duration(time.time() - started_at)
 
-    icon = "✅" if not failed else "⚠️"
-    notify.alert(
-        f"{icon} Batch done\n✓ {len(ok)}  ✗ {len(failed)}  → {len(skipped)}",
+    log("=" * 50, settings)
+    log(
+        f"DONE  ok={len(ok)}  failed={len(failed)}  skipped={len(skipped)}  "
+        f"duration={duration}",
         settings,
     )
+    for name in ok:
+        log(f"  ok: {name}", settings)
+    for name in failed:
+        log(f"  failed: {name}", settings)
+    log("=" * 50, settings)
+
+    status = "all succeeded" if not failed else f"{len(failed)} failed"
+    lines = [
+        f"Batch finished ({status})",
+        f"Duration: {duration}",
+        f"Succeeded: {len(ok)}  Failed: {len(failed)}  Skipped: {len(skipped)}",
+    ]
+    if failed:
+        lines.append("Failed jobs: " + ", ".join(failed))
+    notify.alert("\n".join(lines), settings)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -367,7 +411,7 @@ def main() -> None:
 
     if not args.jobs.exists():
         print(f"[ERROR] Jobs file not found: {args.jobs}")
-        print(f"        Copy jobs.example.yaml → {args.jobs} and add your video topics.")
+        print(f"        Copy jobs.example.yaml to {args.jobs} and add your video topics.")
         sys.exit(1)
 
     run(args.jobs, settings, dry_run=args.dry_run)
