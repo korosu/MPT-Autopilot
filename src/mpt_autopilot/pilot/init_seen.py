@@ -196,19 +196,21 @@ Examples:
         print("  Pass --dir /path/to/videos or add paths to scan_dirs in config.yaml.")
         sys.exit(1)
 
-    if args.lang is None:
-        # Simple mode: no filtering, everything into seen.txt
-        added = init_all(all_dirs, seen_dir)
-    else:
-        # Lang mode: filter by suffix, write to the lang's seen file
-        try:
+    # Consistent with refill.py: any unexpected failure during the actual
+    # scan/write (e.g. a permissions error on one of the directories)
+    # should produce a clean [ERROR] message instead of a raw traceback.
+    try:
+        if args.lang is None:
+            # Simple mode: no filtering, everything into seen.txt
+            added = init_all(all_dirs, seen_dir)
+        else:
+            # Lang mode: filter by suffix, write to the lang's seen file
             lang_cfg = settings.lang(args.lang)
-        except ValueError as e:
-            print(f"[ERROR] {e}")
-            sys.exit(1)
-
-        all_suffixes = {cfg.file_suffix for cfg in settings.langs.values() if cfg.file_suffix}
-        added = init_lang(args.lang, lang_cfg.file_suffix, all_suffixes, all_dirs, seen_dir)
+            all_suffixes = {cfg.file_suffix for cfg in settings.langs.values() if cfg.file_suffix}
+            added = init_lang(args.lang, lang_cfg.file_suffix, all_suffixes, all_dirs, seen_dir)
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        sys.exit(1)
 
     print(f"\n[done] added {added} new entries.")
 

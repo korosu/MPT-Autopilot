@@ -110,17 +110,12 @@ The seen file is a plain-text file (one filename per line) that tracks which vid
 | `"_es"`               | `seen_es.txt` |
 | `"_en"`               | `seen_en.txt` |
 
-
-Most users keep everything in one `seen.txt`. Multi-language setups with different `file_suffix` values get separate files automatically.
-
 ---
 
 ## Registering existing videos
 
 If you already have generated videos, run `init-seen` to scan your folders
 and register them so they won't be generated again. Safe to run multiple times.
-
-**Most users** — just point it at your videos folder, everything goes into `seen.txt`:
 
 ```
 uv run init-seen --dir /your/path/to/videos
@@ -142,9 +137,10 @@ uv run init-seen --lang es --dir /your/path/to/videos
 You can also define permanent scan paths in `config.yaml` under `scan_dirs` so you don't need to pass `--dir` every time:
 
 ```
-scan_dirs:
-  - /your/path/to/videos
-  - /your/path/to/videos/old_videos
+scan_dirs: [/your/path/to/videos,
+            /your/path/to/videos/en,
+            /your/path/to/videos/old_videos,
+            /your/path/to/videos/en/old_videos]
 ```
 
 Then just run:

@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from shorts_pilot.generator.lock import file_lock
+
 # In-memory cache keyed by resolved file path string.
 # Stores entries in insertion order (list) for recency-aware slicing.
 _cache: dict[str, list[str]] = {}
@@ -82,9 +84,14 @@ def add(base_dir: Path, file_suffix: str, output_file: str) -> None:
     if output_file in existing:
         return
     k = _key(base_dir, file_suffix)
-    _cache[k].append(output_file)
-    with open(_file(base_dir, file_suffix), "a", encoding="utf-8") as f:
-        f.write(f"{output_file}\n")
+    f = _file(base_dir, file_suffix)
+    # Lock around the write so two concurrent processes can't interleave
+    # bytes mid-write. A duplicate line from a rare race is harmless —
+    # _load_list() already de-duplicates on read.
+    with file_lock(f):
+        _cache[k].append(output_file)
+        with open(f, "a", encoding="utf-8") as fh:
+            fh.write(f"{output_file}\n")
 
 
 def add_many(base_dir: Path, file_suffix: str, output_files: list[str]) -> None:
@@ -96,6 +103,8 @@ def add_many(base_dir: Path, file_suffix: str, output_files: list[str]) -> None:
     if not new:
         return
     k = _key(base_dir, file_suffix)
-    _cache[k].extend(new)
-    with open(_file(base_dir, file_suffix), "a", encoding="utf-8") as f:
-        f.write("\n".join(new) + "\n")
+    f = _file(base_dir, file_suffix)
+    with file_lock(f):
+        _cache[k].extend(new)
+        with open(f, "a", encoding="utf-8") as fh:
+            fh.write("\n".join(new) + "\n")

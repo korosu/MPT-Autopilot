@@ -18,6 +18,8 @@ from typing import Any
 
 import yaml
 
+from shorts_pilot.generator.lock import file_lock
+
 # Canonical key order for serialised job entries — matches hand-written style.
 _KEY_ORDER = [
     "name", "enabled", "output_file", "video_subject",
@@ -39,7 +41,12 @@ def load(jobs_dir: Path, lang: str) -> dict[str, Any]:
             f"Create jobs_{lang}.yaml in your jobs directory first."
         )
     with open(p, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        data = yaml.safe_load(f)
+    # An empty or comment-only file parses to None; a malformed one could
+    # parse to a non-dict. Normalise to the expected shape so downstream
+    # callers (existing_names_from, count_pending_from) don't crash on
+    # cfg.get(...).
+    return data if isinstance(data, dict) else {"jobs": []}
 
 
 def existing_names_from(cfg: dict[str, Any]) -> set[str]:
@@ -87,8 +94,18 @@ def _scalar(value: Any) -> str:
         return '""'
     if isinstance(value, (int, float)):
         return str(value)
-    # String — double-quote and escape backslashes and double-quotes
-    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    # String — double-quote and escape backslashes, double-quotes, and
+    # control characters (a stray literal newline from the LLM's JSON
+    # response must not become a raw newline in the appended block).
+    escaped = (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\r\n", "\\n")
+        .replace("\n", "\\n")
+        .replace("\r", "\\n")
+        .replace("\t", "\\t")
+    )
     return f'"{escaped}"'
 
 
@@ -116,15 +133,19 @@ def append(jobs_dir: Path, lang: str, new_jobs: list[dict[str, Any]]) -> None:
     """
     p = _path(jobs_dir, lang)
 
-    # Read once: check trailing newline, then keep handle open for appending.
-    content = p.read_text(encoding="utf-8")
-    with open(p, "a", encoding="utf-8") as f:
-        if content and not content.endswith("\n"):
-            f.write("\n")
-        for job in new_jobs:
-            f.write("\n")
-            f.write(_job_to_yaml(job))
-            f.write("\n")
+    # Hold a lock across the read+append so two concurrent refill runs
+    # (e.g. two langs, or a retry racing a previous run) can't interleave
+    # writes to the same file.
+    with file_lock(p):
+        # Read once: check trailing newline, then keep handle open for appending.
+        content = p.read_text(encoding="utf-8")
+        with open(p, "a", encoding="utf-8") as f:
+            if content and not content.endswith("\n"):
+                f.write("\n")
+            for job in new_jobs:
+                f.write("\n")
+                f.write(_job_to_yaml(job))
+                f.write("\n")
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
