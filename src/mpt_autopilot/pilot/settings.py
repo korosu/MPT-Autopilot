@@ -77,16 +77,19 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
     with open(cfg_path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
 
-    gen = raw.get("generation", {})
-    langs_raw = raw.get("langs", {})
+    raw = raw if isinstance(raw, dict) else {}
+
+    gen = raw.get("generation") or {}
+    langs_raw = raw.get("langs") or {}
     scan_dirs = raw.get("scan_dirs") or []
-    paths_raw = raw.get("paths", {})
+    paths_raw = raw.get("paths") or {}
 
     cfg_jobs_dir = paths_raw.get("jobs_dir")
     cfg_seen_dir = paths_raw.get("seen_dir")
 
     langs: dict[str, LangSettings] = {}
     for code, lr in langs_raw.items():
+        lr = lr or {}  # a lang block with nothing under it (`en:` alone) → {}
         langs[code] = LangSettings(
             label=lr.get("label", code.upper()),
             file_suffix=lr.get("file_suffix", ""),

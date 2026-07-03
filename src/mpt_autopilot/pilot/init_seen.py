@@ -182,7 +182,7 @@ Examples:
 
     try:
         settings = load_settings()
-    except EnvironmentError as e:
+    except Exception as e:
         print(f"[ERROR] {e}")
         sys.exit(1)
 
