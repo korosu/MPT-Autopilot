@@ -27,9 +27,14 @@ def build(
     """
     Returns (system_prompt, user_prompt) for the given language and context.
 
-    seen_ordered: entries in insertion order (oldest first), used to send
-    the most recently generated topics to the LLM for better dedup accuracy.
-    Falls back to arbitrary set ordering when not provided.
+    seen_ordered: ALL already-used topic filenames the caller wants the LLM
+    to avoid, in insertion order (oldest first) — this should include both
+    rendered videos (seen.txt) AND anything already queued in
+    jobs_<lang>.yaml but not yet rendered, or the LLM won't know about the
+    pending backlog and may propose near-duplicates of it. refill.py builds
+    this combined list before calling build(). Only the most recent
+    _MAX_SEEN_IN_PROMPT entries are sent. Falls back to arbitrary set
+    ordering from already_seen when seen_ordered isn't provided at all.
     """
     # Use insertion-ordered list when available so we send the LAST N generated,
     # not the last N alphabetically. This prevents old early-alphabet topics

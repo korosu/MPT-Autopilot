@@ -24,22 +24,38 @@ import requests
 
 from shorts_pilot.generator.settings import Settings
 
-_MAX_TOKENS = 8000
+# A fixed budget of 8000 tokens was previously used regardless of how many
+# jobs were requested. Each job is ~200-500 chars of video_subject plus ~10
+# other fields plus JSON overhead — comfortably 250-350 tokens once you
+# include the surrounding braces/quotes/keys. At 8000 fixed tokens, any
+# --count above roughly 25-30 risks the model's output getting cut off
+# mid-array (the documented `--count 50` example was a reliable repro).
+# Budget now scales with the requested count instead.
+_MIN_TOKENS = 8000            # floor — keeps small requests unchanged
+_TOKENS_PER_JOB = 350         # generous per-job estimate incl. JSON overhead
+_TOKENS_OVERHEAD = 500        # slack for any preamble/formatting
 
 # Retry/backoff for transient failures (connection errors, timeouts, 429, 5xx).
 _MAX_RETRIES = 3
 _RETRY_BACKOFF_BASE = 2.0  # seconds; doubles each attempt
 
 
-def call_llm(system: str, user: str, settings: Settings) -> str:
+def _token_budget(count: int) -> int:
+    return max(_MIN_TOKENS, count * _TOKENS_PER_JOB + _TOKENS_OVERHEAD)
+
+
+def call_llm(system: str, user: str, settings: Settings, count: int) -> str:
     """
     Send a system + user prompt to the configured LLM.
+    `count` is the number of job objects being requested — used to size
+    max_tokens so a larger --count doesn't get silently truncated.
     Returns the raw text response.
     Raises requests.HTTPError on non-2xx responses.
     """
+    max_tokens = _token_budget(count)
     if settings.is_anthropic:
-        return _call_anthropic(system, user, settings)
-    return _call_openai_compat(system, user, settings)
+        return _call_anthropic(system, user, settings, max_tokens)
+    return _call_openai_compat(system, user, settings, max_tokens)
 
 
 def _anthropic_base(base_url: str) -> str:
@@ -81,7 +97,7 @@ def _post_with_retry(url: str, payload: dict, headers: dict) -> requests.Respons
     raise last_exc  # only reached if every attempt raised a connection/timeout error
 
 
-def _call_anthropic(system: str, user: str, s: Settings) -> str:
+def _call_anthropic(system: str, user: str, s: Settings, max_tokens: int) -> str:
     url = f"{_anthropic_base(s.base_url)}/v1/messages"
     headers = {
         "x-api-key": s.api_key,
@@ -90,7 +106,7 @@ def _call_anthropic(system: str, user: str, s: Settings) -> str:
     }
     payload = {
         "model": s.model,
-        "max_tokens": _MAX_TOKENS,
+        "max_tokens": max_tokens,
         "system": system,
         "messages": [{"role": "user", "content": user}],
     }
@@ -102,7 +118,7 @@ def _call_anthropic(system: str, user: str, s: Settings) -> str:
     raise ValueError("Anthropic response contained no text block")
 
 
-def _call_openai_compat(system: str, user: str, s: Settings) -> str:
+def _call_openai_compat(system: str, user: str, s: Settings, max_tokens: int) -> str:
     url = f"{s.base_url}/chat/completions"
     headers = {
         "Authorization": f"Bearer {s.api_key}",
@@ -110,7 +126,7 @@ def _call_openai_compat(system: str, user: str, s: Settings) -> str:
     }
     payload = {
         "model": s.model,
-        "max_tokens": _MAX_TOKENS,
+        "max_tokens": max_tokens,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -121,12 +137,63 @@ def _call_openai_compat(system: str, user: str, s: Settings) -> str:
     return resp.json()["choices"][0]["message"]["content"]
 
 
+def _salvage_truncated_array(text: str) -> list[dict[str, Any]] | None:
+    """
+    Best-effort recovery when the response was cut off mid-array (e.g. hit
+    max_tokens before finishing). Scans from the first '[' and tracks
+    string/escape state and object-brace depth to find every top-level
+    object that closed cleanly, then re-parses just that prefix as a
+    complete array. Returns None if nothing usable is found.
+    """
+    start = text.find("[")
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escape = False
+    last_complete_end = None
+
+    for i in range(start + 1, len(text)):
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                last_complete_end = i + 1  # just past this object's '}'
+
+    if last_complete_end is None:
+        return None
+
+    candidate = text[start:last_complete_end] + "]"
+    try:
+        result = json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+
+    return result if isinstance(result, list) else None
+
+
 def parse_json_array(raw_text: str) -> list[dict[str, Any]]:
     """
     Parse the LLM response as a JSON array.
     Strips markdown fences if the model added them despite instructions.
     Falls back to extracting the outermost [ ... ] if the model wrapped
     the array in prose despite instructions not to.
+    If the array itself is truncated (e.g. the response hit max_tokens
+    before finishing), salvages whichever leading objects closed cleanly
+    instead of failing the entire batch.
     """
     text = raw_text.strip()
     text = re.sub(r"^```json\s*", "", text)
@@ -138,18 +205,27 @@ def parse_json_array(raw_text: str) -> list[dict[str, Any]]:
     except json.JSONDecodeError:
         start = text.find("[")
         end = text.rfind("]")
-        if start == -1 or end == -1 or end <= start:
-            raise ValueError(
-                f"LLM returned invalid JSON (no array found)\n"
-                f"First 500 chars:\n{text[:500]}"
-            )
-        try:
-            result = json.loads(text[start:end + 1])
-        except json.JSONDecodeError as e:
-            raise ValueError(
-                f"LLM returned invalid JSON: {e}\n"
-                f"First 500 chars:\n{text[:500]}"
-            ) from e
+        result = None
+        if start != -1 and end != -1 and end > start:
+            try:
+                result = json.loads(text[start:end + 1])
+            except json.JSONDecodeError:
+                result = None
+
+        if result is None:
+            salvaged = _salvage_truncated_array(text)
+            if salvaged:
+                print(
+                    f"  [warn] LLM response looked truncated — recovered "
+                    f"{len(salvaged)} complete job(s) from it; consider "
+                    f"lowering --count or the response was cut short."
+                )
+                result = salvaged
+            else:
+                raise ValueError(
+                    f"LLM returned invalid JSON (no array found)\n"
+                    f"First 500 chars:\n{text[:500]}"
+                )
 
     if not isinstance(result, list):
         raise ValueError(f"Expected a JSON array, got {type(result).__name__}")
