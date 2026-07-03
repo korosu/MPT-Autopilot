@@ -21,17 +21,18 @@ _POLL_INTERVAL = 0.2   # seconds
 
 
 @contextmanager
-def file_lock(target: Path, timeout: float = _WAIT_TIMEOUT):
+def file_lock(target: Path, timeout: float = _WAIT_TIMEOUT, strict: bool = False):
     """
     Hold an exclusive lock for `target` while the block runs, by atomically
     creating a `<target>.lock` marker file. Waits up to `timeout` seconds
     for a concurrent holder to release it; a lock older than _STALE_AFTER
     is treated as abandoned (e.g. a previous run that crashed) and removed.
 
-    If the lock still can't be acquired after `timeout`, proceeds anyway
-    (a missed lock is safer here than blocking the CLI forever) and just
-    warns — writes are append-only, so the worst case is a duplicate line,
-    which the reader side already de-duplicates.
+    If the lock still can't be acquired after `timeout`:
+      - strict=False (default; used by seen.py): proceeds anyway and just
+        warns. Safe there because seen.py's writes are single-line and
+        idempotent — the worst case of two racing writers is a duplicate
+        line, which the reader side already de-duplicates.
     """
     lock_path = Path(str(target) + ".lock")
     deadline = time.monotonic() + timeout
@@ -52,6 +53,15 @@ def file_lock(target: Path, timeout: float = _WAIT_TIMEOUT):
                     lock_path.unlink(missing_ok=True)
                     continue
                 if time.monotonic() >= deadline:
+                    if strict:
+                        raise TimeoutError(
+                            f"Could not acquire lock on {target.name} after "
+                            f"{timeout:.0f}s — another process appears to be "
+                            f"writing it. Refusing to proceed without the "
+                            f"lock (this write can't safely be retried "
+                            f"unlocked). Try again once the other process "
+                            f"finishes."
+                        )
                     print(f"  [warn] could not acquire lock on {target.name} "
                           f"after {timeout:.0f}s — proceeding without it")
                     break
