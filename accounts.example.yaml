@@ -10,8 +10,10 @@ accounts:
     videos_dir: "/your/path/to/videos/en"
     client_secrets: "/root/youtubeuploader/client_secrets_en.json"
     token_file: "/root/youtubeuploader/request.token.en"
+    # daily_upload_limit: 10  # optional per-account daily upload limit
 
   es:
     videos_dir: "/your/path/to/videos/es"
     client_secrets: "/root/youtubeuploader/client_secrets_es.json"
     token_file: "/root/youtubeuploader/request.token.es"
+    # daily_upload_limit: 10

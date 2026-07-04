@@ -91,6 +91,7 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
     uploaded = 0
     failed = 0
     stopped_early = False
+    self_limited = False
     last_index = len(videos) - 1
 
     for index, video in enumerate(videos):
@@ -135,13 +136,22 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
         move_to_uploaded(video, sidecar_path(video), uploaded_dir)
         uploaded += 1
         print(f"[{account.name}] done: {video.name} -> {settings.uploaded_dir_name}/")
+        if account.daily_upload_limit is not None and uploaded >= account.daily_upload_limit:
+            self_limited = True
+            break
         if index < last_index:
             time.sleep(settings.sleep_between_uploads)
 
     if not dry_run:
         ok = failed == 0 and not stopped_early
         icon = "\u2705" if ok else "\u26a0\ufe0f"
-        suffix = " (stopped early: daily quota)" if stopped_early else ""
+        suffix = (
+            " (stopped early: daily quota)"
+            if stopped_early
+            else " (stopped early: daily_upload_limit reached)"
+            if self_limited
+            else ""
+        )
         notify.alert(
             settings,
             f"{icon} [upload/{account.name}] uploaded: {uploaded}  failed: {failed}{suffix}",

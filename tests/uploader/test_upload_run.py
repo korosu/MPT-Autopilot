@@ -9,7 +9,7 @@ from yt_uploader.engine.uploader import UploadFailed, UploadLimitExceeded
 from yt_uploader.upload import EXIT_FAILURES, EXIT_OK, EXIT_QUOTA_STOP, run
 
 
-def _account(tmp_path: Path, n_videos: int) -> Account:
+def _account(tmp_path: Path, n_videos: int, *, daily_limit: int | None = None) -> Account:
     videos_dir = tmp_path / "videos"
     videos_dir.mkdir()
     for i in range(n_videos):
@@ -23,6 +23,7 @@ def _account(tmp_path: Path, n_videos: int) -> Account:
         videos_dir=videos_dir,
         client_secrets=secrets,
         token_file=tmp_path / "token",
+        daily_upload_limit=daily_limit,
     )
 
 
@@ -142,6 +143,20 @@ def test_run_missing_videos_dir_returns_ok_not_a_crash(tmp_path):
         token_file=tmp_path / "token",
     )
     assert run(settings, account, dry_run=False, limit=None) == EXIT_OK
+
+
+def test_run_daily_upload_limit_stops_early(tmp_path, monkeypatch):
+    account = _account(tmp_path, n_videos=5, daily_limit=2)
+    settings = _settings(tmp_path)
+    monkeypatch.setattr("yt_uploader.upload.upload_video", lambda *a, **k: "ok")
+
+    exit_code = run(settings, account, dry_run=False, limit=None)
+
+    # Should return OK, not FAILURES (stopped early for config limit, not error)
+    assert exit_code == EXIT_OK
+    # Only 2 should be uploaded due to daily_limit
+    uploaded = list((account.videos_dir / "old_videos").glob("*.mp4"))
+    assert len(uploaded) == 2
 
 
 if __name__ == "__main__":

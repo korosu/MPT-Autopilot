@@ -1,12 +1,14 @@
-from __future__ import annotations
-
+import tempfile
 from pathlib import Path
+
+import pytest
 
 from yt_uploader.engine.settings import (
     Account,
     Defaults,
     Settings,
     find_uploader_binary,
+    load_settings,
     validate_account_ready,
 )
 
@@ -96,3 +98,25 @@ def test_validate_account_ready_missing_client_secrets(tmp_path):
     problem = validate_account_ready(settings, account)
     assert problem is not None
     assert "client_secrets" in problem
+
+
+def test_daily_upload_limit_must_be_positive(tmp_path):
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as accounts_file, tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False
+    ) as config_file:
+        accounts_file.write(
+            "accounts:\n  en:\n"
+            "    videos_dir: /tmp/v\n"
+            "    client_secrets: /tmp/s.json\n"
+            "    token_file: /tmp/t\n"
+            "    daily_upload_limit: 0\n"
+        )
+        config_file.write("")
+
+    with pytest.raises(ValueError, match="daily_upload_limit must be positive"):
+        load_settings(
+            config_path=Path(config_file.name),
+            accounts_path=Path(accounts_file.name),
+        )

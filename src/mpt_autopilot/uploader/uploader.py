@@ -1,7 +1,25 @@
 from __future__ import annotations
 
 import subprocess
+import time
 from pathlib import Path
+
+_MAX_RETRIES = 3
+_BASE_DELAY = 2
+
+# only these are retried — they occur before youtubeuploader finalizes
+# the upload session, so a retry cannot create a duplicate. Any other non-zero
+# exit may be post-finalize and is treated as permanent (fail fast). Expand the
+# set only when a real failure proves a string is pre-finalize-safe.
+_TRANSIENT_MARKERS = (
+    "503",  # backend / service unavailable
+    "backendError",
+    "context deadline exceeded",
+    "deadline exceeded",
+    "timeout",
+    "temporary",
+    "try again later",
+)
 
 
 class UploadLimitExceeded(Exception):
@@ -12,17 +30,26 @@ class UploadFailed(Exception):
     """Raised for any other non-zero exit from youtubeuploader."""
 
 
+def _is_transient(output: str) -> bool:
+    low = output.lower()
+    return any(marker.lower() in low for marker in _TRANSIENT_MARKERS)
+
+
 def upload_video(
     binary: Path,
     video: Path,
     meta_file: Path,
     client_secrets: Path,
     token_file: Path,
+    *,
+    sleep=time.sleep,
 ) -> str:
     """
     Shells out to youtubeuploader (https://github.com/porjo/youtubeuploader).
-    Returns combined stdout+stderr on success. Raises UploadLimitExceeded or
-    UploadFailed on non-zero exit.
+    Retries with exponential backoff ONLY on transient (pre-finalize) failures,
+    so a retry can never re-upload a video YouTube already finalized. Any other
+    non-zero exit is permanent and fails fast. Returns combined stdout+stderr on
+    success. Raises UploadLimitExceeded or UploadFailed on non-zero exit.
     """
     cmd = [
         str(binary),
@@ -36,18 +63,29 @@ def upload_video(
         "-cache",
         str(token_file),
     ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
-    except OSError as exc:
-        # e.g. the binary was removed/became unexecutable mid-run, after the
-        # settings.validate_account_ready() preflight check already passed.
-        raise UploadFailed(f"failed to execute {binary}: {exc}") from exc
 
-    output = (result.stdout + result.stderr).strip()
+    last_exc = None
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        except OSError as exc:
+            raise UploadFailed(f"failed to execute {binary}: {exc}") from exc
 
-    if result.returncode != 0:
+        if result.returncode == 0:
+            return (result.stdout + result.stderr).strip()
+
+        output = (result.stdout + result.stderr).strip()
         if "uploadLimitExceeded" in output:
             raise UploadLimitExceeded(output)
-        raise UploadFailed(output or f"youtubeuploader exited with code {result.returncode}")
+        if not _is_transient(output):
+            raise UploadFailed(output or f"youtubeuploader exited with code {result.returncode}")
 
-    return output
+        msg = output or f"youtubeuploader exited with code {result.returncode}"
+        last_exc = UploadFailed(f"transient error: {msg}")
+        if attempt < _MAX_RETRIES:
+            delay = _BASE_DELAY * (2 ** (attempt - 1))
+            print(f"[retry {attempt}/{_MAX_RETRIES}] transient error, retrying in {delay}s...")
+            sleep(delay)
+
+    assert last_exc is not None
+    raise last_exc

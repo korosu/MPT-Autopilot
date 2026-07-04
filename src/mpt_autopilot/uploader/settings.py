@@ -15,6 +15,7 @@ class Account:
     videos_dir: Path
     client_secrets: Path
     token_file: Path
+    daily_upload_limit: int | None = None
 
 
 @dataclass
@@ -69,11 +70,17 @@ def load_settings(
     accounts: dict[str, Account] = {}
     for name, raw in (acc_raw.get("accounts") or {}).items():
         try:
+            daily_limit = raw.get("daily_upload_limit")
+            if daily_limit is not None and daily_limit <= 0:
+                raise ValueError(
+                    f"daily_upload_limit must be positive for account '{name}', got {daily_limit}"
+                )
             accounts[name] = Account(
                 name=name,
                 videos_dir=Path(raw["videos_dir"]).expanduser(),
                 client_secrets=Path(raw["client_secrets"]).expanduser(),
                 token_file=Path(raw["token_file"]).expanduser(),
+                daily_upload_limit=daily_limit,
             )
         except KeyError as exc:
             raise ValueError(
