@@ -23,6 +23,8 @@ def _settings(uploader_binary: Path) -> Settings:
         notify_enabled=False,
         telegram_token="",
         telegram_chat_id="",
+        discord_webhook_url="",
+        ledger_path=Path("./ledger.sqlite"),
         accounts={},
     )
 
@@ -39,6 +41,10 @@ def test_find_uploader_binary_absolute_path_missing(tmp_path):
 
 
 def test_find_uploader_binary_resolves_via_path(monkeypatch, tmp_path):
+    # Skip on Windows - shutil.which requires .exe extension
+    import sys
+    if sys.platform == "win32":
+        pytest.skip("Windows requires .exe extension for shutil.which")
     fake = tmp_path / "toolname"
     fake.write_text("#!/bin/bash\n")
     fake.chmod(0o755)

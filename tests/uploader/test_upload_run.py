@@ -13,7 +13,8 @@ def _account(tmp_path: Path, n_videos: int, *, daily_limit: int | None = None) -
     videos_dir = tmp_path / "videos"
     videos_dir.mkdir()
     for i in range(n_videos):
-        (videos_dir / f"video_{i}.mp4").write_bytes(b"fake")
+        # Distinct content per video to avoid SHA-256 hash collisions in ledger dedup
+        (videos_dir / f"video_{i}.mp4").write_bytes(f"video_{i} content".encode())
 
     secrets = tmp_path / "secrets.json"
     secrets.write_text("{}")
@@ -40,6 +41,8 @@ def _settings(tmp_path: Path, *, sleep: int = 0) -> Settings:
         notify_enabled=False,
         telegram_token="",
         telegram_chat_id="",
+        discord_webhook_url="",
+        ledger_path=tmp_path / "ledger.sqlite",
         accounts={},
     )
 
