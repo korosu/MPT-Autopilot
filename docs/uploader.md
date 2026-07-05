@@ -17,7 +17,7 @@ sidecar) into a folder works.
 - Uploads via [youtubeuploader](https://github.com/porjo/youtubeuploader)
 - Moves successfully uploaded videos into `old_videos/` (configurable name)
 - Stops early and alerts if YouTube's daily upload quota is hit
-- Optional Telegram notification on completion / failure / quota hit
+- Optional Telegram and/or Discord notifications on completion / failure / quota hit
 
 ## What it doesn't do
 
@@ -87,14 +87,23 @@ It prints a URL, you authorize in a browser, and it caches a refresh token at
 
 ## Usage
 
+Upload for a single account:
+
 ```bash
 uv run upload --account en
+```
+
+Process all accounts in one run:
+
+```bash
+uv run upload --all-accounts
 ```
 
 Preview without uploading anything:
 
 ```bash
 uv run upload --account en --dry-run
+uv run upload --all-accounts --dry-run
 ```
 
 Only process the first few (useful for testing a new account):
@@ -128,12 +137,18 @@ controllers".
 
 Each key under `accounts:` in `accounts.yaml` is independent - its own videos
 folder, its own OAuth credentials, its own `old_videos/`. Add as many as you
-have channels; there's no built-in concept of "language", just accounts. Run
-them from cron, one line per account:
+have channels; there's no built-in concept of "language", just accounts.
+
+Recommended: use `--all-accounts` to process every account in one invocation:
+
+```cron
+30 19 * * * cd /root/yt-shorts-uploader && uv run upload --all-accounts
+```
+
+Or run specific accounts individually:
 
 ```cron
 30 19 * * * cd /root/yt-shorts-uploader && uv run upload --account en
-35 19 * * * cd /root/yt-shorts-uploader && uv run upload --account es
 ```
 
 ## Exit codes
@@ -146,14 +161,29 @@ them from cron, one line per account:
 | `1`  | Config/account problem, or at least one video failed to upload |
 | `2`  | Stopped early - YouTube's daily upload quota was hit (videos already uploaded in that run are still moved to `old_videos/`) |
 
-## Quota handling
+With `--all-accounts`: exit 1 if any account had failures, else 2 if any account hit quota, else 0.
 
-YouTube's Data API gives every project a fixed daily upload quota. When
-`youtubeuploader` reports `uploadLimitExceeded`, this tool stops that
-account's run immediately (rather than retrying and burning more of the
-quota on failed attempts) and sends a Telegram alert if configured. Already
-uploaded videos in that run stay moved to `old_videos/`; the rest are left in
-place for tomorrow's run.
+## Crash-safe resumes (SQLite ledger)
+
+A SQLite ledger sits next to `config.yaml` (`yt-uploader-ledger.sqlite`).
+Before each upload it records the video's SHA-256 content hash and status
+(`started` → `uploaded` → `moved`). If the process crashes after the upload
+is recorded as `uploaded` but before the file is moved, the next run skips
+that video - no duplicate upload.
+
+## Notifications
+
+Optional Telegram and/or Discord notifications on completion / failure / quota hit.
+Telegram credentials go in `.env` (`TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`).
+Discord webhook URL goes in `config.yaml`:
+
+```yaml
+notify:
+  enabled: true
+  discord_webhook_url: "https://discord.com/api/webhooks/.../..."
+```
+
+Both can be active simultaneously.
 
 ## Development
 

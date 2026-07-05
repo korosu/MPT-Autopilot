@@ -35,6 +35,8 @@ class Settings:
     notify_enabled: bool
     telegram_token: str
     telegram_chat_id: str
+    discord_webhook_url: str
+    ledger_path: Path
     accounts: dict[str, Account]
 
 
@@ -96,6 +98,8 @@ def load_settings(
         notify_enabled=bool(notify_raw.get("enabled", True)),
         telegram_token=os.environ.get("TELEGRAM_TOKEN", ""),
         telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", ""),
+        discord_webhook_url=notify_raw.get("discord_webhook_url", ""),
+        ledger_path=config_path.parent / "yt-uploader-ledger.sqlite",
         accounts=accounts,
     )
 
