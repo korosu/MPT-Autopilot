@@ -2,8 +2,10 @@
 """
 refill.py — shorts-pilot entry point.
 
-Checks how many jobs are pending in jobs_<lang>.yaml and refills
-the queue by generating new video ideas via LLM when it runs low.
+Refills the queue by:
+- (default) calling LLM to generate new video ideas when pending jobs drop below threshold,
+- (--topic/--topics) importing topics verbatim as jobs without LLM,
+- (--theme) calling LLM to generate short topic titles constrained to configured themes.
 
 Where jobs/seen files live (priority order):
     1. --jobs-dir / --seen-dir (explicit CLI flags)
@@ -11,25 +13,32 @@ Where jobs/seen files live (priority order):
     3. current directory
 
 Usage:
-    refill --lang en                                   # uses config.yaml paths, or cwd
+    # LLM mode (default):
     refill --lang en --jobs-dir /your/path/to/jobs
-    refill --lang es --jobs-dir /your/path/to/jobs
     refill --lang en --jobs-dir /your/path/to/jobs --force
-    refill --lang en --jobs-dir /your/path/to/jobs --count 50
-    refill --lang en --jobs-dir /your/path/to/jobs --threshold 5
+
+    # Topics mode (no LLM, topic text = video_subject):
+    refill --lang en --topic "The tongue is not the strongest muscle in your body"
+    refill --lang en --topics /path/to/topics.txt
+
+    # Theme mode (LLM, constrained themes):
+    refill --lang en --force --count 5           # uses all themes from config.yaml
+    refill --lang en --theme job --force --count 5  # only "job" theme
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
 from shorts_pilot.generator import jobs, seen
+from shorts_pilot.generator.prompt import build_themes
 from shorts_pilot.generator.seen import load_ordered as seen_load_ordered
 from shorts_pilot.generator.llm import call_llm, parse_json_array
 from shorts_pilot.generator.prompt import VIDEO_SUBJECT_MAX_CHARS, build as build_prompt
-from shorts_pilot.generator.settings import LangSettings, load as load_settings
+from shorts_pilot.generator.settings import LangSettings, Settings, load as load_settings
 
 # ── Deduplication + cleanup ───────────────────────────────────────────────────
 
@@ -79,6 +88,22 @@ def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
 # missing one (see fix #6: previously "" silently passed straight through).
 _MIN_VIDEO_SUBJECT_CHARS = 30
 
+# theme_mode emits short topic titles as video_subject; the existing 30-char
+# floor would reject them. Loosen it to "non-trivial" only while theme mode
+# is active.
+_THEME_MIN_SUBJECT_CHARS = 5
+
+# Strip leading list markers (1. 2) 3 - - * •) from topic lines so pasted
+# numbered/bulleted lists don't leak markers into slugs and video_subjects.
+# A leading digit that's part of the content ("5 mistakes everyone makes at work"
+# — no punctuation after the digit) is preserved.
+_LIST_MARKER_RE = re.compile(r"^\s*(?:\d+\s*[.):\]\-]\s+|[-*•]\s+)")
+
+
+def _strip_list_marker(line: str) -> str:
+    """Remove a leading list marker (1. 2) 3 - - * •) from a topic line."""
+    return _LIST_MARKER_RE.sub("", line, count=1).strip()
+
 
 def _truncate_subject(subject: str, max_chars: int) -> str:
     """
@@ -116,6 +141,7 @@ def _normalise(
         expected_suffix: str,
         lang_cfg: LangSettings | None = None,
         foreign_suffixes: set[str] | None = None,
+        min_subject_chars: int = _MIN_VIDEO_SUBJECT_CHARS,
 ) -> dict:
     """
     Return a cleaned copy of job with:
@@ -163,10 +189,10 @@ def _normalise(
     if not isinstance(subject, str):
         subject = str(subject)
     subject = subject.strip()
-    if len(subject) < _MIN_VIDEO_SUBJECT_CHARS:
+    if len(subject) < min_subject_chars:
         raise ValueError(
             f"video_subject is missing or too short ({len(subject)} chars, "
-            f"need at least {_MIN_VIDEO_SUBJECT_CHARS})"
+            f"need at least {min_subject_chars})"
         )
     if len(subject) > VIDEO_SUBJECT_MAX_CHARS:
         subject = _truncate_subject(subject, VIDEO_SUBJECT_MAX_CHARS)
@@ -190,6 +216,7 @@ def _deduplicate(
         lang_cfg: LangSettings | None = None,
         expected_suffix: str = "",
         foreign_suffixes: set[str] | None = None,
+        min_subject_chars: int = _MIN_VIDEO_SUBJECT_CHARS,
 ) -> list[dict]:
     # Lowercase for comparison: new output_file values are always already
     # lowercased by _normalise, but already_known (seen.txt + existing yaml
@@ -213,7 +240,10 @@ def _deduplicate(
             # A single malformed job (e.g. a null field where a string was
             # expected, or a missing/empty video_subject) must not take the
             # rest of the batch down with it.
-            clean = _normalise(job, expected_suffix, lang_cfg, foreign_suffixes)
+            clean = _normalise(
+                job, expected_suffix, lang_cfg, foreign_suffixes,
+                min_subject_chars=min_subject_chars,
+            )
         except Exception as e:
             print(f"  [skip] malformed job {job.get('name', '?')!r}: {e}")
             continue
@@ -244,6 +274,57 @@ def _deduplicate(
     return result
 
 
+# ── Topics mode (no LLM) ───────────────────────────────────────────────────────
+
+def _run_topics(
+        lang: str,
+        jobs_dir: Path,
+        seen_dir: Path,
+        settings,
+        lang_cfg: LangSettings,
+        topics: list[str],
+) -> int:
+    """
+    Import a list of topics without LLM involvement. Each topic becomes a job
+    with `video_subject` set to the topic text verbatim; other fields come from
+    lang_cfg.job_defaults via the shared _deduplicate pipeline.
+    """
+    suffix = lang_cfg.file_suffix
+    seen_set = seen.load(seen_dir, suffix)
+    cfg = jobs.load(jobs_dir, lang)
+    already_known = seen_set | jobs.existing_names_from(cfg)
+    foreign_suffixes = {
+        c.file_suffix for code, c in settings.langs.items()
+        if code != lang and c.file_suffix
+    }
+
+    seen_file = "seen.txt" if not suffix else f"seen_{suffix.lstrip('_')}.txt"
+    print(f"[{lang}] topics mode: {len(topics)} topic(s) | jobs dir: {jobs_dir} | seen: {seen_file} (in {seen_dir})")
+    print(f"[{lang}] known titles: {len(already_known)}")
+
+    raw_jobs = [
+        {
+            "name": jobs.safe_name(subject),
+            "video_subject": subject,
+            "output_file": f"{jobs.safe_name(subject)}{suffix}.mp4",
+        }
+        for t in topics
+        if (subject := _strip_list_marker(t))
+    ]
+
+    clean_jobs = _deduplicate(
+        raw_jobs, already_known, lang_cfg,
+        expected_suffix=suffix, foreign_suffixes=foreign_suffixes,
+    )
+    print(f"[{lang}] after dedup: {len(clean_jobs)} new jobs")
+
+    if clean_jobs:
+        jobs.append(jobs_dir, lang, clean_jobs)
+        print(f"[{lang}] appended {len(clean_jobs)} jobs to jobs_{lang}.yaml")
+
+    return len(clean_jobs)
+
+
 # ── Core logic ────────────────────────────────────────────────────────────────
 
 # If dedup leaves the queue still under threshold after a batch, try again
@@ -260,8 +341,10 @@ def run(
         force: bool,
         count_override: int | None,
         threshold_override: int | None,
+        topics: list[str] | None = None,
+        themes: list[str] | None = None,
 ) -> int:
-    settings = load_settings()
+    settings = load_settings(require_llm=topics is None)
 
     # Priority: explicit CLI flag > paths.* from config.yaml > current directory.
     jobs_dir = (jobs_dir or settings.jobs_dir or Path(".")).resolve()
@@ -272,6 +355,28 @@ def run(
 
     lang_cfg = settings.lang(lang)
     suffix = lang_cfg.file_suffix
+
+    if topics:
+        return _run_topics(lang, jobs_dir, seen_dir, settings, lang_cfg, topics)
+
+    # Resolve active themes: --theme narrows to specific theme(s); no --theme
+    # but non-empty config.theme_list uses all configured themes.
+    configured = settings.theme_list
+    if themes:
+        unknown = [t for t in themes if t not in configured]
+        if unknown:
+            raise ValueError(
+                f"--theme {unknown!r} not found in config.yaml theme_list {configured!r}. "
+                f"Add the theme(s) there first."
+            )
+        active_themes = list(dict.fromkeys(themes))  # dedupe, preserve order
+    elif configured:
+        active_themes = list(configured)
+    else:
+        active_themes = []
+
+    if active_themes:
+        print(f"[{lang}] theme mode: {active_themes}")
 
     seen_set = seen.load(seen_dir, suffix)
     seen_list = seen_load_ordered(seen_dir, suffix)
@@ -335,9 +440,19 @@ def run(
         else:
             this_count = generate_count
 
-        system_prompt, user_prompt = build_prompt(
-            lang_cfg, already_known, this_count, seen_ordered=prompt_seen_ordered
-        )
+        # Swap prompt builder and subject floor based on theme mode.
+        if active_themes:
+            system_prompt, user_prompt = build_themes(
+                lang_cfg, already_known, this_count,
+                themes=active_themes, seen_ordered=prompt_seen_ordered,
+            )
+            subj_min = _THEME_MIN_SUBJECT_CHARS
+        else:
+            system_prompt, user_prompt = build_prompt(
+                lang_cfg, already_known, this_count, seen_ordered=prompt_seen_ordered,
+            )
+            subj_min = _MIN_VIDEO_SUBJECT_CHARS
+
         print(f"[{lang}] calling LLM for {this_count} ideas...")
 
         raw_text = call_llm(system_prompt, user_prompt, settings, this_count)
@@ -351,6 +466,7 @@ def run(
         clean_jobs = _deduplicate(
             raw_jobs, already_known, lang_cfg,
             expected_suffix=suffix, foreign_suffixes=foreign_suffixes,
+            min_subject_chars=subj_min,
         )
         print(f"[{lang}] after dedup: {len(clean_jobs)} new jobs")
 
@@ -394,12 +510,19 @@ def main() -> None:
         epilog="""
 Examples:
     refill --lang en
-    refill --lang es
     refill --lang en --jobs-dir /your/path/to/jobs
-    refill --lang es --jobs-dir /your/path/to/jobs
     refill --lang en --jobs-dir /your/path/to/jobs --force
     refill --lang en --jobs-dir /your/path/to/jobs --count 50
     refill --lang en --jobs-dir /your/path/to/jobs --threshold 5
+
+    # Import specific topics (no LLM):
+    refill --lang en --topic "The tongue is the strongest muscle in your body"
+    refill --lang en --topic "Antarctica is the driest desert" --topic "Octopuses have three hearts"
+    refill --lang en --topics /path/to/topics.txt
+
+    # Theme mode (LLM generates short titles about configured themes):
+    refill --lang en --force --count 20      # uses all themes from config.yaml theme_list
+    refill --lang en --theme job --force --count 5  # only themes matching "job"
 """,
     )
     parser.add_argument("--lang", required=True, metavar="LANG",
@@ -416,6 +539,16 @@ Examples:
                         help="Override generation.count from config.yaml.")
     parser.add_argument("--threshold", type=int, default=None, metavar="N",
                         help="Override generation.threshold from config.yaml.")
+    parser.add_argument("--topic", action="append", dest="topic", default=None, metavar="TOPIC",
+                        help="Generate a job for this specific topic (no LLM). Topic text becomes "
+                             "video_subject verbatim. Repeatable. Combined with --topics.")
+    parser.add_argument("--topics", type=Path, dest="topics_file", default=None, metavar="FILE",
+                        help="File (UTF-8, one topic per line, blank lines ignored) imported as jobs. "
+                             "Combined with --topic.")
+    parser.add_argument("--theme", action="append", dest="theme", default=None, metavar="THEME",
+                        help="LLM theme mode: generate short topic titles constrained to this "
+                             "theme from config.yaml theme_list. Repeatable. Without --theme "
+                             "but with a non-empty theme_list, all configured themes are used.")
 
     args = parser.parse_args()
 
@@ -425,6 +558,31 @@ Examples:
     if args.threshold is not None and args.threshold < 0:
         print("[ERROR] --threshold must be a non-negative integer")
         sys.exit(1)
+
+    # Topics mode: build list from --topic (repeatable) + --topics (file).
+    topic_file_lines: list[str] = []
+    if args.topics_file is not None:
+        if not args.topics_file.is_file():
+            print(f"[ERROR] --topics file not found: {args.topics_file}")
+            sys.exit(1)
+        topic_file_lines = [
+            ln.strip() for ln in args.topics_file.read_text(encoding="utf-8").splitlines()
+            if ln.strip()
+        ]
+    inline_topics = [t for t in (args.topic or []) if t.strip()]
+    topics_requested = args.topics_file is not None or bool(args.topic)
+    topics = (topic_file_lines + inline_topics) if topics_requested else None
+    if topics_requested and not topics:
+        print("[ERROR] topics requested but none found (empty file and/or blank --topic values)")
+        sys.exit(1)
+    if topics and args.theme:
+        print("[ERROR] --topic/--topics (verbatim, no LLM) and --theme (LLM) can't be combined")
+        sys.exit(1)
+    if topics and (args.count is not None or args.threshold is not None or args.force):
+        print("[note] --count / --threshold / --force ignored in topics mode")
+
+    # themes from --theme (repeatable) → passed to run() (none means "use config or free-topic")
+    theme_list = [t for t in (args.theme or []) if t.strip()] or None
 
     jobs_dir = args.jobs_dir.resolve() if args.jobs_dir else None
     seen_dir = args.seen_dir.resolve() if args.seen_dir else None
@@ -437,6 +595,8 @@ Examples:
             force=args.force,
             count_override=args.count,
             threshold_override=args.threshold,
+            topics=topics,
+            themes=theme_list,
         )
     except Exception as e:
         print(f"[ERROR] {e}")
@@ -445,5 +605,24 @@ Examples:
     print(f"\n[done] added {added} new jobs.")
 
 
+def _self_check() -> None:
+    """Verify _strip_list_marker behavior — nontrivial regex needs a guardrail."""
+    cases = [
+        ("1. Los pulpos tienen tres corazones y sangre azul", "Los pulpos tienen tres corazones y sangre azul"),
+        ("2) Los elefantes son los únicos animales que no pueden saltar", "Los elefantes son los únicos animales que no pueden saltar"),
+        ("3 - Las jirafas duermen menos que cualquier otro mamífero", "Las jirafas duermen menos que cualquier otro mamífero"),
+        ("- Los gatos no pueden saborear lo dulce", "Los gatos no pueden saborear lo dulce"),
+        ("* The tongue is not the strongest muscle", "The tongue is not the strongest muscle"),
+        ("5 mistakes everyone makes at work", "5 mistakes everyone makes at work"),  # content number preserved
+        ("Why people hate Mondays", "Why people hate Mondays"),
+    ]
+    for input_line, expected in cases:
+        actual = _strip_list_marker(input_line)
+        assert actual == expected, f"_strip_list_marker({input_line!r}) = {actual!r}, expected {expected!r}"
+    print("[self-check] _strip_list_marker: OK")
+
+
 if __name__ == "__main__":
+    # Run self-check on import (non-interactive, silent on success)
+    _self_check()
     main()

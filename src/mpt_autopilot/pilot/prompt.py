@@ -16,6 +16,16 @@ VIDEO_SUBJECT_MAX_CHARS = 500
 # How many recent seen entries to include in the prompt.
 # Uses insertion order (most recently generated = last in file).
 _MAX_SEEN_IN_PROMPT = 200
+_THEME_MAX_SUBJECT_CHARS = 80  # For short titles in theme mode
+
+
+def _seen_block(seen_ordered, already_seen) -> str:
+    """Render the ALREADY USED TOPICS block for prompts (shared by both modes)."""
+    if seen_ordered is not None:
+        recent = seen_ordered[-_MAX_SEEN_IN_PROMPT:]
+    else:
+        recent = list(already_seen)[-_MAX_SEEN_IN_PROMPT:]
+    return "\n".join(n.replace(".mp4", "") for n in recent) if recent else "(none yet)"
 
 
 def build(
@@ -36,15 +46,7 @@ def build(
     _MAX_SEEN_IN_PROMPT entries are sent. Falls back to arbitrary set
     ordering from already_seen when seen_ordered isn't provided at all.
     """
-    # Use insertion-ordered list when available so we send the LAST N generated,
-    # not the last N alphabetically. This prevents old early-alphabet topics
-    # from being dropped from the dedup context at scale.
-    if seen_ordered is not None:
-        recent = seen_ordered[-_MAX_SEEN_IN_PROMPT:]
-    else:
-        recent = list(already_seen)[-_MAX_SEEN_IN_PROMPT:]
-
-    used_str = "\n".join(n.replace(".mp4", "") for n in recent) if recent else "(none yet)"
+    used_str = _seen_block(seen_ordered, already_seen)
 
     suffix = lang_cfg.file_suffix
     voices_json = json.dumps(lang_cfg.voices)
@@ -105,6 +107,93 @@ output_file must end with "{suffix}.mp4" (e.g. "fact_water_memory{suffix}.mp4").
 - enabled: true.
 
 Example of ONE object (do not copy it — generate fresh, original content):
+{json.dumps(example, indent=2, ensure_ascii=False)}
+
+Return ONLY a JSON array of exactly {count} objects. No markdown. No commentary.
+"""
+
+    return system, user
+
+
+def build_themes(
+        lang_cfg: LangSettings,
+        already_seen: set[str],
+        count: int,
+        themes: list[str],
+        seen_ordered: list[str] | None = None,
+) -> tuple[str, str]:
+    """
+    Returns (system_prompt, user_prompt) for theme-constrained generation.
+
+    Produces short topic titles (3–12 words, max 80 chars) that will be used
+    as video_subject values. The downstream script generator expands each title
+    into the full video narration.
+
+    - themes: list of themes from config.yaml; each generated title must relate
+      to exactly one of them.
+    - seen_ordered: ALL already-used topic filenames to avoid, same as build().
+    """
+    used_str = _seen_block(seen_ordered, already_seen)
+
+    suffix = lang_cfg.file_suffix
+    voices_json = json.dumps(lang_cfg.voices)
+    defaults = lang_cfg.job_defaults
+
+    clip_duration = defaults.get("video_clip_duration", 3)
+    bgm_volume = defaults.get("bgm_volume", 0.15)
+    paragraph_number = defaults.get("paragraph_number", 2)
+    concat_mode = defaults.get("video_concat_mode", "random")
+    bgm_type = defaults.get("bgm_type", "random")
+    themes_str = ", ".join(themes)
+
+    example = {
+        "name": f"why_people_hate_mondays{suffix}",
+        "enabled": True,
+        "output_file": f"why_people_hate_mondays{suffix}.mp4",
+        "video_subject": "Why people hate Mondays",
+        "video_clip_duration": clip_duration,
+        "video_concat_mode": concat_mode,
+        "voice_rate": 1.15,
+        "voice_name": lang_cfg.voices[0] if lang_cfg.voices else "gemini:puck",
+        "bgm_type": bgm_type,
+        "bgm_volume": bgm_volume,
+        "paragraph_number": paragraph_number,
+    }
+
+    system = (
+        f"You are a YouTube Shorts content strategist.\n"
+        f"Your job is to generate SHORT, punchy video TOPIC TITLES in {lang_cfg.label} "
+        f"about specific themes.\n"
+        f"Each title is the seed topic for one video (3–12 words); the script is "
+        f"generated downstream — here you only pick the topic.\n"
+        f"Return ONLY a valid JSON array. No markdown, no explanation, no code fences."
+    )
+
+    user = f"""Generate exactly {count} NEW YouTube Shorts topic titles in {lang_cfg.label}.
+
+THEMES — every title must be about ONE of these themes ({themes_str}):
+Pick across the themes from your list for variety. Do NOT produce a title outside
+these themes.
+
+ALREADY USED TOPICS — do not repeat any of these:
+{used_str}
+
+Rules:
+- video_subject: a short topic title, 3–12 words, max {_THEME_MAX_SUBJECT_CHARS} characters.
+  Title case or sentence case. No hashtags, no emojis, no trailing period. Must relate
+  to one of the listed themes.
+- name and output_file: snake_case, max 50 chars.
+  output_file must end with "{suffix}.mp4" (e.g. "fact_water_memory{suffix}.mp4").
+- voice_rate: float between {lang_cfg.voice_rate_min} and {lang_cfg.voice_rate_max}, vary across jobs.
+- voice_name: pick from {voices_json}, vary across jobs.
+- video_clip_duration: {clip_duration} or {clip_duration + 1}.
+- paragraph_number: 1 or {paragraph_number}.
+- bgm_volume: {bgm_volume}.
+- bgm_type: "{bgm_type}".
+- video_concat_mode: "{concat_mode}".
+- enabled: true.
+
+Example of ONE object (do not copy it — generate fresh titles on the listed themes):
 {json.dumps(example, indent=2, ensure_ascii=False)}
 
 Return ONLY a JSON array of exactly {count} objects. No markdown. No commentary.

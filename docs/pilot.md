@@ -14,6 +14,8 @@ correct format automatically.
 - **Deduplication built-in** — tracks every generated video in `seen.txt`, never repeats a topic
 - **Provider-agnostic** — works with OpenAI, Groq, Together, Mistral, Ollama, Anthropic — just set `LLM_BASE_URL`
 - **Multi-language** — generates English, Spanish, or any language you define in `config.yaml`
+- **Topics mode** — import topics verbatim (no LLM) with `--topic` or `--topics`
+- **Theme mode** — constrain LLM to specific themes (e.g., "job", "animal") via `config.yaml` `theme_list`
 
 ---
 
@@ -66,6 +68,49 @@ uv run refill --lang en --jobs-dir /your/path/to/jobs --force
 
 # Generate 50 new ideas instead of the default 21
 uv run refill --lang en --jobs-dir /your/path/to/jobs --count 50
+```
+
+### Topics mode (no LLM)
+
+Import specific topics as jobs without LLM — the topic text becomes `video_subject` verbatim:
+
+```
+# Single topic
+uv run refill --lang en --topic "The tongue is not the strongest muscle in your body"
+
+# Multiple topics from a file (one per line)
+uv run refill --lang en --topics topics.txt
+```
+
+Topic lines are automatically stripped of common list markers (`1.`, `-`, `*`, `•`):
+
+```
+# Input file topics.txt:
+1. Octopuses have three hearts
+- Penguins propose with a stone
+2) Giraffes sleep the least
+5 mistakes everyone makes at work  # content number preserved
+```
+
+### Theme mode (LLM constrained to themes)
+
+Add themes to `config.yaml` under `theme_list`:
+
+```yaml
+theme_list:
+  - job
+  - animal
+  - computer
+```
+
+Then use them with `--theme` (or run without to use all configured themes):
+
+```
+# Use all configured themes
+uv run refill --lang en --force --count 20
+
+# Use only specific theme(s)
+uv run refill --lang en --theme job --theme animal --force --count 5
 ```
 
 `--jobs-dir` / `--seen-dir` can be skipped once you set `paths.jobs_dir`
@@ -163,6 +208,12 @@ generation:
 # Permanent directories to scan when running init-seen
 scan_dirs:
   - /your/path/to/videos
+
+# Optional: constrain LLM to specific themes
+theme_list:
+  - job
+  - animal
+  - computer
 
 langs:
   en:

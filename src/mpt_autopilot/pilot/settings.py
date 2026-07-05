@@ -39,6 +39,7 @@ class Settings:
     refill_threshold: int
     scan_dirs: list[str]
     langs: dict[str, LangSettings]
+    theme_list: list[str]
 
     # Paths — from config.yaml (optional; CLI flags always take priority)
     jobs_dir: Path | None
@@ -67,7 +68,12 @@ def _require_env(key: str) -> str:
     return val
 
 
-def load(config_path: Path | None = None, env_path: Path | None = None) -> Settings:
+def load(
+        config_path: Path | None = None,
+        env_path: Path | None = None,
+        *,
+        require_llm: bool = True,
+) -> Settings:
     load_dotenv(env_path or (_ROOT / ".env"))
 
     cfg_path = config_path or (_ROOT / "config.yaml")
@@ -83,6 +89,18 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
     langs_raw = raw.get("langs") or {}
     scan_dirs = raw.get("scan_dirs") or []
     paths_raw = raw.get("paths") or {}
+
+    # Parse theme_list — list of strings, or a bare string (wraps to list).
+    # Anything else falls back to empty with a warning.
+    tl_raw = raw.get("theme_list")
+    if isinstance(tl_raw, list):
+        theme_list = [str(t).strip() for t in tl_raw if str(t).strip()]
+    elif isinstance(tl_raw, str) and tl_raw.strip():
+        theme_list = [tl_raw.strip()]
+    else:
+        theme_list = []
+    if tl_raw is not None and not theme_list:
+        print("[warn] theme_list in config.yaml is empty or malformed — ignoring")
 
     cfg_jobs_dir = paths_raw.get("jobs_dir")
     cfg_seen_dir = paths_raw.get("seen_dir")
@@ -105,14 +123,20 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
     jobs_dir = (cfg_dir / cfg_jobs_dir).resolve() if cfg_jobs_dir else None
     seen_dir = (cfg_dir / cfg_seen_dir).resolve() if cfg_seen_dir else jobs_dir
 
+    def _env(key: str) -> str:
+        if require_llm:
+            return _require_env(key)
+        return os.environ.get(key, "").strip()
+
     return Settings(
-        api_key=_require_env("LLM_API_KEY"),
-        base_url=_require_env("LLM_BASE_URL").rstrip("/"),
-        model=_require_env("LLM_MODEL"),
+        api_key=_env("LLM_API_KEY"),
+        base_url=_env("LLM_BASE_URL").rstrip("/"),
+        model=_env("LLM_MODEL"),
         generate_count=int(gen.get("count", 21)),
         refill_threshold=int(gen.get("threshold", 10)),
         scan_dirs=scan_dirs,
         langs=langs,
+        theme_list=theme_list,
         jobs_dir=jobs_dir,
         seen_dir=seen_dir,
     )
