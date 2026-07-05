@@ -5,6 +5,8 @@ Usage:
     uv run upload --account en
     uv run upload --account en --dry-run
     uv run upload --account en --limit 5
+    uv run upload --all-accounts
+    uv run upload --all-accounts --dry-run
 
 Setup:
     cp .env.example .env
@@ -33,6 +35,14 @@ import time
 from pathlib import Path
 
 from yt_uploader.engine import notify
+from yt_uploader.engine.ledger import (
+    is_done,
+    mark_moved,
+    mark_started,
+    mark_uploaded,
+    open_ledger,
+    sha256_file,
+)
 from yt_uploader.engine.metadata import load_meta, sidecar_path, to_meta_json
 from yt_uploader.engine.settings import (
     Account,
@@ -88,59 +98,71 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
     meta_dir = settings.meta_dir / account.name
     uploaded_dir = account.videos_dir / settings.uploaded_dir_name
 
-    uploaded = 0
-    failed = 0
-    stopped_early = False
-    self_limited = False
-    last_index = len(videos) - 1
+    conn = open_ledger(settings.ledger_path)
+    notifiers = notify.build_notifiers(settings)
+    try:
+        uploaded = 0
+        failed = 0
+        stopped_early = False
+        self_limited = False
+        last_index = len(videos) - 1
 
-    for index, video in enumerate(videos):
-        meta = load_meta(video, settings.defaults)
+        for index, video in enumerate(videos):
+            content_hash = sha256_file(video)
+            if is_done(conn, account.name, content_hash):
+                print(f"[{account.name}] skip: {video.name} (already uploaded)")
+                continue
 
-        if dry_run:
-            print(f"[{account.name}] would upload: {video.name}")
-            print(f"    title: {meta.title}")
-            print(f"    tags:  {', '.join(meta.tags)}")
-            print(f"    privacy: {meta.privacy_status}  category: {meta.category_id}")
-            continue
+            meta = load_meta(video, settings.defaults)
 
-        meta_dir.mkdir(parents=True, exist_ok=True)
-        meta_file = meta_dir / f"{video.stem}.json"
-        meta_file.write_text(to_meta_json(meta), encoding="utf-8")
+            if dry_run:
+                print(f"[{account.name}] would upload: {video.name}")
+                print(f"    title: {meta.title}")
+                print(f"    tags:  {', '.join(meta.tags)}")
+                print(f"    privacy: {meta.privacy_status}  category: {meta.category_id}")
+                continue
 
-        print(f"[{account.name}] uploading: {video.name} ({meta.title})")
-        try:
-            upload_video(
-                settings.uploader_binary,
-                video,
-                meta_file,
-                account.client_secrets,
-                account.token_file,
-            )
-        except UploadLimitExceeded:
-            msg = (
-                f"[{account.name}] daily upload limit reached after {uploaded} video(s) - stopping"
-            )
-            print(msg)
-            notify.alert(settings, f"\U0001f534 [upload/{account.name}] {msg}")
-            stopped_early = True
-            break
-        except UploadFailed as exc:
-            failed += 1
-            print(f"[{account.name}] FAILED: {video.name}: {exc}")
-            notify.alert(settings, f"\u26a0\ufe0f [upload/{account.name}] failed: {video.name}")
+            meta_dir.mkdir(parents=True, exist_ok=True)
+            meta_file = meta_dir / f"{video.stem}.json"
+            meta_file.write_text(to_meta_json(meta), encoding="utf-8")
+
+            print(f"[{account.name}] uploading: {video.name} ({meta.title})")
+            mark_started(conn, account.name, content_hash, video.name)
+            try:
+                upload_video(
+                    settings.uploader_binary,
+                    video,
+                    meta_file,
+                    account.client_secrets,
+                    account.token_file,
+                )
+            except UploadLimitExceeded:
+                msg = f"[{account.name}] daily upload limit reached after {uploaded} videos"
+                print(msg)
+                notify.notify_all(notifiers, f"\U0001f534 [upload/{account.name}] {msg}")
+                stopped_early = True
+                break
+            except UploadFailed as exc:
+                failed += 1
+                print(f"[{account.name}] FAILED: {video.name}: {exc}")
+                notify.notify_all(notifiers, f"\u26a0\ufe0f [{account.name}] failed: {video.name}")
+                if index < last_index:
+                    time.sleep(settings.sleep_between_uploads)
+                continue
+
+            mark_uploaded(conn, account.name, content_hash)
+            move_to_uploaded(video, sidecar_path(video), uploaded_dir)
+            mark_moved(conn, account.name, content_hash)
+            uploaded += 1
+            print(f"[{account.name}] done: {video.name} -> {settings.uploaded_dir_name}/")
+            if account.daily_upload_limit is not None and uploaded >= account.daily_upload_limit:
+                self_limited = True
+                break
             if index < last_index:
                 time.sleep(settings.sleep_between_uploads)
-            continue
 
-        move_to_uploaded(video, sidecar_path(video), uploaded_dir)
-        uploaded += 1
-        print(f"[{account.name}] done: {video.name} -> {settings.uploaded_dir_name}/")
-        if account.daily_upload_limit is not None and uploaded >= account.daily_upload_limit:
-            self_limited = True
-            break
-        if index < last_index:
-            time.sleep(settings.sleep_between_uploads)
+    finally:
+        conn.close()
 
     if not dry_run:
         ok = failed == 0 and not stopped_early
@@ -152,8 +174,8 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
             if self_limited
             else ""
         )
-        notify.alert(
-            settings,
+        notify.notify_all(
+            notifiers,
             f"{icon} [upload/{account.name}] uploaded: {uploaded}  failed: {failed}{suffix}",
         )
         print(f"[{account.name}] summary: uploaded={uploaded} failed={failed}{suffix}")
@@ -163,13 +185,49 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
     return EXIT_FAILURES if failed else EXIT_OK
 
 
+def run_all(settings: Settings, *, dry_run: bool, limit: int | None) -> int:
+    """Run upload for all configured accounts, returning aggregated exit code."""
+    per_account: dict[str, int] = {}
+    any_failure = False
+    any_quota = False
+    for name in sorted(settings.accounts):
+        account = settings.accounts[name]
+        try:
+            code = run(settings, account, dry_run=dry_run, limit=limit)
+        except Exception as exc:
+            print(f"[{name}] crashed: {exc}", file=sys.stderr)
+            code = EXIT_FAILURES
+        per_account[name] = code
+        if code == EXIT_QUOTA_STOP:
+            any_quota = True
+        elif code == EXIT_FAILURES:
+            any_failure = True
+
+    print("[all-accounts] summary:")
+    for name, code in per_account.items():
+        label = {EXIT_OK: "ok", EXIT_FAILURES: "failures", EXIT_QUOTA_STOP: "quota-stop"}.get(
+            code, str(code)
+        )
+        print(f"  {name}: {label}")
+
+    if any_failure:
+        return EXIT_FAILURES
+    if any_quota:
+        return EXIT_QUOTA_STOP
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="upload",
-        description="Upload a folder of .mp4 files to YouTube for one account.",
+        description="Upload a folder of .mp4 files to YouTube.",
     )
-    parser.add_argument(
-        "--account", required=True, help="account name, as defined in accounts.yaml"
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--account", help="account name, as defined in accounts.yaml")
+    group.add_argument(
+        "--all-accounts",
+        action="store_true",
+        help="process every account in accounts.yaml",
     )
     parser.add_argument(
         "--dry-run",
@@ -194,12 +252,15 @@ def main() -> None:
 
     try:
         settings = load_settings(config_path=args.config, accounts_path=args.accounts_file)
-        account = get_account(settings, args.account)
     except (FileNotFoundError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(EXIT_FAILURES)
 
-    exit_code = run(settings, account, dry_run=args.dry_run, limit=args.limit)
+    if args.all_accounts:
+        exit_code = run_all(settings, dry_run=args.dry_run, limit=args.limit)
+    else:
+        account = get_account(settings, args.account)
+        exit_code = run(settings, account, dry_run=args.dry_run, limit=args.limit)
     sys.exit(exit_code)
 
 

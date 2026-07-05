@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -22,9 +22,7 @@ def open_ledger(path: Path) -> sqlite3.Connection:
         )
         """
     )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS ix_uploads_status ON uploads(account, status)"
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_uploads_status ON uploads(account, status)")
     conn.commit()
     return conn
 
@@ -58,12 +56,12 @@ def mark_started(
     conn.execute(
         "INSERT OR IGNORE INTO uploads (account, content_hash, video_name, status, created_at) "
         "VALUES (?, ?, ?, 'started', ?)",
-        (account, content_hash, video_name, datetime.now(timezone.utc).isoformat()),
+        (account, content_hash, video_name, datetime.now(UTC).isoformat()),
     )
     conn.execute(
         "UPDATE uploads SET video_name = ?, created_at = ? "
         "WHERE account = ? AND content_hash = ? AND status = 'started'",
-        (video_name, datetime.now(timezone.utc).isoformat(), account, content_hash),
+        (video_name, datetime.now(UTC).isoformat(), account, content_hash),
     )
     conn.commit()
 
