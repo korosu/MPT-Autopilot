@@ -66,9 +66,33 @@ uv run refill --lang es --jobs-dir /your/path/to/jobs
 # Force a refill even if the queue is full
 uv run refill --lang en --jobs-dir /your/path/to/jobs --force
 
-# Generate 50 new ideas instead of the default 21
+# Generate exactly 50 ideas in one LLM call (no threshold top-up)
 uv run refill --lang en --jobs-dir /your/path/to/jobs --count 50
 ```
+
+### Commands
+
+**refill** — the main command that populates the jobs queue:
+
+| Flag | Meaning |
+| ---- | ------- |
+| `--lang LANG` | Required. Language code (e.g. `en`, `es`). Must be defined in `config.yaml`. |
+| `--jobs-dir PATH` | Directory containing `jobs_<lang>.yaml`. Default: `paths.jobs_dir` in `config.yaml`, or current directory. |
+| `--seen-dir PATH` | Directory for `seen_<lang>.txt`. Default: `paths.seen_dir` in `config.yaml`, or `--jobs-dir`. |
+| `--force` | Refill even if the queue is already full (pending ≥ threshold). |
+| `--count N` | Generate exactly N ideas in one LLM call — skips threshold top-up entirely. |
+| `--threshold N` | Override `generation.threshold` from `config.yaml`. |
+| `--topic "TEXT"` (repeatable) | Import a specific topic as a job (no LLM). Combined with `--topics`. |
+| `--topics FILE` | File with topics (one per line) imported as jobs. No LLM. |
+| `--theme THEME` (repeatable) | Constrain LLM to a configured theme. Requires `theme_list` in `config.yaml`. |
+
+**init-seen** — catalog existing videos so they won't be regenerated:
+
+| Flag | Meaning |
+| ---- | ------- |
+| `--dir PATH` (repeatable) | Required: directory to scan for `.mp4` files. |
+| `--lang LANG` | Filter by suffix and write to `seen_<suffix>.txt`. Omit to register all files into `seen.txt`. |
+| `--seen-dir PATH` | Directory for `seen_*.txt` files. Default: `paths.seen_dir` in `config.yaml`, or current directory. |
 
 ### Topics mode (no LLM)
 
@@ -140,7 +164,7 @@ refill --lang en --jobs-dir /your/path/to/jobs
 ## How it works
 
 1. Reads `jobs_<lang>.yaml` and counts **pending** jobs — those that are `enabled: true` and whose `output_file` is not yet in the seen file
-2. If pending < threshold (default: 10), calls the LLM for new ideas
+2. If pending >= threshold (and `--count` not passed), calls the LLM for new ideas. If the queue is still under threshold after dedup, makes up to 2 additional calls to top up. `--count N` skips this top-up and generates exactly N jobs in one call.
 3. Deduplicates against the seen file and what's already in the yaml
 4. Appends new job entries to `jobs_<lang>.yaml` in the correct format
 
@@ -177,6 +201,12 @@ uv run init-seen --lang en --dir /your/path/to/videos
 
 # Spanish: registers only files ending with _es.mp4 → seen_es.txt
 uv run init-seen --lang es --dir /your/path/to/videos
+```
+
+**Override seen directory:**
+
+```
+uv run init-seen --dir /your/videos --seen-dir /your/seen/files
 ```
 
 You can also define permanent scan paths in `config.yaml` under `scan_dirs` so you don't need to pass `--dir` every time:
@@ -227,6 +257,7 @@ langs:
       video_clip_duration: 3
       bgm_volume: 0.15
       paragraph_number: 2
+      duration_range: "30-60"   # narration target (optional)
 
   es:
     label: Spanish

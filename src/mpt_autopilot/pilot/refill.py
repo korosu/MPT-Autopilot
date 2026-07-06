@@ -482,6 +482,9 @@ def run(
     threshold = threshold_override if threshold_override is not None else settings.refill_threshold
     generate_count = count_override if count_override is not None else settings.generate_count
 
+    # --count was given on the CLI → one shot, no threshold top-up or full-queue guard
+    count_explicit = count_override is not None
+
     # Load YAML once; derive both pending count and existing names from it.
     cfg = jobs.load(jobs_dir, lang)
     pending = jobs.count_pending_from(cfg, seen_set)
@@ -490,7 +493,7 @@ def run(
     print(f"[{lang}] jobs dir: {jobs_dir}")
     print(f"[{lang}] pending jobs: {pending} | threshold: {threshold} | seen file: {seen_file} (in {seen_dir})")
 
-    if pending >= threshold and not force:
+    if not count_explicit and pending >= threshold and not force:
         print(f"[{lang}] Queue is full — nothing to do. (Use --force to override.)")
         return 0
 
@@ -578,7 +581,7 @@ def run(
             already_known |= set(new_names)
             prompt_seen_ordered += new_names
 
-        if pending + total_added >= threshold:
+        if count_explicit or pending + total_added >= threshold:
             break
         if not clean_jobs:
             if is_topup:
