@@ -76,10 +76,6 @@ def existing_names_ordered_from(cfg: dict[str, Any]) -> list[str]:
     ]
 
 
-def existing_names(jobs_dir: Path, lang: str) -> set[str]:
-    return existing_names_from(load(jobs_dir, lang))
-
-
 def count_pending_from(cfg: dict[str, Any], seen: set[str]) -> int:
     """Count pending jobs from an already-loaded config dict."""
     return sum(
@@ -87,17 +83,6 @@ def count_pending_from(cfg: dict[str, Any], seen: set[str]) -> int:
         if job.get("enabled", True)
         and job.get("output_file", "") not in seen
     )
-
-
-def count_pending(jobs_dir: Path, lang: str, seen: set[str]) -> int:
-    """
-    Count jobs that are:
-      - enabled: true  (missing key → treated as True)
-      - output_file NOT in seen
-
-    This is the real queue depth.
-    """
-    return count_pending_from(load(jobs_dir, lang), seen)
 
 
 # ── Writing ───────────────────────────────────────────────────────────────────

@@ -19,34 +19,19 @@ _MAX_SEEN_IN_PROMPT = 200
 _THEME_MAX_SUBJECT_CHARS = 80  # For short titles in theme mode
 
 
-def _seen_block(seen_ordered, already_seen) -> str:
+def _seen_block(seen_ordered: list[str]) -> str:
     """Render the ALREADY USED TOPICS block for prompts (shared by both modes)."""
-    if seen_ordered is not None:
-        recent = seen_ordered[-_MAX_SEEN_IN_PROMPT:]
-    else:
-        recent = list(already_seen)[-_MAX_SEEN_IN_PROMPT:]
+    recent = seen_ordered[-_MAX_SEEN_IN_PROMPT:] if seen_ordered else []
     return "\n".join(n.replace(".mp4", "") for n in recent) if recent else "(none yet)"
 
 
 def build(
         lang_cfg: LangSettings,
-        already_seen: set[str],
+        seen_ordered: list[str],
         count: int,
-        seen_ordered: list[str] | None = None,
 ) -> tuple[str, str]:
-    """
-    Returns (system_prompt, user_prompt) for the given language and context.
-
-    seen_ordered: ALL already-used topic filenames the caller wants the LLM
-    to avoid, in insertion order (oldest first) — this should include both
-    rendered videos (seen.txt) AND anything already queued in
-    jobs_<lang>.yaml but not yet rendered, or the LLM won't know about the
-    pending backlog and may propose near-duplicates of it. refill.py builds
-    this combined list before calling build(). Only the most recent
-    _MAX_SEEN_IN_PROMPT entries are sent. Falls back to arbitrary set
-    ordering from already_seen when seen_ordered isn't provided at all.
-    """
-    used_str = _seen_block(seen_ordered, already_seen)
+    """Returns (system_prompt, user_prompt) for the given language and context."""
+    used_str = _seen_block(seen_ordered)
 
     suffix = lang_cfg.file_suffix
     voices_json = json.dumps(lang_cfg.voices)
@@ -117,23 +102,12 @@ Return ONLY a JSON array of exactly {count} objects. No markdown. No commentary.
 
 def build_themes(
         lang_cfg: LangSettings,
-        already_seen: set[str],
+        seen_ordered: list[str],
         count: int,
         themes: list[str],
-        seen_ordered: list[str] | None = None,
 ) -> tuple[str, str]:
-    """
-    Returns (system_prompt, user_prompt) for theme-constrained generation.
-
-    Produces short topic titles (3–12 words, max 80 chars) that will be used
-    as video_subject values. The downstream script generator expands each title
-    into the full video narration.
-
-    - themes: list of themes from config.yaml; each generated title must relate
-      to exactly one of them.
-    - seen_ordered: ALL already-used topic filenames to avoid, same as build().
-    """
-    used_str = _seen_block(seen_ordered, already_seen)
+    """Returns (system_prompt, user_prompt) for theme-constrained generation."""
+    used_str = _seen_block(seen_ordered)
 
     suffix = lang_cfg.file_suffix
     voices_json = json.dumps(lang_cfg.voices)

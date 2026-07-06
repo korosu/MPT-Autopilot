@@ -13,7 +13,7 @@ Most users store everything in one seen.txt. Multi-language setups that
 use file_suffix get separate files automatically.
 
 To migrate to a database later, replace this module with one that
-implements the same four functions: load / contains / add / add_many.
+implements the same functions: load / add / add_many.
 """
 
 from __future__ import annotations
@@ -72,10 +72,6 @@ def load(base_dir: Path, file_suffix: str) -> set[str]:
 def load_ordered(base_dir: Path, file_suffix: str) -> list[str]:
     """Return entries in insertion order (oldest first). Used for recency-aware prompts."""
     return list(_load_list(base_dir, file_suffix))
-
-
-def contains(base_dir: Path, file_suffix: str, output_file: str) -> bool:
-    return output_file in load(base_dir, file_suffix)
 
 
 def add(base_dir: Path, file_suffix: str, output_file: str) -> None:
