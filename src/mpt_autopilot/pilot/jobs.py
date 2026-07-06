@@ -31,6 +31,7 @@ _KEY_ORDER = [
     "name", "enabled", "output_file", "video_subject",
     "video_clip_duration", "video_concat_mode", "voice_rate",
     "voice_name", "bgm_type", "bgm_volume", "paragraph_number",
+    "video_script_prompt",
 ]
 
 # ── Reading ───────────────────────────────────────────────────────────────────

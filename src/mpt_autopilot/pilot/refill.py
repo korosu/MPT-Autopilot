@@ -29,6 +29,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import sys
 from pathlib import Path
@@ -38,7 +39,88 @@ from shorts_pilot.generator.prompt import build_themes
 from shorts_pilot.generator.seen import load_ordered as seen_load_ordered
 from shorts_pilot.generator.llm import call_llm, parse_json_array
 from shorts_pilot.generator.prompt import VIDEO_SUBJECT_MAX_CHARS, build as build_prompt
-from shorts_pilot.generator.settings import LangSettings, Settings, load as load_settings
+from shorts_pilot.generator.settings import LangSettings, load as load_settings
+
+# ponytail: calibration for natural gemini TTS speed (~143 words/min).
+# voice_rate does NOT affect duration for gemini voices (see MPT voice.py:1813).
+# On voice change: move to config.yaml langs.<code>.words_per_second.
+WORDS_PER_SECOND = 2.39
+
+
+def parse_duration_range(s: str | None) -> tuple[int, int | None] | None:
+    """Parse duration_range string into (min_seconds, max_seconds_or_none)."""
+    if not s:
+        return None
+    s = s.strip()
+    # "min+" format (open-ended upper bound)
+    if s.endswith("+"):
+        try:
+            lo = int(s[:-1])
+            if lo <= 0:
+                raise ValueError(f"duration_range '{s}' has non-positive min value")
+            return (lo, None)
+        except ValueError:
+            raise ValueError(
+                f"duration_range '{s}' invalid: expected format 'N+' where N is a "
+                f"positive integer"
+            )
+    # "min-max" format
+    if "-" in s:
+        parts = s.split("-", 1)
+        try:
+            lo, hi = int(parts[0]), int(parts[1])
+            if lo <= 0:
+                raise ValueError(f"duration_range '{s}' has non-positive min value")
+            if hi <= 0:
+                raise ValueError(f"duration_range '{s}' has non-positive max value")
+            if lo > hi:
+                raise ValueError(
+                    f"duration_range '{s}' has min ({lo}) greater than max ({hi})"
+                )
+            return (lo, hi)
+        except ValueError:
+            raise ValueError(
+                f"duration_range '{s}' invalid: expected format 'MIN-MAX' where both "
+                f"are positive integers"
+            )
+    raise ValueError(
+        f"duration_range '{s}' invalid: expected 'MIN-MAX' or 'MIN+' format"
+    )
+
+
+def duration_to_words(sec: tuple[int, int | None]) -> tuple[int, int | None]:
+    """Convert (min_seconds, max_seconds) to word bounds. ceil for min (guarantee), floor for max."""
+    lo, hi = sec
+    return (
+        math.ceil(lo * WORDS_PER_SECOND),
+        None if hi is None else math.floor(hi * WORDS_PER_SECOND),
+    )
+
+
+def paragraph_floor(sec: tuple[int, int | None]) -> int:
+    """Return paragraph_number floor based on upper bound (longer script → more paragraphs)."""
+    _, hi = sec
+    if hi is None or hi > 90:
+        return 3
+    if hi > 60:
+        return 2
+    return 1
+
+
+def build_duration_instruction(words: tuple[int, int | None]) -> str:
+    """Build video_script_prompt instruction for the given word bounds."""
+    lo, hi = words
+    if hi is None:
+        return (
+            f"Narrate at least {lo} words. Do not pad artificially; keep a natural "
+            f"spoken pace. Do not mention word counts."
+        )
+    return (
+        f"Narrate between {lo} and {hi} words. Do not exceed {hi} words; do not fall "
+        f"below {lo} words. Do not pad or cut artificially; keep a natural spoken pace. "
+        f"Do not mention word counts."
+    )
+
 
 # ── Deduplication + cleanup ───────────────────────────────────────────────────
 
@@ -49,6 +131,9 @@ def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
     bgm_type) against config.yaml. Anything missing, the wrong type, or out
     of range is replaced with a safe configured default instead of being
     written into jobs_<lang>.yaml as-is.
+
+    Also handles duration_range: if configured, generates video_script_prompt
+    instruction and adjusts paragraph_number upward per the band floor.
     """
     defaults = lang_cfg.job_defaults
     out = dict(job)
@@ -80,6 +165,15 @@ def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
 
     if not isinstance(out.get("bgm_type"), str) or not out.get("bgm_type"):
         out["bgm_type"] = defaults.get("bgm_type", "random")
+
+    # ponytail: duration_range → video_script_prompt instruction + light paragraph coupling
+    dur = defaults.get("duration_range")
+    if dur:
+        sec = parse_duration_range(dur)
+        out["video_script_prompt"] = build_duration_instruction(duration_to_words(sec))
+        out["paragraph_number"] = max(out["paragraph_number"], paragraph_floor(sec))
+    else:
+        out.pop("video_script_prompt", None)  # defense against LLM hallucination
 
     return out
 
@@ -355,6 +449,10 @@ def run(
 
     lang_cfg = settings.lang(lang)
     suffix = lang_cfg.file_suffix
+
+    # ponytail: validate duration_range before LLM call (topics mode uses _validate later)
+    if lang_cfg.job_defaults.get("duration_range"):
+        parse_duration_range(lang_cfg.job_defaults["duration_range"])
 
     if topics:
         return _run_topics(lang, jobs_dir, seen_dir, settings, lang_cfg, topics)
