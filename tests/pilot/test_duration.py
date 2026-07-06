@@ -15,7 +15,7 @@ src_dir = Path(__file__).parent.parent / "src"
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
 
-from shorts_pilot.refill import (
+from shorts_pilot.refill import (  # noqa: E402
     parse_duration_range,
     duration_to_words,
     paragraph_floor,
@@ -23,7 +23,7 @@ from shorts_pilot.refill import (
     _validate_against_config,
     WORDS_PER_SECOND,
 )
-from shorts_pilot.generator.settings import LangSettings
+from shorts_pilot.generator.settings import LangSettings  # noqa: E402
 
 
 def test_words_per_second() -> None:

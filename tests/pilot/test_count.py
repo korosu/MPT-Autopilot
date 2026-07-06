@@ -19,8 +19,8 @@ src_dir = Path(__file__).parent.parent / "src"
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
 
-from shorts_pilot.generator.settings import LangSettings, Settings
-from shorts_pilot.refill import run
+from shorts_pilot.generator.settings import LangSettings, Settings  # noqa: E402
+from shorts_pilot.refill import run  # noqa: E402
 
 
 def make_settings(count: int = 21, threshold: int = 10, suffix: str = "") -> Settings:
