@@ -541,15 +541,13 @@ def run(
         # Swap prompt builder and subject floor based on theme mode.
         if active_themes:
             system_prompt, user_prompt = build_themes(
-                lang_cfg, already_known, this_count,
-                themes=active_themes, seen_ordered=prompt_seen_ordered,
+                lang_cfg, prompt_seen_ordered, this_count, themes=active_themes,
             )
-            subj_min = _THEME_MIN_SUBJECT_CHARS
         else:
             system_prompt, user_prompt = build_prompt(
-                lang_cfg, already_known, this_count, seen_ordered=prompt_seen_ordered,
+                lang_cfg, prompt_seen_ordered, this_count,
             )
-            subj_min = _MIN_VIDEO_SUBJECT_CHARS
+        subj_min = _THEME_MIN_SUBJECT_CHARS if active_themes else _MIN_VIDEO_SUBJECT_CHARS
 
         print(f"[{lang}] calling LLM for {this_count} ideas...")
 
