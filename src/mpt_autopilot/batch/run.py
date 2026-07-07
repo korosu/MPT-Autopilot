@@ -297,8 +297,7 @@ def _print_summary(
 
     log("=" * 50, settings)
     log(
-        f"DONE  ok={len(ok)}  failed={len(failed)}  skipped={len(skipped)}  "
-        f"duration={duration}",
+        f"DONE  ok={len(ok)}  failed={len(failed)}  skipped={len(skipped)}  duration={duration}",
         settings,
     )
     for name in ok:
