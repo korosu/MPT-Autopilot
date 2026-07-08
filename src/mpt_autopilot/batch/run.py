@@ -172,8 +172,9 @@ def run_job(job: dict, defaults: dict, voice_pool: dict, settings: Settings) -> 
 # ── Core logic ────────────────────────────────────────────────────────────────
 
 
-def run(jobs_path: Path, settings: Settings, *, dry_run: bool,
-          seen_override: Path | None = None) -> None:
+def run(
+    jobs_path: Path, settings: Settings, *, dry_run: bool, seen_override: Path | None = None
+) -> None:
     with open(jobs_path, "r", encoding="utf-8") as f:
         jobs_cfg = yaml.safe_load(f) or {}
 
@@ -185,11 +186,17 @@ def run(jobs_path: Path, settings: Settings, *, dry_run: bool,
 
     # Warn if defaults section is missing critical fields
     if not defaults:
-        log("WARNING: jobs file has no 'defaults:' section — "
-            "videos may render with wrong language/aspect/subtitles", settings)
+        log(
+            "WARNING: jobs file has no 'defaults:' section — "
+            "videos may render with wrong language/aspect/subtitles",
+            settings,
+        )
     elif "video_language" not in defaults:
-        log("WARNING: 'defaults:' missing 'video_language' — "
-            "output language may default incorrectly", settings)
+        log(
+            "WARNING: 'defaults:' missing 'video_language' — "
+            "output language may default incorrectly",
+            settings,
+        )
 
     disabled_count = sum(1 for j in jobs if not j.get("enabled", True))
     already_done_count = sum(
