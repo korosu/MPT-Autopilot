@@ -130,7 +130,7 @@ def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
     video_clip_duration, bgm_volume, paragraph_number, video_concat_mode,
     bgm_type) against config.yaml. Anything missing, the wrong type, or out
     of range is replaced with a safe configured default instead of being
-    written into jobs_<lang>.yaml as-is.
+    written into the jobs yaml as-is.
 
     Also handles duration_range: if configured, generates video_script_prompt
     instruction and adjusts paragraph_number upward per the band floor.
@@ -385,7 +385,7 @@ def _run_topics(
     """
     suffix = lang_cfg.file_suffix
     seen_set = seen.load(seen_dir, suffix)
-    cfg = jobs.load(jobs_dir, lang)
+    cfg = jobs.load(jobs_dir, suffix, lang)
     already_known = seen_set | jobs.existing_names_from(cfg)
     foreign_suffixes = {
         c.file_suffix for code, c in settings.langs.items()
@@ -413,8 +413,9 @@ def _run_topics(
     print(f"[{lang}] after dedup: {len(clean_jobs)} new jobs")
 
     if clean_jobs:
-        jobs.append(jobs_dir, lang, clean_jobs)
-        print(f"[{lang}] appended {len(clean_jobs)} jobs to jobs_{lang}.yaml")
+        jobs.append(jobs_dir, suffix, lang, clean_jobs)
+        jobs_file = jobs._new_path(jobs_dir, suffix).name
+        print(f"[{lang}] appended {len(clean_jobs)} jobs to {jobs_file}")
 
     return len(clean_jobs)
 
@@ -486,7 +487,7 @@ def run(
     count_explicit = count_override is not None
 
     # Load YAML once; derive both pending count and existing names from it.
-    cfg = jobs.load(jobs_dir, lang)
+    cfg = jobs.load(jobs_dir, suffix, lang)
     pending = jobs.count_pending_from(cfg, seen_set)
 
     seen_file = "seen.txt" if not suffix else f"seen_{suffix.lstrip('_')}.txt"
@@ -511,7 +512,7 @@ def run(
     }
 
     # seen_list only covers rendered videos (seen.txt). Topics already
-    # queued in jobs_<lang>.yaml but not yet rendered are just as much
+    # queued in the jobs yaml but not yet rendered are just as much
     # "already used" from the LLM's point of view — without them the
     # prompt's dedup context misses the whole pending backlog, and the
     # LLM can propose near-duplicates of ideas that simply haven't been
@@ -570,8 +571,9 @@ def run(
         print(f"[{lang}] after dedup: {len(clean_jobs)} new jobs")
 
         if clean_jobs:
-            jobs.append(jobs_dir, lang, clean_jobs)
-            print(f"[{lang}] appended {len(clean_jobs)} jobs to jobs_{lang}.yaml")
+            jobs.append(jobs_dir, suffix, lang, clean_jobs)
+            jobs_file = jobs._new_path(jobs_dir, suffix).name
+            print(f"[{lang}] appended {len(clean_jobs)} jobs to {jobs_file}")
             total_added += len(clean_jobs)
 
             # Feed this attempt's new names into the next attempt's dedup
@@ -627,7 +629,7 @@ Examples:
     parser.add_argument("--lang", required=True, metavar="LANG",
                         help="Language code (e.g. en, es). Must be defined in config.yaml.")
     parser.add_argument("--jobs-dir", type=Path, default=None, metavar="PATH",
-                        help="Directory containing jobs_<lang>.yaml files. "
+                        help="Directory containing jobs.yaml / jobs_<suffix>.yaml files. "
                              "Default: paths.jobs_dir from config.yaml, else current directory.")
     parser.add_argument("--seen-dir", type=Path, default=None, metavar="PATH",
                         help="Directory for seen_<lang>.txt files. "

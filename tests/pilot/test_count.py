@@ -48,7 +48,7 @@ def make_settings(count: int = 21, threshold: int = 10, suffix: str = "") -> Set
 
 
 def make_jobs_yaml(path: Path, jobs_list: list[dict] | None = None) -> None:
-    """Write a minimal jobs_en.yaml with optional pre-existing jobs."""
+    """Write a minimal jobs.yaml with optional pre-existing jobs."""
     content = "jobs:\n"
     if jobs_list:
         for j in jobs_list:
@@ -82,7 +82,7 @@ def test_count_one_call_regardless_of_threshold():
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
-        jobs_file = tmp_dir / "jobs_en.yaml"
+        jobs_file = tmp_dir / "jobs.yaml"
         make_jobs_yaml(jobs_file)
 
         with patch.object(refill, "load_settings", return_value=make_settings(threshold=50)):
@@ -130,7 +130,7 @@ def test_count_bypasses_full_queue_guard():
         existing = [{"output_file": f"existing_{i}.mp4",
                      "video_subject": f"Existing fact number {i} about nature and biology "}
                     for i in range(15)]
-        make_jobs_yaml(tmp_dir / "jobs_en.yaml", existing)
+        make_jobs_yaml(tmp_dir / "jobs.yaml", existing)
 
         with patch.object(refill, "load_settings", return_value=make_settings(threshold=10)):
             with patch.object(refill, "call_llm", mock_call_llm):
@@ -163,7 +163,7 @@ def test_no_count_uses_threshold_guard():
         existing = [{"output_file": f"existing_{i}.mp4",
                      "video_subject": f"Existing fact number {i} " * 5}
                     for i in range(15)]
-        make_jobs_yaml(tmp_dir / "jobs_en.yaml", existing)
+        make_jobs_yaml(tmp_dir / "jobs.yaml", existing)
 
         with patch.object(refill, "load_settings", return_value=make_settings(threshold=10)):
             # No --count (count_override=None), no --force → should skip
