@@ -172,14 +172,24 @@ def run_job(job: dict, defaults: dict, voice_pool: dict, settings: Settings) -> 
 # ── Core logic ────────────────────────────────────────────────────────────────
 
 
-def run(jobs_path: Path, settings: Settings, *, dry_run: bool) -> None:
+def run(jobs_path: Path, settings: Settings, *, dry_run: bool,
+          seen_override: Path | None = None) -> None:
     with open(jobs_path, "r", encoding="utf-8") as f:
         jobs_cfg = yaml.safe_load(f) or {}
 
     defaults: dict = jobs_cfg.get("defaults", {})
     jobs: list[dict] = jobs_cfg.get("jobs", [])
-    already_seen = seen.load(settings.seen_file)
+    seen_file = seen_override or settings.seen_file
+    already_seen = seen.load(seen_file)
     voice_pool = settings.voice_pool
+
+    # Warn if defaults section is missing critical fields
+    if not defaults:
+        log("WARNING: jobs file has no 'defaults:' section — "
+            "videos may render with wrong language/aspect/subtitles", settings)
+    elif "video_language" not in defaults:
+        log("WARNING: 'defaults:' missing 'video_language' — "
+            "output language may default incorrectly", settings)
 
     disabled_count = sum(1 for j in jobs if not j.get("enabled", True))
     already_done_count = sum(
@@ -232,7 +242,7 @@ def run(jobs_path: Path, settings: Settings, *, dry_run: bool) -> None:
             skipped.append(f"{name} (disabled)")
             continue
 
-        if seen.contains(settings.seen_file, job["output_file"]):
+        if seen.contains(seen_file, job["output_file"]):
             skipped.append(f"{name} (already done)")
             log(f"skip: {job['output_file']} (in seen registry)", settings)
             continue
@@ -242,7 +252,7 @@ def run(jobs_path: Path, settings: Settings, *, dry_run: bool) -> None:
         if success:
             ok.append(name)
             consecutive_failures = 0
-            seen.add(settings.seen_file, job["output_file"])
+            seen.add(seen_file, job["output_file"])
             if (
                 settings.cache_cleanup_enabled
                 and settings.cache_cleanup_interval > 0
@@ -333,6 +343,9 @@ Examples:
     batch --dry-run
     batch --status
     batch --list-voices es
+
+    # Multi-language: override seen file to match shorts-pilot's per-lang seen files
+    batch --jobs jobs_es.yaml --seen seen_es.txt
 """,
     )
     parser.add_argument(
@@ -367,6 +380,16 @@ Examples:
             "e.g. `--list-voices es` or `--list-voices gemini`."
         ),
     )
+    parser.add_argument(
+        "--seen",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Override seen_file from config.yaml (e.g. --seen seen_es.txt for "
+            "multi-language setups using shorts-pilot)."
+        ),
+    )
     return parser
 
 
@@ -396,9 +419,16 @@ def main() -> None:
         print(f"[ERROR] {e}")
         sys.exit(1)
 
+    # Resolve --seen path relative to config.yaml's location (same as seen_file)
+    seen_override: Path | None = None
+    if args.seen is not None:
+        cfg_dir = args.config.resolve().parent
+        seen_override = cfg_dir / args.seen if not args.seen.is_absolute() else args.seen
+
     if args.status:
-        entries = seen.list_all(settings.seen_file)
-        print(f"\nSeen registry: {settings.seen_file}")
+        seen_path = seen_override or settings.seen_file
+        entries = seen.list_all(seen_path)
+        print(f"\nSeen registry: {seen_path}")
         print(f"Total entries: {len(entries)}\n")
         for name in entries:
             print(f"  {name}")
@@ -413,7 +443,7 @@ def main() -> None:
         print(f"        Copy jobs.example.yaml to {args.jobs} and add your video topics.")
         sys.exit(1)
 
-    run(args.jobs, settings, dry_run=args.dry_run)
+    run(args.jobs, settings, dry_run=args.dry_run, seen_override=seen_override)
 
 
 if __name__ == "__main__":

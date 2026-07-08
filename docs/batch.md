@@ -76,11 +76,11 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv run batch
 
 # Use a different jobs file (e.g. for another language or account)
-uv run batch --jobs jobs_en.yaml
+uv run batch --jobs jobs.yaml
 uv run batch --jobs jobs_es.yaml
 
 # Use a different config
-uv run batch --config /path/to/config.yaml --jobs jobs_en.yaml
+uv run batch --config /path/to/config.yaml --jobs jobs.yaml
 
 # Preview which jobs would run without generating anything
 uv run batch --dry-run
@@ -226,20 +226,6 @@ voices:
 
 ---
 
-## Multiple languages / accounts
-
-Create a separate jobs file per language and run them independently:
-
-```bash
-uv run batch --jobs jobs_en.yaml
-uv run batch --jobs jobs_es.yaml
-```
-
-Both runs share the same `seen.txt` by default, so there's no risk of one
-run re-generating a video the other already produced.
-
----
-
 ## Telegram alerts
 
 Set `TELEGRAM_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`. Alerts are sent when a batch starts, finishes, and on abort. Leave both empty to disable.
@@ -251,6 +237,38 @@ The prefix shown in every alert (`[mpt-batch] Batch done`) can be changed in `co
 ```yaml
 telegram_prefix: "my-server"
 ```
+
+---
+
+## Works together with [shorts-pilot](https://github.com/korosu/shorts-pilot)
+
+shorts-pilot auto-generates YouTube Shorts ideas; mpt-batch renders the videos:
+
+```
+shorts-pilot ──→ jobs.yaml / jobs_<suffix>.yaml ──→ mpt-batch ──→ videos
+     ↓
+  seen.txt / seen_<suffix>.txt (per-language deduplication)
+```
+
+**One-time setup:**
+
+1. Your jobs file must have a `defaults:` section with at least `video_language`:
+   ```yaml
+   defaults:
+     video_language: "en"   # REQUIRED: otherwise wrong language may be used
+     video_aspect: "9:16"
+     subtitle_enabled: true
+   jobs:
+     # …
+   ```
+
+2. For multi-language, use matching seen files with `--seen`:
+   ```
+   uv run batch --jobs jobs.yaml --seen seen.txt
+   uv run batch --jobs jobs_es.yaml --seen seen_es.txt
+   ```
+
+Without `--seen`, mpt-batch uses `seen.txt` from config.yaml — videos from other languages may be re-generated.
 
 ---
 
@@ -286,7 +304,7 @@ Cleanup always runs once at the end of a batch (when enabled). `cache_cleanup_in
 
 ```bash
 # Generate every night at 20:30
-30 20 * * * cd /root/mpt-batch && uv run batch --jobs jobs_en.yaml >> logs/cron.log 2>&1
+30 20 * * * cd /root/mpt-batch && uv run batch --jobs jobs.yaml >> logs/cron.log 2>&1
 ```
 
 ---
