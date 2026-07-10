@@ -1,4 +1,5 @@
 """Tests for writer.py - hashtag persistence."""
+
 from __future__ import annotations
 
 import json
