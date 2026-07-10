@@ -43,6 +43,7 @@ def test_find_uploader_binary_absolute_path_missing(tmp_path):
 def test_find_uploader_binary_resolves_via_path(monkeypatch, tmp_path):
     # Skip on Windows - shutil.which requires .exe extension
     import sys
+
     if sys.platform == "win32":
         pytest.skip("Windows requires .exe extension for shutil.which")
     fake = tmp_path / "toolname"
@@ -107,11 +108,10 @@ def test_validate_account_ready_missing_client_secrets(tmp_path):
 
 
 def test_daily_upload_limit_must_be_positive(tmp_path):
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", delete=False
-    ) as accounts_file, tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", delete=False
-    ) as config_file:
+    with (
+        tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as accounts_file,
+        tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as config_file,
+    ):
         accounts_file.write(
             "accounts:\n  en:\n"
             "    videos_dir: /tmp/v\n"

@@ -112,9 +112,7 @@ def test_ledger_marks_moved_after_success(tmp_path, monkeypatch):
         # video was moved, so it no longer exists at source
         assert not video.exists()
     # ledger shows both as 'moved'
-    cur = conn.execute(
-        "SELECT status FROM uploads WHERE account = ?", (account.name,)
-    )
+    cur = conn.execute("SELECT status FROM uploads WHERE account = ?", (account.name,))
     statuses = [row[0] for row in cur.fetchall()]
     assert all(s == "moved" for s in statuses)
     conn.close()

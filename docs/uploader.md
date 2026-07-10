@@ -133,6 +133,43 @@ Every field is optional - anything missing falls back to `defaults:` in
 replaced by spaces, e.g. `air_traffic_controllers.mp4` → "air traffic
 controllers".
 
+### Hashtag placement
+
+The `tags` field in the sidecar can be populated by `hashtag-enricher`'s flat
+`tags` key. Use `hashtag_placement` to control where they go in the YouTube upload:
+
+```yaml
+defaults:
+  hashtag_placement: both  # default
+```
+
+Three modes:
+
+| Mode | Behavior |
+|------|----------|
+| `tags` | Writes to hidden metadata field |
+| `description` | Appends as visible hashtags to description |
+| `both` | Applies both independently (default) |
+
+Example sidecar from `hashtag-enricher`:
+```json
+{
+  "hashtags": {"tags_list": ["#shorts", "#history"]},
+  "tags": ["#shorts", "#history"]
+}
+```
+
+With `hashtag_placement: both`, this becomes:
+```json
+{
+  "title": "My Video",
+  "description": "My Video #shorts #history",
+  "tags": ["shorts", "history"],
+  "privacyStatus": "private",
+  "categoryId": "22"
+}
+```
+
 ## Multiple accounts
 
 Each key under `accounts:` in `accounts.yaml` is independent - its own videos
