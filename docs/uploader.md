@@ -1,9 +1,16 @@
 # yt-shorts-uploader
 
-![lint](https://github.com/korosu/yt-shorts-uploader/actions/workflows/lint.yml/badge.svg)
+[![lint](https://github.com/korosu/yt-shorts-uploader/actions/workflows/lint.yml/badge.svg)](https://github.com/korosu/yt-shorts-uploader/actions/workflows/lint.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 Uploads a folder of `.mp4` files to YouTube, one account (channel) at a time.
 Doesn't care where the videos came from - point it at any folder.
+
+> **This is a wrapper around [porjo/youtubeuploader](https://github.com/porjo/youtubeuploader).**
+> The tool does not implement the YouTube API itself — it orchestrates calls to
+> youtubeuploader, adding multi-account support, metadata handling, retry logic,
+> and optional notifications.
 
 Built to sit downstream of [mpt-batch](https://github.com/korosu/mpt-batch), but
 has no dependency on it: any tool that drops MP4s (optionally with a metadata

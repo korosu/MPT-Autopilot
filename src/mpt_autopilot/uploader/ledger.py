@@ -1,3 +1,7 @@
+"""
+ledger.py — SQLite-based crash-safe ledger for upload dedup.
+"""
+
 from __future__ import annotations
 
 import hashlib

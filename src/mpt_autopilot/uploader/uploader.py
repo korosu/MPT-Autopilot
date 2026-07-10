@@ -1,3 +1,7 @@
+"""
+uploader.py — subprocess wrapper for youtubeuploader with retry logic.
+"""
+
 from __future__ import annotations
 
 import subprocess

@@ -1,3 +1,7 @@
+"""
+settings.py — YAML config loading with Settings dataclass.
+"""
+
 from __future__ import annotations
 
 import os
