@@ -165,7 +165,8 @@ For each `*.mp4` file, a `{video_name}.json` is created (or updated) next to it:
     "model": "gpt-4o-mini",
     "detected_language": "English",
     "source": "filename"
-  }
+  },
+  "tags": ["#shorts", "#romanempire", "#historyfacts", "#ancientrome"]
 }
 ```
 
@@ -200,37 +201,10 @@ This requires no configuration; it happens automatically.
 ## youtubeuploader integration
 
 If you use [youtubeuploader](https://github.com/porjo/youtubeuploader) to publish your videos,
-you can feed the generated hashtags directly into its `-metaJSON` file.
-
-Read the hashtags from `{video_name}.json` and build the meta file before uploading:
-
-```bash
-name="my_video"
-json_file="${name}.json"
-meta_file="${name}_meta.json"
-
-if jq -e '.hashtags' "$json_file" > /dev/null 2>&1; then
-    tags_json=$(jq -c '[.hashtags.tags_list[]? | ltrimstr("#")] | unique' "$json_file")
-    description=$(jq -r '.hashtags.tags_string // ""' "$json_file")
-else
-    tags_json='["shorts"]'
-    description=""
-fi
-
-cat > "$meta_file" <<EOF
-{
-    "title": "$(echo "$name" | tr '_' ' ')",
-    "description": "$description",
-    "tags": $tags_json,
-    "privacyStatus": "private",
-    "categoryId": "22"
-}
-EOF
-
-youtubeuploader -filename "${name}.mp4" -metaJSON "$meta_file" ...
-```
-
-Hashtags go into both `description` (YouTube displays the first 3 above the title) and `tags`.
+`yt-shorts-uploader` will automatically read the flat `"tags"` key from `{video_name}.json`
+and place them into the upload metadata. See `hashtag_placement` in `yt-shorts-uploader`'s
+`config.yaml` for options: `tags` (hidden metadata only), `description` (visible hashtags),
+or `both` (default).
 
 ---
 
