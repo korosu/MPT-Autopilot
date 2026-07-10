@@ -61,8 +61,7 @@ def parse_duration_range(s: str | None) -> tuple[int, int | None] | None:
             return (lo, None)
         except ValueError:
             raise ValueError(
-                f"duration_range '{s}' invalid: expected format 'N+' where N is a "
-                f"positive integer"
+                f"duration_range '{s}' invalid: expected format 'N+' where N is a positive integer"
             )
     # "min-max" format
     if "-" in s:
@@ -74,18 +73,14 @@ def parse_duration_range(s: str | None) -> tuple[int, int | None] | None:
             if hi <= 0:
                 raise ValueError(f"duration_range '{s}' has non-positive max value")
             if lo > hi:
-                raise ValueError(
-                    f"duration_range '{s}' has min ({lo}) greater than max ({hi})"
-                )
+                raise ValueError(f"duration_range '{s}' has min ({lo}) greater than max ({hi})")
             return (lo, hi)
         except ValueError:
             raise ValueError(
                 f"duration_range '{s}' invalid: expected format 'MIN-MAX' where both "
                 f"are positive integers"
             )
-    raise ValueError(
-        f"duration_range '{s}' invalid: expected 'MIN-MAX' or 'MIN+' format"
-    )
+    raise ValueError(f"duration_range '{s}' invalid: expected 'MIN-MAX' or 'MIN+' format")
 
 
 def duration_to_words(sec: tuple[int, int | None]) -> tuple[int, int | None]:
@@ -124,13 +119,14 @@ def build_duration_instruction(words: tuple[int, int | None]) -> str:
 
 # ── Deduplication + cleanup ───────────────────────────────────────────────────
 
+
 def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
     """
     Check the fields the LLM was asked to fill in (voice_name, voice_rate,
     video_clip_duration, bgm_volume, paragraph_number, video_concat_mode,
     bgm_type) against config.yaml. Anything missing, the wrong type, or out
     of range is replaced with a safe configured default instead of being
-    written into jobs_<lang>.yaml as-is.
+    written into the jobs yaml as-is.
 
     Also handles duration_range: if configured, generates video_script_prompt
     instruction and adjusts paragraph_number upward per the band floor.
@@ -143,8 +139,10 @@ def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
         out["voice_name"] = voices[0]
 
     rate = out.get("voice_rate")
-    if not isinstance(rate, (int, float)) or isinstance(rate, bool) or not (
-        lang_cfg.voice_rate_min <= rate <= lang_cfg.voice_rate_max
+    if (
+        not isinstance(rate, (int, float))
+        or isinstance(rate, bool)
+        or not (lang_cfg.voice_rate_min <= rate <= lang_cfg.voice_rate_max)
     ):
         out["voice_rate"] = lang_cfg.voice_rate_min
 
@@ -215,7 +213,7 @@ def _truncate_subject(subject: str, max_chars: int) -> str:
     # as it isn't so early we'd throw away most of the allowed content.
     last_sentence_end = max(window.rfind("."), window.rfind("!"), window.rfind("?"))
     if last_sentence_end >= max_chars * 0.5:
-        return window[:last_sentence_end + 1]
+        return window[: last_sentence_end + 1]
 
     # No good sentence boundary — fall back to the last word boundary so
     # we at least don't cut a word in half, and round it off with a period.
@@ -231,11 +229,11 @@ def _truncate_subject(subject: str, max_chars: int) -> str:
 
 
 def _normalise(
-        job: dict,
-        expected_suffix: str,
-        lang_cfg: LangSettings | None = None,
-        foreign_suffixes: set[str] | None = None,
-        min_subject_chars: int = _MIN_VIDEO_SUBJECT_CHARS,
+    job: dict,
+    expected_suffix: str,
+    lang_cfg: LangSettings | None = None,
+    foreign_suffixes: set[str] | None = None,
+    min_subject_chars: int = _MIN_VIDEO_SUBJECT_CHARS,
 ) -> dict:
     """
     Return a cleaned copy of job with:
@@ -305,12 +303,12 @@ def _normalise(
 
 
 def _deduplicate(
-        raw_jobs: list[dict],
-        already_known: set[str],
-        lang_cfg: LangSettings | None = None,
-        expected_suffix: str = "",
-        foreign_suffixes: set[str] | None = None,
-        min_subject_chars: int = _MIN_VIDEO_SUBJECT_CHARS,
+    raw_jobs: list[dict],
+    already_known: set[str],
+    lang_cfg: LangSettings | None = None,
+    expected_suffix: str = "",
+    foreign_suffixes: set[str] | None = None,
+    min_subject_chars: int = _MIN_VIDEO_SUBJECT_CHARS,
 ) -> list[dict]:
     # Lowercase for comparison: new output_file values are always already
     # lowercased by _normalise, but already_known (seen.txt + existing yaml
@@ -335,7 +333,10 @@ def _deduplicate(
             # expected, or a missing/empty video_subject) must not take the
             # rest of the batch down with it.
             clean = _normalise(
-                job, expected_suffix, lang_cfg, foreign_suffixes,
+                job,
+                expected_suffix,
+                lang_cfg,
+                foreign_suffixes,
                 min_subject_chars=min_subject_chars,
             )
         except Exception as e:
@@ -370,13 +371,14 @@ def _deduplicate(
 
 # ── Topics mode (no LLM) ───────────────────────────────────────────────────────
 
+
 def _run_topics(
-        lang: str,
-        jobs_dir: Path,
-        seen_dir: Path,
-        settings,
-        lang_cfg: LangSettings,
-        topics: list[str],
+    lang: str,
+    jobs_dir: Path,
+    seen_dir: Path,
+    settings,
+    lang_cfg: LangSettings,
+    topics: list[str],
 ) -> int:
     """
     Import a list of topics without LLM involvement. Each topic becomes a job
@@ -385,15 +387,16 @@ def _run_topics(
     """
     suffix = lang_cfg.file_suffix
     seen_set = seen.load(seen_dir, suffix)
-    cfg = jobs.load(jobs_dir, lang)
+    cfg = jobs.load(jobs_dir, suffix, lang)
     already_known = seen_set | jobs.existing_names_from(cfg)
     foreign_suffixes = {
-        c.file_suffix for code, c in settings.langs.items()
-        if code != lang and c.file_suffix
+        c.file_suffix for code, c in settings.langs.items() if code != lang and c.file_suffix
     }
 
     seen_file = "seen.txt" if not suffix else f"seen_{suffix.lstrip('_')}.txt"
-    print(f"[{lang}] topics mode: {len(topics)} topic(s) | jobs dir: {jobs_dir} | seen: {seen_file} (in {seen_dir})")
+    print(
+        f"[{lang}] topics mode: {len(topics)} topic(s) | jobs dir: {jobs_dir} | seen: {seen_file} (in {seen_dir})"
+    )
     print(f"[{lang}] known titles: {len(already_known)}")
 
     raw_jobs = [
@@ -407,14 +410,18 @@ def _run_topics(
     ]
 
     clean_jobs = _deduplicate(
-        raw_jobs, already_known, lang_cfg,
-        expected_suffix=suffix, foreign_suffixes=foreign_suffixes,
+        raw_jobs,
+        already_known,
+        lang_cfg,
+        expected_suffix=suffix,
+        foreign_suffixes=foreign_suffixes,
     )
     print(f"[{lang}] after dedup: {len(clean_jobs)} new jobs")
 
     if clean_jobs:
-        jobs.append(jobs_dir, lang, clean_jobs)
-        print(f"[{lang}] appended {len(clean_jobs)} jobs to jobs_{lang}.yaml")
+        jobs.append(jobs_dir, suffix, lang, clean_jobs)
+        jobs_file = jobs._new_path(jobs_dir, suffix).name
+        print(f"[{lang}] appended {len(clean_jobs)} jobs to {jobs_file}")
 
     return len(clean_jobs)
 
@@ -429,14 +436,14 @@ _MAX_TOPUP_ATTEMPTS = 2
 
 
 def run(
-        lang: str,
-        jobs_dir: Path | None,
-        seen_dir: Path | None,
-        force: bool,
-        count_override: int | None,
-        threshold_override: int | None,
-        topics: list[str] | None = None,
-        themes: list[str] | None = None,
+    lang: str,
+    jobs_dir: Path | None,
+    seen_dir: Path | None,
+    force: bool,
+    count_override: int | None,
+    threshold_override: int | None,
+    topics: list[str] | None = None,
+    themes: list[str] | None = None,
 ) -> int:
     settings = load_settings(require_llm=topics is None)
 
@@ -486,12 +493,14 @@ def run(
     count_explicit = count_override is not None
 
     # Load YAML once; derive both pending count and existing names from it.
-    cfg = jobs.load(jobs_dir, lang)
+    cfg = jobs.load(jobs_dir, suffix, lang)
     pending = jobs.count_pending_from(cfg, seen_set)
 
     seen_file = "seen.txt" if not suffix else f"seen_{suffix.lstrip('_')}.txt"
     print(f"[{lang}] jobs dir: {jobs_dir}")
-    print(f"[{lang}] pending jobs: {pending} | threshold: {threshold} | seen file: {seen_file} (in {seen_dir})")
+    print(
+        f"[{lang}] pending jobs: {pending} | threshold: {threshold} | seen file: {seen_file} (in {seen_dir})"
+    )
 
     if not count_explicit and pending >= threshold and not force:
         print(f"[{lang}] Queue is full — nothing to do. (Use --force to override.)")
@@ -506,12 +515,11 @@ def run(
     # (or the default, empty-suffix) language gets caught — see fix #7
     # in _normalise().
     foreign_suffixes = {
-        c.file_suffix for code, c in settings.langs.items()
-        if code != lang and c.file_suffix
+        c.file_suffix for code, c in settings.langs.items() if code != lang and c.file_suffix
     }
 
     # seen_list only covers rendered videos (seen.txt). Topics already
-    # queued in jobs_<lang>.yaml but not yet rendered are just as much
+    # queued in the jobs yaml but not yet rendered are just as much
     # "already used" from the LLM's point of view — without them the
     # prompt's dedup context misses the whole pending backlog, and the
     # LLM can propose near-duplicates of ideas that simply haven't been
@@ -536,19 +544,26 @@ def run(
         if is_topup:
             remaining_needed = max(threshold - (pending + total_added), 1)
             this_count = max(generate_count, remaining_needed)
-            print(f"[{lang}] still under threshold ({pending + total_added}/{threshold}) "
-                  f"— topping up (attempt {attempt - 1}/{_MAX_TOPUP_ATTEMPTS})...")
+            print(
+                f"[{lang}] still under threshold ({pending + total_added}/{threshold}) "
+                f"— topping up (attempt {attempt - 1}/{_MAX_TOPUP_ATTEMPTS})..."
+            )
         else:
             this_count = generate_count
 
         # Swap prompt builder and subject floor based on theme mode.
         if active_themes:
             system_prompt, user_prompt = build_themes(
-                lang_cfg, prompt_seen_ordered, this_count, themes=active_themes,
+                lang_cfg,
+                prompt_seen_ordered,
+                this_count,
+                themes=active_themes,
             )
         else:
             system_prompt, user_prompt = build_prompt(
-                lang_cfg, prompt_seen_ordered, this_count,
+                lang_cfg,
+                prompt_seen_ordered,
+                this_count,
             )
         subj_min = _THEME_MIN_SUBJECT_CHARS if active_themes else _MIN_VIDEO_SUBJECT_CHARS
 
@@ -558,20 +573,26 @@ def run(
         raw_jobs = parse_json_array(raw_text)
 
         if len(raw_jobs) < this_count:
-            print(f"[{lang}] WARNING: LLM returned {len(raw_jobs)} of {this_count} requested — queue may still be low after this run")
+            print(
+                f"[{lang}] WARNING: LLM returned {len(raw_jobs)} of {this_count} requested — queue may still be low after this run"
+            )
 
         print(f"[{lang}] LLM returned {len(raw_jobs)} raw jobs")
 
         clean_jobs = _deduplicate(
-            raw_jobs, already_known, lang_cfg,
-            expected_suffix=suffix, foreign_suffixes=foreign_suffixes,
+            raw_jobs,
+            already_known,
+            lang_cfg,
+            expected_suffix=suffix,
+            foreign_suffixes=foreign_suffixes,
             min_subject_chars=subj_min,
         )
         print(f"[{lang}] after dedup: {len(clean_jobs)} new jobs")
 
         if clean_jobs:
-            jobs.append(jobs_dir, lang, clean_jobs)
-            print(f"[{lang}] appended {len(clean_jobs)} jobs to jobs_{lang}.yaml")
+            jobs.append(jobs_dir, suffix, lang, clean_jobs)
+            jobs_file = jobs._new_path(jobs_dir, suffix).name
+            print(f"[{lang}] appended {len(clean_jobs)} jobs to {jobs_file}")
             total_added += len(clean_jobs)
 
             # Feed this attempt's new names into the next attempt's dedup
@@ -601,6 +622,7 @@ def run(
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="refill",
@@ -624,30 +646,73 @@ Examples:
     refill --lang en --theme job --force --count 5  # only themes matching "job"
 """,
     )
-    parser.add_argument("--lang", required=True, metavar="LANG",
-                        help="Language code (e.g. en, es). Must be defined in config.yaml.")
-    parser.add_argument("--jobs-dir", type=Path, default=None, metavar="PATH",
-                        help="Directory containing jobs_<lang>.yaml files. "
-                             "Default: paths.jobs_dir from config.yaml, else current directory.")
-    parser.add_argument("--seen-dir", type=Path, default=None, metavar="PATH",
-                        help="Directory for seen_<lang>.txt files. "
-                             "Default: paths.seen_dir from config.yaml, else --jobs-dir.")
-    parser.add_argument("--force", action="store_true",
-                        help="Refill even if the queue is above the threshold.")
-    parser.add_argument("--count", type=int, default=None, metavar="N",
-                        help="Override generation.count from config.yaml.")
-    parser.add_argument("--threshold", type=int, default=None, metavar="N",
-                        help="Override generation.threshold from config.yaml.")
-    parser.add_argument("--topic", action="append", dest="topic", default=None, metavar="TOPIC",
-                        help="Generate a job for this specific topic (no LLM). Topic text becomes "
-                             "video_subject verbatim. Repeatable. Combined with --topics.")
-    parser.add_argument("--topics", type=Path, dest="topics_file", default=None, metavar="FILE",
-                        help="File (UTF-8, one topic per line, blank lines ignored) imported as jobs. "
-                             "Combined with --topic.")
-    parser.add_argument("--theme", action="append", dest="theme", default=None, metavar="THEME",
-                        help="LLM theme mode: generate short topic titles constrained to this "
-                             "theme from config.yaml theme_list. Repeatable. Without --theme "
-                             "but with a non-empty theme_list, all configured themes are used.")
+    parser.add_argument(
+        "--lang",
+        required=True,
+        metavar="LANG",
+        help="Language code (e.g. en, es). Must be defined in config.yaml.",
+    )
+    parser.add_argument(
+        "--jobs-dir",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Directory containing jobs.yaml / jobs_<suffix>.yaml files. "
+        "Default: paths.jobs_dir from config.yaml, else current directory.",
+    )
+    parser.add_argument(
+        "--seen-dir",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Directory for seen_<lang>.txt files. "
+        "Default: paths.seen_dir from config.yaml, else --jobs-dir.",
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="Refill even if the queue is above the threshold."
+    )
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Override generation.count from config.yaml.",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Override generation.threshold from config.yaml.",
+    )
+    parser.add_argument(
+        "--topic",
+        action="append",
+        dest="topic",
+        default=None,
+        metavar="TOPIC",
+        help="Generate a job for this specific topic (no LLM). Topic text becomes "
+        "video_subject verbatim. Repeatable. Combined with --topics.",
+    )
+    parser.add_argument(
+        "--topics",
+        type=Path,
+        dest="topics_file",
+        default=None,
+        metavar="FILE",
+        help="File (UTF-8, one topic per line, blank lines ignored) imported as jobs. "
+        "Combined with --topic.",
+    )
+    parser.add_argument(
+        "--theme",
+        action="append",
+        dest="theme",
+        default=None,
+        metavar="THEME",
+        help="LLM theme mode: generate short topic titles constrained to this "
+        "theme from config.yaml theme_list. Repeatable. Without --theme "
+        "but with a non-empty theme_list, all configured themes are used.",
+    )
 
     args = parser.parse_args()
 
@@ -665,7 +730,8 @@ Examples:
             print(f"[ERROR] --topics file not found: {args.topics_file}")
             sys.exit(1)
         topic_file_lines = [
-            ln.strip() for ln in args.topics_file.read_text(encoding="utf-8").splitlines()
+            ln.strip()
+            for ln in args.topics_file.read_text(encoding="utf-8").splitlines()
             if ln.strip()
         ]
     inline_topics = [t for t in (args.topic or []) if t.strip()]
@@ -702,26 +768,3 @@ Examples:
         sys.exit(1)
 
     print(f"\n[done] added {added} new jobs.")
-
-
-def _self_check() -> None:
-    """Verify _strip_list_marker behavior — nontrivial regex needs a guardrail."""
-    cases = [
-        ("1. Los pulpos tienen tres corazones y sangre azul", "Los pulpos tienen tres corazones y sangre azul"),
-        ("2) Los elefantes son los únicos animales que no pueden saltar", "Los elefantes son los únicos animales que no pueden saltar"),
-        ("3 - Las jirafas duermen menos que cualquier otro mamífero", "Las jirafas duermen menos que cualquier otro mamífero"),
-        ("- Los gatos no pueden saborear lo dulce", "Los gatos no pueden saborear lo dulce"),
-        ("* The tongue is not the strongest muscle", "The tongue is not the strongest muscle"),
-        ("5 mistakes everyone makes at work", "5 mistakes everyone makes at work"),  # content number preserved
-        ("Why people hate Mondays", "Why people hate Mondays"),
-    ]
-    for input_line, expected in cases:
-        actual = _strip_list_marker(input_line)
-        assert actual == expected, f"_strip_list_marker({input_line!r}) = {actual!r}, expected {expected!r}"
-    print("[self-check] _strip_list_marker: OK")
-
-
-if __name__ == "__main__":
-    # Run self-check on import (non-interactive, silent on success)
-    _self_check()
-    main()

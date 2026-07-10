@@ -2,7 +2,7 @@
 
 Auto-generate YouTube Shorts video ideas and keep your [MoneyPrinterTurbo](https://github.com/harry0703/MoneyPrinterTurbo) jobs queue filled via LLM.
 
-Point it at your `jobs_<lang>.yaml` file — it checks how many videos are still
+Point it at your `jobs.yaml` or `jobs_<suffix>.yaml` file — it checks how many videos are still
 pending, calls an LLM when the queue runs low, and appends fresh ideas in the
 correct format automatically.
 
@@ -16,6 +16,47 @@ correct format automatically.
 - **Multi-language** — generates English, Spanish, or any language you define in `config.yaml`
 - **Topics mode** — import topics verbatim (no LLM) with `--topic` or `--topics`
 - **Theme mode** — constrain LLM to specific themes (e.g., "job", "animal") via `config.yaml` `theme_list`
+
+---
+
+## Works together with [mpt-batch](https://github.com/korosu/mpt-batch)
+
+shorts-pilot generates job entries; mpt-batch renders the videos:
+
+```
+shorts-pilot ──→ jobs.yaml / jobs_<suffix>.yaml ──→ mpt-batch ──→ videos
+     ↓                                                                     ↓
+  seen.txt / seen_<suffix>.txt (tracks what's been generated) ←────────────
+```
+
+**One-time setup for multi-language:**
+
+The `file_suffix` field in `config.yaml` controls both jobs and seen filenames:
+
+| `file_suffix` | Jobs file | Seen file |
+| ------------- | --------- | --------- |
+| `""` (empty) | `jobs.yaml` | `seen.txt` |
+| `"_es"` | `jobs_es.yaml` | `seen_es.txt` |
+
+1. Create the appropriate jobs file with a `defaults:` section (required):
+   ```yaml
+   defaults:
+     video_language: "en"
+     video_aspect: "9:16"
+     subtitle_enabled: true
+   jobs:
+     # …
+   ```
+
+2. After running `refill --lang es`, use matching seen file:
+   ```
+   uv run refill --lang en --jobs-dir /path/to/jobs  # writes to jobs.yaml + seen.txt
+   uv run refill --lang es --jobs-dir /path/to/jobs  # writes to jobs_es.yaml + seen_es.txt
+   uv run batch --jobs jobs.yaml --seen seen.txt
+   uv run batch --jobs jobs_es.yaml --seen seen_es.txt
+   ```
+
+`defaults:` must contain `video_language` at minimum — without it, mpt-batch may render videos in the wrong language or aspect ratio.
 
 ---
 
@@ -77,7 +118,7 @@ uv run refill --lang en --jobs-dir /your/path/to/jobs --count 50
 | Flag | Meaning |
 | ---- | ------- |
 | `--lang LANG` | Required. Language code (e.g. `en`, `es`). Must be defined in `config.yaml`. |
-| `--jobs-dir PATH` | Directory containing `jobs_<lang>.yaml`. Default: `paths.jobs_dir` in `config.yaml`, or current directory. |
+| `--jobs-dir PATH` | Directory containing `jobs.yaml` / `jobs_<suffix>.yaml`. Default: `paths.jobs_dir` in `config.yaml`, or current directory. |
 | `--seen-dir PATH` | Directory for `seen_<lang>.txt`. Default: `paths.seen_dir` in `config.yaml`, or `--jobs-dir`. |
 | `--force` | Refill even if the queue is already full (pending ≥ threshold). |
 | `--count N` | Generate exactly N ideas in one LLM call — skips threshold top-up entirely. |
@@ -163,10 +204,10 @@ refill --lang en --jobs-dir /your/path/to/jobs
 
 ## How it works
 
-1. Reads `jobs_<lang>.yaml` and counts **pending** jobs — those that are `enabled: true` and whose `output_file` is not yet in the seen file
+1. Reads `jobs.yaml` or `jobs_<suffix>.yaml` and counts **pending** jobs — those that are `enabled: true` and whose `output_file` is not yet in the seen file
 2. If pending >= threshold (and `--count` not passed), calls the LLM for new ideas. If the queue is still under threshold after dedup, makes up to 2 additional calls to top up. `--count N` skips this top-up and generates exactly N jobs in one call.
 3. Deduplicates against the seen file and what's already in the yaml
-4. Appends new job entries to `jobs_<lang>.yaml` in the correct format
+4. Appends new job entries to the jobs yaml in the correct format
 
 
 ### Seen file
@@ -261,14 +302,14 @@ langs:
 
   es:
     label: Spanish
-    file_suffix: "_es"     # → uses seen_es.txt
+    file_suffix: "_es"     # → jobs_es.yaml + seen_es.txt
     job_defaults:
       video_clip_duration: 4
 ```
 
 ## Output format
 
-Each generated entry added to `jobs_<lang>.yaml` looks like this:
+Each generated entry added to the jobs yaml looks like this:
 
 ```
 - name: "fact_ants_outweigh_humans"

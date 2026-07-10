@@ -126,8 +126,9 @@ def test_validation_with_duration_range() -> None:
     result = _validate_against_config(job, lang_cfg)
 
     assert "video_script_prompt" in result, "should have video_script_prompt"
-    assert "between 216 and 286 words" in result["video_script_prompt"], \
+    assert "between 216 and 286 words" in result["video_script_prompt"], (
         f"instruction should mention 216-286 words, got: {result['video_script_prompt']}"
+    )
     assert result["paragraph_number"] == 3, "max(2, floor(90-120)) = 3"
 
     print("[check] validation with duration_range: OK")
@@ -154,7 +155,9 @@ def test_validation_without_duration_range() -> None:
     job = {"video_subject": "Test fact", "output_file": "test.mp4"}
     result = _validate_against_config(job, lang_cfg)
 
-    assert "video_script_prompt" not in result, "should NOT have video_script_prompt when not configured"
+    assert "video_script_prompt" not in result, (
+        "should NOT have video_script_prompt when not configured"
+    )
 
     # Test LLM hallucination defense: if LLM returns video_script_prompt anyway
     job_with_hallucination = {
@@ -163,7 +166,9 @@ def test_validation_without_duration_range() -> None:
         "video_script_prompt": "LLM made this up",  # should be stripped
     }
     result2 = _validate_against_config(job_with_hallucination, lang_cfg)
-    assert "video_script_prompt" not in result2, "LLM hallucinated video_script_prompt should be removed"
+    assert "video_script_prompt" not in result2, (
+        "LLM hallucinated video_script_prompt should be removed"
+    )
 
     print("[check] validation without duration_range (backward compat): OK")
 

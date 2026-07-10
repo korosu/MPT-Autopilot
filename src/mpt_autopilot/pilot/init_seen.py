@@ -57,10 +57,7 @@ def _filter_by_suffix(names: set[str], file_suffix: str, all_suffixes: set[str])
     if file_suffix:
         return {n for n in names if n.lower().endswith(f"{file_suffix}.mp4")}
     else:
-        return {
-            n for n in names
-            if not any(n.lower().endswith(f"{s}.mp4") for s in all_suffixes)
-        }
+        return {n for n in names if not any(n.lower().endswith(f"{s}.mp4") for s in all_suffixes)}
 
 
 def init_all(scan_dirs: list[Path], seen_dir: Path) -> int:
@@ -87,11 +84,11 @@ def init_all(scan_dirs: list[Path], seen_dir: Path) -> int:
 
 
 def init_lang(
-        lang: str,
-        file_suffix: str,
-        all_suffixes: set[str],
-        scan_dirs: list[Path],
-        seen_dir: Path,
+    lang: str,
+    file_suffix: str,
+    all_suffixes: set[str],
+    scan_dirs: list[Path],
+    seen_dir: Path,
 ) -> int:
     """--lang mode: filter by suffix and write to the matching seen file."""
     seen_filename = "seen.txt" if not file_suffix else f"seen_{file_suffix.lstrip('_')}.txt"

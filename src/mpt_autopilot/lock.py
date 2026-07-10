@@ -15,9 +15,9 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-_STALE_AFTER = 60      # seconds — a lock file older than this is assumed abandoned
-_WAIT_TIMEOUT = 30     # seconds — how long to wait for another process to finish
-_POLL_INTERVAL = 0.2   # seconds
+_STALE_AFTER = 60  # seconds — a lock file older than this is assumed abandoned
+_WAIT_TIMEOUT = 30  # seconds — how long to wait for another process to finish
+_POLL_INTERVAL = 0.2  # seconds
 
 
 @contextmanager
@@ -62,8 +62,10 @@ def file_lock(target: Path, timeout: float = _WAIT_TIMEOUT, strict: bool = False
                             f"unlocked). Try again once the other process "
                             f"finishes."
                         )
-                    print(f"  [warn] could not acquire lock on {target.name} "
-                          f"after {timeout:.0f}s — proceeding without it")
+                    print(
+                        f"  [warn] could not acquire lock on {target.name} "
+                        f"after {timeout:.0f}s — proceeding without it"
+                    )
                     break
                 time.sleep(_POLL_INTERVAL)
         yield

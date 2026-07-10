@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 
 _ROOT = Path.cwd()
 
+
 @dataclass
 class LangSettings:
     label: str
@@ -51,10 +52,7 @@ class Settings:
 
     def lang(self, code: str) -> LangSettings:
         if code not in self.langs:
-            raise ValueError(
-                f"Unknown lang '{code}'. "
-                f"Available in config.yaml: {list(self.langs)}"
-            )
+            raise ValueError(f"Unknown lang '{code}'. Available in config.yaml: {list(self.langs)}")
         return self.langs[code]
 
 
@@ -62,17 +60,16 @@ def _require_env(key: str) -> str:
     val = os.environ.get(key, "").strip()
     if not val:
         raise EnvironmentError(
-            f"'{key}' is not set. "
-            f"Copy .env.example to .env and fill in your values."
+            f"'{key}' is not set. Copy .env.example to .env and fill in your values."
         )
     return val
 
 
 def load(
-        config_path: Path | None = None,
-        env_path: Path | None = None,
-        *,
-        require_llm: bool = True,
+    config_path: Path | None = None,
+    env_path: Path | None = None,
+    *,
+    require_llm: bool = True,
 ) -> Settings:
     load_dotenv(env_path or (_ROOT / ".env"))
 

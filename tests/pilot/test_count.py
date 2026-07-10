@@ -32,15 +32,22 @@ def make_settings(count: int = 21, threshold: int = 10, suffix: str = "") -> Set
         generate_count=count,
         refill_threshold=threshold,
         scan_dirs=[],
-        langs={"en": LangSettings(
-            label="English",
-            file_suffix=suffix,
-            voice_rate_min=1.05,
-            voice_rate_max=1.20,
-            voices=["gemini:puck"],
-            job_defaults={"video_clip_duration": 3, "video_concat_mode": "random",
-                          "bgm_type": "random", "bgm_volume": 0.15, "paragraph_number": 2},
-        )},
+        langs={
+            "en": LangSettings(
+                label="English",
+                file_suffix=suffix,
+                voice_rate_min=1.05,
+                voice_rate_max=1.20,
+                voices=["gemini:puck"],
+                job_defaults={
+                    "video_clip_duration": 3,
+                    "video_concat_mode": "random",
+                    "bgm_type": "random",
+                    "bgm_volume": 0.15,
+                    "paragraph_number": 2,
+                },
+            )
+        },
         theme_list=[],
         jobs_dir=None,
         seen_dir=None,
@@ -48,7 +55,7 @@ def make_settings(count: int = 21, threshold: int = 10, suffix: str = "") -> Set
 
 
 def make_jobs_yaml(path: Path, jobs_list: list[dict] | None = None) -> None:
-    """Write a minimal jobs_en.yaml with optional pre-existing jobs."""
+    """Write a minimal jobs.yaml with optional pre-existing jobs."""
     content = "jobs:\n"
     if jobs_list:
         for j in jobs_list:
@@ -67,14 +74,22 @@ def test_count_one_call_regardless_of_threshold():
         nonlocal call_count
         call_count += 1
         # Return exactly N jobs (N = the count passed)
-        return json.dumps([
-            {"output_file": f"fact_{call_count}_a.mp4",
-             "video_subject": "Octopuses have three hearts pumping blue blood everywhere "},
-            {"output_file": f"fact_{call_count}_b.mp4",
-             "video_subject": "Penguins propose to mates by presenting polished volcanic stones "},
-            {"output_file": f"fact_{call_count}_c.mp4",
-             "video_subject": "Giraffes can go weeks without drinking water at all "},
-        ])
+        return json.dumps(
+            [
+                {
+                    "output_file": f"fact_{call_count}_a.mp4",
+                    "video_subject": "Octopuses have three hearts pumping blue blood everywhere ",
+                },
+                {
+                    "output_file": f"fact_{call_count}_b.mp4",
+                    "video_subject": "Penguins propose to mates by presenting polished volcanic stones ",
+                },
+                {
+                    "output_file": f"fact_{call_count}_c.mp4",
+                    "video_subject": "Giraffes can go weeks without drinking water at all ",
+                },
+            ]
+        )
 
     # Patch both load_settings and call_llm in the refill module
     from unittest.mock import patch
@@ -82,7 +97,7 @@ def test_count_one_call_regardless_of_threshold():
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
-        jobs_file = tmp_dir / "jobs_en.yaml"
+        jobs_file = tmp_dir / "jobs.yaml"
         make_jobs_yaml(jobs_file)
 
         with patch.object(refill, "load_settings", return_value=make_settings(threshold=50)):
@@ -112,14 +127,22 @@ def test_count_bypasses_full_queue_guard():
     def mock_call_llm(system_prompt, user_prompt, settings, count):
         nonlocal call_count
         call_count += 1
-        return json.dumps([
-            {"output_file": "fact_one.mp4",
-             "video_subject": "Octopuses have three hearts and blue blood circulating through their arms "},
-            {"output_file": "fact_two.mp4",
-             "video_subject": "Penguins propose with stones that they have polished on the ocean floor "},
-            {"output_file": "fact_three.mp4",
-             "video_subject": "Giraffes can survive without water for extremely long stretches of time "},
-        ])
+        return json.dumps(
+            [
+                {
+                    "output_file": "fact_one.mp4",
+                    "video_subject": "Octopuses have three hearts and blue blood circulating through their arms ",
+                },
+                {
+                    "output_file": "fact_two.mp4",
+                    "video_subject": "Penguins propose with stones that they have polished on the ocean floor ",
+                },
+                {
+                    "output_file": "fact_three.mp4",
+                    "video_subject": "Giraffes can survive without water for extremely long stretches of time ",
+                },
+            ]
+        )
 
     from unittest.mock import patch
     import shorts_pilot.refill as refill
@@ -127,10 +150,14 @@ def test_count_bypasses_full_queue_guard():
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
         # Queue is "full" (15 pending, threshold=10)
-        existing = [{"output_file": f"existing_{i}.mp4",
-                     "video_subject": f"Existing fact number {i} about nature and biology "}
-                    for i in range(15)]
-        make_jobs_yaml(tmp_dir / "jobs_en.yaml", existing)
+        existing = [
+            {
+                "output_file": f"existing_{i}.mp4",
+                "video_subject": f"Existing fact number {i} about nature and biology ",
+            }
+            for i in range(15)
+        ]
+        make_jobs_yaml(tmp_dir / "jobs.yaml", existing)
 
         with patch.object(refill, "load_settings", return_value=make_settings(threshold=10)):
             with patch.object(refill, "call_llm", mock_call_llm):
@@ -160,10 +187,11 @@ def test_no_count_uses_threshold_guard():
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
         # Queue is "full" (15 pending, threshold=10)
-        existing = [{"output_file": f"existing_{i}.mp4",
-                     "video_subject": f"Existing fact number {i} " * 5}
-                    for i in range(15)]
-        make_jobs_yaml(tmp_dir / "jobs_en.yaml", existing)
+        existing = [
+            {"output_file": f"existing_{i}.mp4", "video_subject": f"Existing fact number {i} " * 5}
+            for i in range(15)
+        ]
+        make_jobs_yaml(tmp_dir / "jobs.yaml", existing)
 
         with patch.object(refill, "load_settings", return_value=make_settings(threshold=10)):
             # No --count (count_override=None), no --force → should skip

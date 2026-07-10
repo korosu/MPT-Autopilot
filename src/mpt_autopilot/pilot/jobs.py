@@ -1,7 +1,11 @@
 """
 generator/jobs.py
 
-All YAML I/O for jobs_<lang>.yaml files.
+All YAML I/O for jobs.yaml / jobs_<suffix>.yaml files.
+
+Jobs file naming follows the same convention as seen files: empty file_suffix
+→ jobs.yaml (primary), non-empty → jobs_<suffix>.yaml (e.g. jobs_es.yaml).
+This keeps file suffixes consistent across both file types.
 
 Reading  → yaml.safe_load (standard, reliable)
 Writing  → append-only: new jobs are serialised to text manually (never
@@ -28,32 +32,76 @@ from shorts_pilot.generator.lock import file_lock
 
 # Canonical key order for serialised job entries — matches hand-written style.
 _KEY_ORDER = [
-    "name", "enabled", "output_file", "video_subject",
-    "video_clip_duration", "video_concat_mode", "voice_rate",
-    "voice_name", "bgm_type", "bgm_volume", "paragraph_number",
+    "name",
+    "enabled",
+    "output_file",
+    "video_subject",
+    "video_clip_duration",
+    "video_concat_mode",
+    "voice_rate",
+    "voice_name",
+    "bgm_type",
+    "bgm_volume",
+    "paragraph_number",
     "video_script_prompt",
 ]
 
 # ── Reading ───────────────────────────────────────────────────────────────────
 
-def _path(jobs_dir: Path, lang: str) -> Path:
-    return jobs_dir / f"jobs_{lang}.yaml"
+
+def _new_path(jobs_dir: Path, suffix: str) -> Path:
+    """Return the canonical jobs file path based on suffix (mirrors seen._file())."""
+    if suffix:
+        slug = suffix.lstrip("_")
+        return jobs_dir / f"jobs_{slug}.yaml"
+    return jobs_dir / "jobs.yaml"
 
 
-def load(jobs_dir: Path, lang: str) -> dict[str, Any]:
-    p = _path(jobs_dir, lang)
+def _resolve_path(jobs_dir: Path, suffix: str, lang: str) -> Path:
+    """Resolve jobs file path with soft fallback to legacy naming.
+
+    Priority:
+    1. New path (jobs.yaml or jobs_<suffix>.yaml)
+    2. Legacy path (jobs_<lang>.yaml) if new doesn't exist
+    3. FileNotFoundError pointing to the NEW path
+    """
+    new_p = _new_path(jobs_dir, suffix)
+    if new_p.exists():
+        return new_p
+
+    old_p = jobs_dir / f"jobs_{lang}.yaml"
+    if old_p.exists():
+        print(
+            f"[migration] Found {old_p.name} but {new_p.name} is the expected "
+            f'name (file_suffix="{suffix or ""}"). Using legacy file for now — '
+            f"rename {old_p.name} to {new_p.name} to adopt the new naming."
+        )
+        return old_p
+
+    raise FileNotFoundError(
+        f"Jobs file not found: {new_p}\n"
+        f"Create {new_p.name} in your jobs directory (with a 'jobs:' key).\n"
+        f"For lang '{lang}', the file should include at least:\n"
+        f"\n"
+        f"  defaults:\n"
+        f'    video_language: "{lang}"\n'
+        f'    video_aspect: "9:16"\n'
+        f"    subtitle_enabled: true\n"
+        f"  jobs:\n"
+    )
+
+
+def load(jobs_dir: Path, suffix: str, lang: str) -> dict[str, Any]:
+    p = _resolve_path(jobs_dir, suffix, lang)
     if not p.exists():
         raise FileNotFoundError(
-            f"Jobs file not found: {p}\n"
-            f"Create jobs_{lang}.yaml in your jobs directory first."
+            f"Jobs file not found: {p}\nCreate {p.name} in your jobs directory first."
         )
     with open(p, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
-    # An empty or comment-only file parses to None; a malformed one could
-    # parse to a non-dict. Normalise to the expected shape so downstream
-    # callers (existing_names_from, count_pending_from) don't crash on
-    # cfg.get(...).
-    return data if isinstance(data, dict) else {"jobs": []}
+    if not isinstance(data, dict):
+        data = {"jobs": []}
+    return data
 
 
 def existing_names_from(cfg: dict[str, Any]) -> set[str]:
@@ -69,23 +117,20 @@ def existing_names_ordered_from(cfg: dict[str, Any]) -> list[str]:
     but not yet rendered (not just ones already in seen.txt) — see
     prompt.build()'s seen_ordered param.
     """
-    return [
-        job.get("output_file", "")
-        for job in (cfg.get("jobs") or [])
-        if job.get("output_file")
-    ]
+    return [job.get("output_file", "") for job in (cfg.get("jobs") or []) if job.get("output_file")]
 
 
 def count_pending_from(cfg: dict[str, Any], seen: set[str]) -> int:
     """Count pending jobs from an already-loaded config dict."""
     return sum(
-        1 for job in (cfg.get("jobs") or [])
-        if job.get("enabled", True)
-        and job.get("output_file", "") not in seen
+        1
+        for job in (cfg.get("jobs") or [])
+        if job.get("enabled", True) and job.get("output_file", "") not in seen
     )
 
 
 # ── Writing ───────────────────────────────────────────────────────────────────
+
 
 def _scalar(value: Any) -> str:
     """
@@ -130,8 +175,7 @@ def _job_to_yaml(job: dict[str, Any]) -> str:
 
     dropped = sorted(set(job) - set(ordered))
     if dropped:
-        print(f"  [note] dropping unexpected field(s) from job "
-              f"{job.get('name', '?')!r}: {dropped}")
+        print(f"  [note] dropping unexpected field(s) from job {job.get('name', '?')!r}: {dropped}")
 
     lines: list[str] = []
     for i, (key, value) in enumerate(ordered.items()):
@@ -140,7 +184,7 @@ def _job_to_yaml(job: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _bootstrap_suffix(content: str) -> str | None:
+def _bootstrap_suffix(content: str, path: Path) -> str | None:
     """
     Decide what EXTRA text (if any) must be appended after `content` and
     before the raw '  - key: val' job blocks, so those blocks parse as
@@ -172,8 +216,7 @@ def _bootstrap_suffix(content: str) -> str | None:
         parsed = yaml.safe_load(content)
     except yaml.YAMLError as e:
         raise ValueError(
-            f"Refusing to append: jobs_<lang>.yaml is not valid YAML ({e}). "
-            f"Fix the file manually first."
+            f"Refusing to append: {path.name} is not valid YAML ({e}). Fix the file manually first."
         ) from e
 
     if not isinstance(parsed, dict):
@@ -181,10 +224,10 @@ def _bootstrap_suffix(content: str) -> str | None:
         # of this function could itself produce by appending after an
         # empty file. Never guess how to repair this.
         raise ValueError(
-            "Refusing to append: jobs_<lang>.yaml's top level isn't a YAML "
+            f"Refusing to append: {path.name}'s top level isn't a YAML "
             f"mapping with a 'jobs:' key (got {type(parsed).__name__}). "
             "The file was likely bootstrapped or corrupted incorrectly. "
-            "It must start with a 'jobs:' key, e.g.:\n\njobs:\n"
+            "It should start with a 'jobs:' key, e.g.:\n\njobs:\n"
         )
 
     if "jobs" not in parsed:
@@ -204,7 +247,7 @@ def _bootstrap_suffix(content: str) -> str | None:
             # Real entries already exist — append is safe exactly as before.
             return None
         raise ValueError(
-            "Refusing to append: jobs_<lang>.yaml has 'jobs: []' (an "
+            f"Refusing to append: {path.name} has 'jobs: []' (an "
             "explicit empty list) instead of a bare 'jobs:' key. Appending "
             "after it would produce invalid YAML, and fixing it would mean "
             "editing an existing line — which this tool never does "
@@ -214,7 +257,7 @@ def _bootstrap_suffix(content: str) -> str | None:
         )
 
     raise ValueError(
-        "Refusing to append: 'jobs:' in jobs_<lang>.yaml holds a value "
+        f"Refusing to append: 'jobs:' in {path.name} holds a value "
         f"that isn't a list ({type(jobs_val).__name__}). Fix the file "
         "manually first."
     )
@@ -237,9 +280,7 @@ def _atomic_write(path: Path, content: str) -> None:
     in lock.py for why append() additionally refuses to proceed without
     the lock rather than relying on this alone.
     """
-    fd, tmp_name = tempfile.mkstemp(
-        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
-    )
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(content)
@@ -254,9 +295,9 @@ def _atomic_write(path: Path, content: str) -> None:
         raise
 
 
-def append(jobs_dir: Path, lang: str, new_jobs: list[dict[str, Any]]) -> None:
+def append(jobs_dir: Path, suffix: str, lang: str, new_jobs: list[dict[str, Any]]) -> None:
     """
-    Append new_jobs to the end of jobs_<lang>.yaml.
+    Append new_jobs to the end of jobs.yaml or jobs_<suffix>.yaml.
 
     The existing file content is never modified — new entries (and, if
     needed, a "jobs:" header for a file that doesn't have one yet — see
@@ -274,14 +315,14 @@ def append(jobs_dir: Path, lang: str, new_jobs: list[dict[str, Any]]) -> None:
     replace silently wins and the other's whole batch of new jobs vanishes
     with no error. Refusing to proceed without the lock is safer than that.
     """
-    p = _path(jobs_dir, lang)
+    p = _resolve_path(jobs_dir, suffix, lang)
 
     # Hold a lock across the read+replace so two concurrent refill runs
     # (e.g. two langs, or a retry racing a previous run) can't race each
     # other's read-modify-write cycle. strict=True: see docstring above.
     with file_lock(p, strict=True):
         content = p.read_text(encoding="utf-8")
-        extra_header = _bootstrap_suffix(content)
+        extra_header = _bootstrap_suffix(content, p)
 
         pieces = [content]
         if extra_header is not None:
@@ -297,6 +338,7 @@ def append(jobs_dir: Path, lang: str, new_jobs: list[dict[str, Any]]) -> None:
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
+
 
 def safe_name(text: str) -> str:
     text = text.lower().strip()
