@@ -23,6 +23,7 @@ class Defaults:
     privacy_status: str = "private"
     category_id: str = "22"
     tags: list[str] = field(default_factory=lambda: ["shorts"])
+    hashtag_placement: str = "both"
 
 
 @dataclass
@@ -61,10 +62,17 @@ def load_settings(
     acc_raw = _load_yaml(accounts_path)
 
     defaults_raw = cfg.get("defaults", {}) or {}
+    hashtag_placement = defaults_raw.get("hashtag_placement", "both")
+    if hashtag_placement not in {"tags", "description", "both"}:
+        raise ValueError(
+            f"config.yaml: hashtag_placement must be 'tags', 'description', or 'both', "
+            f"got '{hashtag_placement}'"
+        )
     defaults = Defaults(
         privacy_status=defaults_raw.get("privacy_status", "private"),
         category_id=str(defaults_raw.get("category_id", "22")),
         tags=list(defaults_raw.get("tags", ["shorts"])),
+        hashtag_placement=hashtag_placement,
     )
 
     notify_raw = cfg.get("notify", {}) or {}
