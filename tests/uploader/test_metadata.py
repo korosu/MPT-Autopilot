@@ -1,5 +1,4 @@
 """Tests for metadata.py - sidecar parsing and hashtag placement."""
-
 from __future__ import annotations
 
 from pathlib import Path
