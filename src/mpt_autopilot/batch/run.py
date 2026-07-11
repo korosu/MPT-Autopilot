@@ -401,6 +401,17 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--upload-bgm",
+        nargs="?",
+        const=".",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Copy .mp3 files to MPT's resource/songs/. "
+            "Optionally specify source directory (default: current directory)."
+        ),
+    )
+    parser.add_argument(
         "--seen",
         type=Path,
         default=None,
@@ -439,6 +450,30 @@ def list_bgm_cmd(settings: Settings, filter_str: str) -> None:
     print('\nUse in jobs.yaml as:  bgm_type: "custom"  bgm_file: "<name>"  bgm_volume: 0.2')
 
 
+def upload_bgm_cmd(settings: Settings, source_dir: Path) -> None:
+    source_path = source_dir.expanduser().resolve()
+    songs_dir = settings.mpt_storage / "resource" / "songs"
+
+    if not source_path.exists():
+        print(f"[ERROR] Source directory not found: {source_path}")
+        return
+
+    songs_dir.mkdir(parents=True, exist_ok=True)
+    mp3_files = list(source_path.glob("*.mp3"))
+
+    if not mp3_files:
+        print(f"No .mp3 files found in {source_path}")
+        return
+
+    copied = 0
+    for f in mp3_files:
+        shutil.copy2(f, songs_dir / f.name)
+        print(f"  copied: {f.name}")
+        copied += 1
+
+    print(f"\nCopied {copied} file(s) to {songs_dir}")
+
+
 def main() -> None:
     args = build_parser().parse_args()
 
@@ -469,6 +504,10 @@ def main() -> None:
 
     if args.list_bgm is not None:
         list_bgm_cmd(settings, args.list_bgm)
+        return
+
+    if args.upload_bgm is not None:
+        upload_bgm_cmd(settings, Path(args.upload_bgm))
         return
 
     if not args.jobs.exists():
