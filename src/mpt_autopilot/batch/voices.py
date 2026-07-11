@@ -63,7 +63,7 @@ def _load_edge_voices() -> list[dict]:
     own Edge TTS voice list (docs/voice-list.txt). Cached after first read."""
     global _edge_voices_cache
     if _edge_voices_cache is None:
-        with open(_EDGE_VOICES_DATA_FILE, "r", encoding="utf-8") as f:
+        with open(_EDGE_VOICES_DATA_FILE, encoding="utf-8") as f:
             _edge_voices_cache = json.load(f)
     return _edge_voices_cache
 

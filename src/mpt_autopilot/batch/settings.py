@@ -80,7 +80,7 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
             f"Copy config.yaml.example to config.yaml and adjust as needed."
         )
 
-    with open(cfg_path, "r", encoding="utf-8") as f:
+    with open(cfg_path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
 
     # Resolve relative paths against config.yaml's location, not cwd, so the

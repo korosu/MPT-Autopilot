@@ -175,7 +175,7 @@ def run_job(job: dict, defaults: dict, voice_pool: dict, settings: Settings) -> 
 def run(
     jobs_path: Path, settings: Settings, *, dry_run: bool, seen_override: Path | None = None
 ) -> None:
-    with open(jobs_path, "r", encoding="utf-8") as f:
+    with open(jobs_path, encoding="utf-8") as f:
         jobs_cfg = yaml.safe_load(f) or {}
 
     defaults: dict = jobs_cfg.get("defaults", {})
