@@ -12,6 +12,7 @@ Usage:
   batch --config /path/to/config.yaml --jobs jobs_en.yaml
   batch --dry-run
   batch --status
+  batch --list-bgm
 """
 
 from __future__ import annotations
@@ -390,8 +391,14 @@ Examples:
     )
     parser.add_argument(
         "--list-bgm",
-        action="store_true",
-        help="List available background music files in MPT's resource/songs/ and exit.",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="FILTER",
+        help=(
+            "List available background music files in MPT's resource/songs/ and exit. "
+            "Optionally filter by filename substring."
+        ),
     )
     parser.add_argument(
         "--seen",
@@ -423,6 +430,15 @@ def list_voices(settings: Settings, filter_str: str) -> None:
     print('\nUse in jobs.yaml as:  voice: "<alias>"')
 
 
+def list_bgm_cmd(settings: Settings, filter_str: str) -> None:
+    songs = bgm.list_bgm_files(settings.mpt_storage, filter_str)
+    suffix = f" matching '{filter_str}'" if filter_str else ""
+    print(f"{len(songs)} BGM file(s){suffix}:\n")
+    for name, size in songs:
+        print(f"  {name:<30} {size // 1024} KB")
+    print('\nUse in jobs.yaml as:  bgm_type: "custom"  bgm_file: "<name>"  bgm_volume: 0.2')
+
+
 def main() -> None:
     args = build_parser().parse_args()
 
@@ -451,13 +467,8 @@ def main() -> None:
         list_voices(settings, args.list_voices)
         return
 
-    if args.list_bgm:
-        songs = bgm.list_bgm_files(settings.mpt_storage)
-        print(f"BGM directory: {settings.mpt_storage / 'resource' / 'songs'}")
-        print(f"Total files: {len(songs)}\n")
-        for name in songs:
-            print(f"  {name}")
-        print('\nUse in jobs.yaml as:  bgm_type: "custom"  bgm_file: "<name>"  bgm_volume: 0.2')
+    if args.list_bgm is not None:
+        list_bgm_cmd(settings, args.list_bgm)
         return
 
     if not args.jobs.exists():
