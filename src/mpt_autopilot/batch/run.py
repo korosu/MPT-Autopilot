@@ -12,6 +12,7 @@ Usage:
   batch --config /path/to/config.yaml --jobs jobs_en.yaml
   batch --dry-run
   batch --status
+  batch --list-bgm
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from pathlib import Path
 
 import yaml
 
-from mpt_batch.engine import notify, seen, voices
+from mpt_batch.engine import bgm, notify, seen, voices
 from mpt_batch.engine.api import submit_job, wait_for_task
 from mpt_batch.engine.settings import Settings
 from mpt_batch.engine.settings import load as load_settings
@@ -350,6 +351,7 @@ Examples:
     batch --dry-run
     batch --status
     batch --list-voices es
+    batch --list-bgm
 
     # Multi-language: override seen file to match shorts-pilot's per-lang seen files
     batch --jobs jobs_es.yaml --seen seen_es.txt
@@ -388,6 +390,28 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--list-bgm",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="FILTER",
+        help=(
+            "List available background music files in MPT's resource/songs/ and exit. "
+            "Optionally filter by filename substring."
+        ),
+    )
+    parser.add_argument(
+        "--upload-bgm",
+        nargs="?",
+        const=".",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Copy .mp3 files to MPT's resource/songs/. "
+            "Optionally specify source directory (default: current directory)."
+        ),
+    )
+    parser.add_argument(
         "--seen",
         type=Path,
         default=None,
@@ -417,6 +441,39 @@ def list_voices(settings: Settings, filter_str: str) -> None:
     print('\nUse in jobs.yaml as:  voice: "<alias>"')
 
 
+def list_bgm_cmd(settings: Settings, filter_str: str) -> None:
+    songs = bgm.list_bgm_files(settings.mpt_storage, filter_str)
+    suffix = f" matching '{filter_str}'" if filter_str else ""
+    print(f"{len(songs)} BGM file(s){suffix}:\n")
+    for name, size in songs:
+        print(f"  {name:<30} {size // 1024} KB")
+    print('\nUse in jobs.yaml as:  bgm_type: "custom"  bgm_file: "<name>"  bgm_volume: 0.2')
+
+
+def upload_bgm_cmd(settings: Settings, source_dir: Path) -> None:
+    source_path = source_dir.expanduser().resolve()
+    songs_dir = settings.mpt_storage / "resource" / "songs"
+
+    if not source_path.exists():
+        print(f"[ERROR] Source directory not found: {source_path}")
+        return
+
+    songs_dir.mkdir(parents=True, exist_ok=True)
+    mp3_files = list(source_path.glob("*.mp3"))
+
+    if not mp3_files:
+        print(f"No .mp3 files found in {source_path}")
+        return
+
+    copied = 0
+    for f in mp3_files:
+        shutil.copy2(f, songs_dir / f.name)
+        print(f"  copied: {f.name}")
+        copied += 1
+
+    print(f"\nCopied {copied} file(s) to {songs_dir}")
+
+
 def main() -> None:
     args = build_parser().parse_args()
 
@@ -443,6 +500,14 @@ def main() -> None:
 
     if args.list_voices is not None:
         list_voices(settings, args.list_voices)
+        return
+
+    if args.list_bgm is not None:
+        list_bgm_cmd(settings, args.list_bgm)
+        return
+
+    if args.upload_bgm is not None:
+        upload_bgm_cmd(settings, Path(args.upload_bgm))
         return
 
     if not args.jobs.exists():
