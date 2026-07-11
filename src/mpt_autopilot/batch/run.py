@@ -25,7 +25,7 @@ from pathlib import Path
 
 import yaml
 
-from mpt_batch.engine import notify, seen, voices
+from mpt_batch.engine import bgm, notify, seen, voices
 from mpt_batch.engine.api import submit_job, wait_for_task
 from mpt_batch.engine.settings import Settings
 from mpt_batch.engine.settings import load as load_settings
@@ -350,6 +350,7 @@ Examples:
     batch --dry-run
     batch --status
     batch --list-voices es
+    batch --list-bgm
 
     # Multi-language: override seen file to match shorts-pilot's per-lang seen files
     batch --jobs jobs_es.yaml --seen seen_es.txt
@@ -386,6 +387,11 @@ Examples:
             "config.yaml presets) and exit. Optionally filter by a substring, "
             "e.g. `--list-voices es` or `--list-voices gemini`."
         ),
+    )
+    parser.add_argument(
+        "--list-bgm",
+        action="store_true",
+        help="List available background music files in MPT's resource/songs/ and exit.",
     )
     parser.add_argument(
         "--seen",
@@ -443,6 +449,15 @@ def main() -> None:
 
     if args.list_voices is not None:
         list_voices(settings, args.list_voices)
+        return
+
+    if args.list_bgm:
+        songs = bgm.list_bgm_files(settings.mpt_storage)
+        print(f"BGM directory: {settings.mpt_storage / 'resource' / 'songs'}")
+        print(f"Total files: {len(songs)}\n")
+        for name in songs:
+            print(f"  {name}")
+        print('\nUse in jobs.yaml as:  bgm_type: "custom"  bgm_file: "<name>"  bgm_volume: 0.2')
         return
 
     if not args.jobs.exists():
