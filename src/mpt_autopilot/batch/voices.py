@@ -55,16 +55,17 @@ from pathlib import Path
 _ALLOWED_FIELDS = {"tts_server", "voice_name", "voice_rate", "voice_volume"}
 
 _EDGE_VOICES_DATA_FILE = Path(__file__).parent.parent / "data" / "edge_voices.json"
-_edge_voices_cache: list[dict] | None = None
+_edge_voices_cache: list[dict] = []
 
 
 def _load_edge_voices() -> list[dict]:
     """Load the bundled {name, gender} list, generated from MoneyPrinterTurbo's
     own Edge TTS voice list (docs/voice-list.txt). Cached after first read."""
     global _edge_voices_cache
-    if _edge_voices_cache is None:
+    if not _edge_voices_cache:
         with open(_EDGE_VOICES_DATA_FILE, encoding="utf-8") as f:
-            _edge_voices_cache = json.load(f)
+            loaded = json.load(f)
+            _edge_voices_cache = loaded if isinstance(loaded, list) else []
     return _edge_voices_cache
 
 

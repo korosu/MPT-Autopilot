@@ -68,7 +68,7 @@ def copy_result(task_data: dict, output_file: str, settings: Settings) -> str:
     api_candidate: Path | None = None
     if task_data.get("videos"):
         api_candidate = storage / task_data["videos"][0].lstrip("/")
-        if api_candidate.exists():
+        if api_candidate and api_candidate.exists():
             source_video = api_candidate
             log(f"  using API path: {api_candidate}", settings)
 
