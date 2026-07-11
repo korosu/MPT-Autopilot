@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 """
-Self-check for --count behavior.
-
-Run: uv run python tests/test_count.py
-
-Uses only stdlib + the package, no test framework.
+test_count.py — tests for --count flag behavior.
 """
 
 from __future__ import annotations

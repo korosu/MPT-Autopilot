@@ -1,5 +1,9 @@
 # shorts-pilot
 
+[![lint](https://github.com/korosu/shorts-pilot/actions/workflows/lint.yml/badge.svg)](https://github.com/korosu/shorts-pilot/actions/workflows/lint.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 Auto-generate YouTube Shorts video ideas and keep your [MoneyPrinterTurbo](https://github.com/harry0703/MoneyPrinterTurbo) jobs queue filled via LLM.
 
 Point it at your `jobs.yaml` or `jobs_<suffix>.yaml` file — it checks how many videos are still

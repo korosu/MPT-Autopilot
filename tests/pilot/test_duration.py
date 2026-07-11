@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """
-Self-check for duration_range feature.
-
-Run: uv run python tests/test_duration.py
-
-Uses only stdlib + the package, no test framework.
+test_duration.py — tests for duration_range feature.
 """
+
+from __future__ import annotations
 
 import sys
 from pathlib import Path
