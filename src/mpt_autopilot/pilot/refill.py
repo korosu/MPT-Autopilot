@@ -35,11 +35,12 @@ import sys
 from pathlib import Path
 
 from shorts_pilot.generator import jobs, seen
-from shorts_pilot.generator.prompt import build_themes
-from shorts_pilot.generator.seen import load_ordered as seen_load_ordered
 from shorts_pilot.generator.llm import call_llm, parse_json_array
-from shorts_pilot.generator.prompt import VIDEO_SUBJECT_MAX_CHARS, build as build_prompt
-from shorts_pilot.generator.settings import LangSettings, load as load_settings
+from shorts_pilot.generator.prompt import VIDEO_SUBJECT_MAX_CHARS, build_themes
+from shorts_pilot.generator.prompt import build as build_prompt
+from shorts_pilot.generator.seen import load_ordered as seen_load_ordered
+from shorts_pilot.generator.settings import LangSettings
+from shorts_pilot.generator.settings import load as load_settings
 
 # ponytail: calibration for natural gemini TTS speed (~143 words/min).
 # voice_rate does NOT affect duration for gemini voices (see MPT voice.py:1813).
@@ -84,7 +85,7 @@ def parse_duration_range(s: str | None) -> tuple[int, int | None] | None:
 
 
 def duration_to_words(sec: tuple[int, int | None]) -> tuple[int, int | None]:
-    """Convert (min_seconds, max_seconds) to word bounds. ceil for min (guarantee), floor for max."""
+    """Convert (min_seconds, max_seconds) to word bounds. ceil for min (guarantee), floor for max."""  # noqa: E501
     lo, hi = sec
     return (
         math.ceil(lo * WORDS_PER_SECOND),
@@ -168,8 +169,9 @@ def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
     dur = defaults.get("duration_range")
     if dur:
         sec = parse_duration_range(dur)
-        out["video_script_prompt"] = build_duration_instruction(duration_to_words(sec))
-        out["paragraph_number"] = max(out["paragraph_number"], paragraph_floor(sec))
+        if sec:
+            out["video_script_prompt"] = build_duration_instruction(duration_to_words(sec))
+            out["paragraph_number"] = max(out["paragraph_number"], paragraph_floor(sec))
     else:
         out.pop("video_script_prompt", None)  # defense against LLM hallucination
 
@@ -395,7 +397,7 @@ def _run_topics(
 
     seen_file = "seen.txt" if not suffix else f"seen_{suffix.lstrip('_')}.txt"
     print(
-        f"[{lang}] topics mode: {len(topics)} topic(s) | jobs dir: {jobs_dir} | seen: {seen_file} (in {seen_dir})"
+        f"[{lang}] topics mode: {len(topics)} topic(s) | jobs dir: {jobs_dir} | seen: {seen_file} (in {seen_dir})"  # noqa: E501
     )
     print(f"[{lang}] known titles: {len(already_known)}")
 
@@ -499,7 +501,7 @@ def run(
     seen_file = "seen.txt" if not suffix else f"seen_{suffix.lstrip('_')}.txt"
     print(f"[{lang}] jobs dir: {jobs_dir}")
     print(
-        f"[{lang}] pending jobs: {pending} | threshold: {threshold} | seen file: {seen_file} (in {seen_dir})"
+        f"[{lang}] pending jobs: {pending} | threshold: {threshold} | seen file: {seen_file} (in {seen_dir})"  # noqa: E501
     )
 
     if not count_explicit and pending >= threshold and not force:
@@ -574,7 +576,7 @@ def run(
 
         if len(raw_jobs) < this_count:
             print(
-                f"[{lang}] WARNING: LLM returned {len(raw_jobs)} of {this_count} requested — queue may still be low after this run"
+                f"[{lang}] WARNING: LLM returned {len(raw_jobs)} of {this_count} requested — queue may still be low after this run"  # noqa: E501
             )
 
         print(f"[{lang}] LLM returned {len(raw_jobs)} raw jobs")

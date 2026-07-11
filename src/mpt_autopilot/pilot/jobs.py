@@ -97,7 +97,7 @@ def load(jobs_dir: Path, suffix: str, lang: str) -> dict[str, Any]:
         raise FileNotFoundError(
             f"Jobs file not found: {p}\nCreate {p.name} in your jobs directory first."
         )
-    with open(p, "r", encoding="utf-8") as f:
+    with open(p, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     if not isinstance(data, dict):
         data = {"jobs": []}

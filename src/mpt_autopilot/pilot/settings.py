@@ -59,9 +59,7 @@ class Settings:
 def _require_env(key: str) -> str:
     val = os.environ.get(key, "").strip()
     if not val:
-        raise EnvironmentError(
-            f"'{key}' is not set. Copy .env.example to .env and fill in your values."
-        )
+        raise OSError(f"'{key}' is not set. Copy .env.example to .env and fill in your values.")
     return val
 
 
@@ -77,7 +75,7 @@ def load(
     if not cfg_path.exists():
         raise FileNotFoundError(f"config.yaml not found: {cfg_path}")
 
-    with open(cfg_path, "r", encoding="utf-8") as f:
+    with open(cfg_path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
 
     raw = raw if isinstance(raw, dict) else {}

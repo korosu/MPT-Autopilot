@@ -96,7 +96,8 @@ def _post_with_retry(url: str, payload: dict, headers: dict) -> requests.Respons
 
     if resp is not None:
         return resp
-    raise last_exc  # only reached if every attempt raised a connection/timeout error
+    # only reached if every attempt raised a connection/timeout error
+    raise last_exc or RuntimeError("LLM request failed with unknown error")
 
 
 def _call_anthropic(system: str, user: str, s: Settings, max_tokens: int) -> str:

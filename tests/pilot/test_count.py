@@ -89,6 +89,7 @@ def test_count_one_call_regardless_of_threshold():
 
     # Patch both load_settings and call_llm in the refill module
     from unittest.mock import patch
+
     import shorts_pilot.refill as refill
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -141,6 +142,7 @@ def test_count_bypasses_full_queue_guard():
         )
 
     from unittest.mock import patch
+
     import shorts_pilot.refill as refill
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -178,6 +180,7 @@ def test_count_bypasses_full_queue_guard():
 def test_no_count_uses_threshold_guard():
     """Without --count, threshold guard should still work (default behavior)."""
     from unittest.mock import patch
+
     import shorts_pilot.refill as refill
 
     with tempfile.TemporaryDirectory() as tmp:

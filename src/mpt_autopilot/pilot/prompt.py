@@ -68,7 +68,7 @@ def build(
 
     system = (
         f"You are a YouTube Shorts content strategist.\n"
-        f"Your job is to generate viral fact/myth-busting short video scripts in {lang_cfg.label}.\n"
+        f"Your job is to generate viral fact/myth-busting short video scripts in {lang_cfg.label}.\n"  # noqa: E501
         f"Each video is 30–45 seconds long, spoken in a direct, engaging voice.\n"
         f"Return ONLY a valid JSON array. No markdown, no explanation, no code fences."
     )
@@ -87,7 +87,7 @@ State the surprising fact, explain WHY, end with a memorable kicker. \
 No hashtags, no emojis. Maximum {VIDEO_SUBJECT_MAX_CHARS} characters — be concise.
 - name and output_file: snake_case, max 50 chars. \
 output_file must end with "{d["suffix"]}.mp4" (e.g. "fact_water_memory{d["suffix"]}.mp4").
-- voice_rate: float between {lang_cfg.voice_rate_min} and {lang_cfg.voice_rate_max}, vary across jobs.
+- voice_rate: float between {lang_cfg.voice_rate_min} and {lang_cfg.voice_rate_max}, vary across jobs.  # noqa: E501
 - voice_name: pick from {d["voices_json"]}, vary across jobs.
 - video_clip_duration: {d["clip_duration"]} or {d["clip_duration"] + 1}.
 - paragraph_number: 1 or {d["paragraph_number"]}.
@@ -154,7 +154,7 @@ Rules:
   to one of the listed themes.
 - name and output_file: snake_case, max 50 chars.
   output_file must end with "{d["suffix"]}.mp4" (e.g. "fact_water_memory{d["suffix"]}.mp4").
-- voice_rate: float between {lang_cfg.voice_rate_min} and {lang_cfg.voice_rate_max}, vary across jobs.
+- voice_rate: float between {lang_cfg.voice_rate_min} and {lang_cfg.voice_rate_max}, vary across jobs.  # noqa: E501
 - voice_name: pick from {d["voices_json"]}, vary across jobs.
 - video_clip_duration: {d["clip_duration"]} or {d["clip_duration"] + 1}.
 - paragraph_number: 1 or {d["paragraph_number"]}.
