@@ -60,7 +60,7 @@ def _stem_to_topic(stem: str) -> str:
 
 def _read_script_json(json_path: Path) -> dict:
     try:
-        with open(json_path, "r", encoding="utf-8") as f:
+        with open(json_path, encoding="utf-8") as f:
             return json.load(f)
     except (json.JSONDecodeError, OSError):
         return {}

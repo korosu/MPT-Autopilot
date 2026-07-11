@@ -55,7 +55,7 @@ def write_hashtags(
     existing: dict = {}
     if json_path.exists():
         try:
-            with open(json_path, "r", encoding="utf-8") as f:
+            with open(json_path, encoding="utf-8") as f:
                 existing = json.load(f)
         except (json.JSONDecodeError, OSError):
             existing = {}

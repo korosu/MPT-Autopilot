@@ -20,7 +20,7 @@ load_dotenv(_ROOT / ".env")
 def _require_env(key: str) -> str:
     value = os.getenv(key)
     if not value:
-        raise EnvironmentError(
+        raise OSError(
             f"Missing required environment variable: {key}\n"
             f"Copy .env.example to .env and fill in your values."
         )
@@ -43,7 +43,7 @@ def _load_yaml() -> dict:
             f"config.yaml not found at {config_file}\n"
             f"Copy config.yaml.example to config.yaml and adjust as needed."
         )
-    with open(config_file, "r", encoding="utf-8") as f:
+    with open(config_file, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 

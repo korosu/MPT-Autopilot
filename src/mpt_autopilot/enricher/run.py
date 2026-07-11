@@ -56,7 +56,7 @@ def process_file(
     # ── Skip if already enriched (unless --force) ─────────────────────────────
     if not force and meta.json_path.exists():
         try:
-            with open(meta.json_path, "r", encoding="utf-8") as f:
+            with open(meta.json_path, encoding="utf-8") as f:
                 existing = json.load(f)
             if "hashtags" in existing:
                 log.info(f"skip (already enriched): {mp4_path.name}")
