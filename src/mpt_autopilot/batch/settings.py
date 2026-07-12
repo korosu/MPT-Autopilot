@@ -90,7 +90,7 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
     def _resolve(value: str) -> Path:
         return (cfg_dir / value).expanduser().resolve()
 
-    return Settings(
+    s = Settings(
         api_url=str(_require_cfg(cfg, "api_url")).rstrip("/"),
         mpt_storage=_resolve(str(_require_cfg(cfg, "mpt_storage"))),
         output_dir=_resolve(cfg.get("output_dir", "./exports")),
@@ -103,9 +103,24 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
         max_retries=int(cfg.get("max_retries", 3)),
         retry_delay_seconds=int(cfg.get("retry_delay_seconds", 180)),
         max_consecutive_failures=int(cfg.get("max_consecutive_failures", 3)),
-        cache_cleanup_enabled=bool(cfg.get("cache_cleanup_enabled", True)),
+        cache_cleanup_enabled=(lambda v: v is True or v == 1)(
+            cfg.get("cache_cleanup_enabled", True)
+        ),
         cache_cleanup_interval=int(cfg.get("cache_cleanup_interval", 6)),
         telegram_token=os.getenv("TELEGRAM_TOKEN", "").strip(),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
         telegram_prefix=cfg.get("telegram_prefix", "mpt-batch"),
     )
+    validate(s)
+    return s
+
+
+def validate(s: Settings) -> None:
+    """Warn about likely configuration mistakes (does not raise)."""
+    if not s.mpt_storage.exists():
+        print(
+            f"[mpt-batch] WARNING: mpt_storage '{s.mpt_storage}' does not exist — "
+            "API file paths and fallback lookups will fail"
+        )
+    if not s.api_url.startswith("http"):
+        print(f"[mpt-batch] WARNING: api_url '{s.api_url}' doesn't start with http — may not work")

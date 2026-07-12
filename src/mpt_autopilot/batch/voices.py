@@ -153,6 +153,12 @@ def resolve(payload: dict, pool: dict[str, dict]) -> dict:
         )
 
     for field, value in pool[alias].items():
+        if field == "tts_server" and "tts_server" in payload and payload["tts_server"] != value:
+            print(
+                f"[mpt-batch] WARNING: voice alias '{alias}' sets tts_server='{value}' "
+                f"but job explicitly sets tts_server='{payload['tts_server']}' — "
+                f"voice_name takes precedence for voice selection, tts_server is cosmetic"
+            )
         payload.setdefault(field, value)
 
     return payload

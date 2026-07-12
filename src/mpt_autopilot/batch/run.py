@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import sys
 import time
@@ -26,8 +27,8 @@ from pathlib import Path
 
 import yaml
 
-from mpt_batch.engine import bgm, notify, seen, voices
-from mpt_batch.engine.api import submit_job, wait_for_task
+from mpt_batch.engine import bgm, notify, seen, state, voices
+from mpt_batch.engine.api import health_check, submit_job, wait_for_task
 from mpt_batch.engine.settings import Settings
 from mpt_batch.engine.settings import load as load_settings
 
@@ -36,10 +37,7 @@ from mpt_batch.engine.settings import load as load_settings
 
 def log(msg: str, settings: Settings, *, to_file: bool = True) -> None:
     """
-    Print + append to log_file. Rotation is simple deletion, not archiving:
-    once the file exceeds log_max_bytes, it's discarded entirely and a fresh
-    one starts — there's no log.1/.log.2 history kept. Fine for a batch
-    runner where the point is "don't fill the disk", not long-term audit.
+    Print + append to log_file. One backup copy (log_file.1) kept on rotation.
     """
     line = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
     print(line)
@@ -48,7 +46,9 @@ def log(msg: str, settings: Settings, *, to_file: bool = True) -> None:
     log_file = settings.log_file
     log_file.parent.mkdir(parents=True, exist_ok=True)
     if log_file.exists() and log_file.stat().st_size > settings.log_max_bytes:
-        log_file.unlink()  # delete-and-restart, not archive — see docstring
+        backup = log_file.with_suffix(log_file.suffix + ".1")
+        backup.unlink(missing_ok=True)
+        log_file.rename(backup)
     with open(log_file, "a", encoding="utf-8") as f:
         f.write(f"{line}\n")
 
@@ -68,10 +68,13 @@ def copy_result(task_data: dict, output_file: str, settings: Settings) -> str:
     source_video: Path | None = None
     api_candidate: Path | None = None
     if task_data.get("videos"):
-        api_candidate = storage / task_data["videos"][0].lstrip("/")
-        if api_candidate and api_candidate.exists():
-            source_video = api_candidate
-            log(f"  using API path: {api_candidate}", settings)
+        video_path = task_data["videos"][0].lstrip("/")
+        if video_path:
+            candidate = storage / video_path
+            if candidate.exists() and not candidate.is_dir():
+                source_video = candidate
+                api_candidate = candidate
+                log(f"  using API path: {api_candidate}", settings)
 
     fallback = storage / "tasks" / task_id / "final-1.mp4"
     if source_video is None:
@@ -102,6 +105,14 @@ def copy_result(task_data: dict, output_file: str, settings: Settings) -> str:
     else:
         log(f"  note: no script.json found for {task_id}", settings)
 
+    # Copy subtitle files if present
+    task_dir = storage / "tasks" / task_id
+    for pattern in ["*.srt", "*.ass"]:
+        for sub_file in task_dir.glob(pattern):
+            dest_sub = settings.output_dir / sub_file.name
+            shutil.copy2(sub_file, dest_sub)
+            log(f"  saved: {dest_sub}", settings)
+
     return task_id
 
 
@@ -128,7 +139,9 @@ def cleanup_cache(settings: Settings) -> None:
 # ── Single job (with retries) ─────────────────────────────────────────────────
 
 
-def run_job(job: dict, defaults: dict, voice_pool: dict, settings: Settings) -> bool:
+def run_job(
+    job: dict, defaults: dict, voice_pool: dict, settings: Settings, in_progress_path: Path
+) -> bool:
     """
     Run one job with retry logic. Returns True on success, False if all
     retries are exhausted — never raises, so one bad job can't crash the batch.
@@ -139,34 +152,49 @@ def run_job(job: dict, defaults: dict, voice_pool: dict, settings: Settings) -> 
     nothing for a persistent problem (bad credentials, MPT genuinely down);
     that's what max_consecutive_failures in run() is for — it aborts the
     whole batch instead of retrying every single job into the same wall.
+
+    Each submitted task_id is persisted to in_progress_path immediately so a
+    crash or Ctrl-C mid-poll can resume the existing task on restart instead
+    of creating a duplicate.
+
+    Per-job max_retries / retry_delay_seconds override the global settings,
+    implementing the "configurable retries per job" feature.
     """
+    _meta_keys = ("name", "enabled", "output_file", "max_retries", "retry_delay_seconds")
     payload = {
         **defaults,
-        **{k: v for k, v in job.items() if k not in ("name", "enabled", "output_file")},
+        **{k: v for k, v in job.items() if k not in _meta_keys},
     }
     payload = voices.resolve(payload, voice_pool)
 
-    for attempt in range(1, settings.max_retries + 1):
+    max_retries = int(job.get("max_retries", settings.max_retries))
+    retry_delay = int(job.get("retry_delay_seconds", settings.retry_delay_seconds))
+
+    for attempt in range(1, max_retries + 1):
         task_id: str | None = None
         try:
-            log(f"starting: {job['name']} (attempt {attempt}/{settings.max_retries})", settings)
+            log(f"starting: {job['name']} (attempt {attempt}/{max_retries})", settings)
             task_id = submit_job(payload, settings)
+            state.add(in_progress_path, job["output_file"], task_id, attempt)
             log(f"task_id: {task_id}", settings)
             task_data = wait_for_task(task_id, settings, lambda m: log(m, settings))
             copy_result(task_data, job["output_file"], settings)
             cleanup_task(task_id, settings)
+            state.remove(in_progress_path, job["output_file"])
             log(f"done: {job['name']}", settings)
             return True
 
         except Exception as exc:
-            log(f"FAILED {job['name']} (attempt {attempt}/{settings.max_retries}): {exc}", settings)
+            log(f"FAILED {job['name']} (attempt {attempt}/{max_retries}): {exc}", settings)
             if task_id:
                 cleanup_task(task_id, settings)
-            if attempt < settings.max_retries:
-                log(f"retrying in {settings.retry_delay_seconds}s...", settings)
-                time.sleep(settings.retry_delay_seconds)
+            if attempt < max_retries:
+                state.remove(in_progress_path, job["output_file"])
+                log(f"retrying in {retry_delay}s...", settings)
+                time.sleep(retry_delay)
 
-    log(f"all {settings.max_retries} attempts exhausted for: {job['name']}", settings)
+    state.remove(in_progress_path, job["output_file"])
+    log(f"all {max_retries} attempts exhausted for: {job['name']}", settings)
     return False
 
 
@@ -184,6 +212,39 @@ def run(
     seen_file = seen_override or settings.seen_file
     already_seen = seen.load(seen_file)
     voice_pool = settings.voice_pool
+    in_progress_path = seen_file.with_name(seen_file.stem + ".in_progress.txt")
+
+    # Resume in-progress tasks from a previous interrupted run
+    pending = state.list_all(in_progress_path)
+    if pending:
+        log(f"{len(pending)} in-progress task(s) found — attempting resume", settings)
+        for entry in pending:
+            output_file: str = entry["output_file"]
+            task_id: str = entry["task_id"]
+            if output_file in already_seen:
+                state.remove(in_progress_path, output_file)
+                continue
+            job = next((j for j in jobs if j.get("output_file") == output_file), None)
+            if not job:
+                log(f"orphan in-progress entry '{output_file}' (not in jobs file)", settings)
+                state.remove(in_progress_path, output_file)
+                continue
+            name = job.get("name", output_file)
+            log(f"resuming: {name} (task_id={task_id})", settings)
+            try:
+                task_data = wait_for_task(task_id, settings, lambda m: log(m, settings))
+                copy_result(task_data, output_file, settings)
+                cleanup_task(task_id, settings)
+                seen.add(seen_file, output_file)
+                state.remove(in_progress_path, output_file)
+                log(f"resumed and done: {output_file}", settings)
+            except Exception as exc:
+                log(
+                    f"resume failed for '{output_file}' (task_id={task_id}): {exc} — "
+                    f"will re-submit as new task",
+                    settings,
+                )
+                state.remove(in_progress_path, output_file)
 
     # Warn if defaults section is missing critical fields
     if not defaults:
@@ -196,6 +257,16 @@ def run(
         log(
             "WARNING: 'defaults:' missing 'video_language' — "
             "output language may default incorrectly",
+            settings,
+        )
+
+    # ponytail: O(n²) for n=~100, fine
+    output_files = [j.get("output_file", "") for j in jobs if j.get("enabled", True)]
+    dupes = sorted({f for f in output_files if output_files.count(f) > 1})
+    if dupes:
+        log(
+            f"WARNING: duplicate output_file values in jobs.yaml: {', '.join(dupes)} — "
+            "first job wins, later jobs will be skipped as 'already done'",
             settings,
         )
 
@@ -229,6 +300,27 @@ def run(
                 print(f"  error     {name} - {exc}")
         return
 
+    # ── Pre-flight checks ───────────────────────────────────────────────────
+    if not health_check(settings):
+        log("ERROR: MPT API unreachable at " + settings.api_url, settings)
+        notify.alert(
+            f"Batch aborted before start: MPT API {settings.api_url} unreachable.\n"
+            "No jobs were submitted.",
+            settings,
+        )
+        return
+
+    lock_path = seen_file.with_name(seen_file.stem + ".lock")
+    try:
+        os.close(os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+    except FileExistsError:
+        log(
+            f"ERROR: Lock file exists at {lock_path} — another batch may be running. "
+            f"If not, delete it and re-run.",
+            settings,
+        )
+        return
+
     settings.output_dir.mkdir(parents=True, exist_ok=True)
     start_time = time.time()
     notify.alert(
@@ -242,6 +334,7 @@ def run(
     failed: list[str] = []
     skipped: list[str] = []
     consecutive_failures = 0
+    last_cleanup_at = 0
 
     for index, job in enumerate(jobs, start=1):
         name = job.get("name", job.get("output_file", "?"))
@@ -255,7 +348,7 @@ def run(
             log(f"skip: {job['output_file']} (in seen registry)", settings)
             continue
 
-        success = run_job(job, defaults, voice_pool, settings)
+        success = run_job(job, defaults, voice_pool, settings, in_progress_path)
 
         if success:
             ok.append(name)
@@ -268,6 +361,7 @@ def run(
             ):
                 log(f"periodic cache cleanup after {len(ok)} videos", settings)
                 cleanup_cache(settings)
+                last_cleanup_at = len(ok)
         else:
             failed.append(name)
             consecutive_failures += 1
@@ -288,7 +382,9 @@ def run(
                 )
                 break
 
-    cleanup_cache(settings)
+    if settings.cache_cleanup_enabled and len(ok) != last_cleanup_at:
+        cleanup_cache(settings)
+    lock_path.unlink(missing_ok=True)
     _print_summary(ok, failed, skipped, settings, started_at=start_time)
 
 
@@ -437,7 +533,13 @@ def list_voices(settings: Settings, filter_str: str) -> None:
     suffix = f" matching '{filter_str}'" if filter_str else ""
     print(f"{len(matches)} voice(s){suffix}:\n")
     for alias, fields in matches.items():
-        print(f"  {alias:<40} voice_name={fields.get('voice_name', '?')}")
+        extras = []
+        if "voice_rate" in fields:
+            extras.append(f"rate={fields['voice_rate']}")
+        if "voice_volume" in fields:
+            extras.append(f"volume={fields['voice_volume']}")
+        extra_str = "  " + ", ".join(extras) if extras else ""
+        print(f"  {alias:<40} voice_name={fields.get('voice_name', '?')}{extra_str}")
     print('\nUse in jobs.yaml as:  voice: "<alias>"')
 
 

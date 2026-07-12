@@ -3,8 +3,9 @@ engine/api.py
 
 All communication with the MoneyPrinterTurbo REST API.
 
-Two public functions:
-  submit_job(payload, settings)        → str   (task_id)
+Three public functions:
+  health_check(settings)              → bool
+  submit_job(payload, settings)       → str   (task_id)
   wait_for_task(task_id, settings, log) → dict  (full task data on success)
 """
 
@@ -16,6 +17,16 @@ from collections.abc import Callable
 import requests
 
 from mpt_batch.engine.settings import Settings
+
+
+def health_check(settings: Settings) -> bool:
+    """Quick GET to verify the MPT API is reachable. Returns True if healthy."""
+    try:
+        r = requests.get(f"{settings.api_url}/api/v1/tasks", timeout=10)
+        r.raise_for_status()
+        return True
+    except Exception:
+        return False
 
 
 def submit_job(payload: dict, settings: Settings) -> str:
@@ -63,8 +74,10 @@ def wait_for_task(
         if progress > max_progress_seen:
             max_progress_seen = progress
 
-        if state == 3:
-            raise RuntimeError(f"task failed (state={state})")
+        if state not in (0, 1):
+            raise RuntimeError(
+                f"task ended unexpectedly (state={state}){' — failed' if state == 3 else ''}"
+            )
 
         if progress >= 100:
             return data
