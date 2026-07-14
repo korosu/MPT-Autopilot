@@ -416,7 +416,7 @@ def _merge_always_include(tags: list[str], always: list[str]) -> list[str]:
         normalised = tag.lower()
         if normalised not in seen:
             seen.add(normalised)
-            result.append(tag)
+            result.append(normalised)
 
     for tag in tags:
         normalised = tag.lower()

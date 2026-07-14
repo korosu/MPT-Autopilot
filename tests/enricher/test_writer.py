@@ -27,14 +27,14 @@ def test_write_hashtags_creates_flat_tags(tmp_path: Path):
     assert data["tags"] == ["#shorts", "#test", "#example"]
 
 
-def test_write_hashtags_merges_with_existing_tags(tmp_path: Path):
-    """Sidecar already has 'tags': ['#existing'], write new → result has both, deduped."""
+def test_write_hashtags_replaces_existing_tags(tmp_path: Path):
+    """Sidecar already has 'tags': ['#existing'], write new → result has only new tags."""
     json_path = tmp_path / "test.json"
     existing = {"other": "data", "tags": ["#existing"]}
     json_path.write_text(json.dumps(existing))
 
     hashtags_block = build_hashtags_block(
-        tags_list=["#shorts", "#existing"],  # #existing is duplicate
+        tags_list=["#shorts", "#new"],
         language="English",
         model="gpt-4o-mini",
         source="filename",
@@ -43,12 +43,7 @@ def test_write_hashtags_merges_with_existing_tags(tmp_path: Path):
 
     data = json.loads(json_path.read_text())
     assert data["other"] == "data"
-    assert "#existing" in data["tags"]
-    assert "#shorts" in data["tags"]
-    # Check dupe removed - should have exactly 2 tags
-    assert len(data["tags"]) == 2
-    # Existing first, then new
-    assert data["tags"][0] == "#existing"
+    assert data["tags"] == ["#shorts", "#new"]
 
 
 def test_write_hashtags_no_tags_key_initially(tmp_path: Path):

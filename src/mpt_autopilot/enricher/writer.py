@@ -64,14 +64,7 @@ def write_hashtags(
 
     # Also write a flat "tags" key for downstream consumers (e.g. yt-shorts-uploader).
     tags_list = hashtags_block["tags_list"]
-    if "tags" in existing and isinstance(existing["tags"], list):
-        seen = set(t.lower() for t in existing["tags"])
-        for t in tags_list:
-            if t.lower() not in seen:
-                existing["tags"].append(t)
-                seen.add(t.lower())
-    else:
-        existing["tags"] = list(tags_list)
+    existing["tags"] = list(tags_list)
 
     # Atomic write: serialise to a sibling temp file then rename.
     # os.replace() is atomic on POSIX and Win32 (same filesystem).

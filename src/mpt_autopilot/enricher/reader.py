@@ -86,16 +86,14 @@ def resolve_meta(mp4_path: Path, lang_override: str | None = None) -> VideoMeta:
         data = _read_script_json(json_path)
         params = data.get("params", {})
         video_subject = params.get("video_subject", "").strip()
+        script_lang = _normalize_lang(params.get("video_language"))
 
         if video_subject:
             topic = video_subject
             source = "script_json"
-            # Language from script.json only used if --lang not provided
-            script_lang = _normalize_lang(params.get("video_language"))
         else:
             topic = _stem_to_topic(stem)
             source = "filename"
-            script_lang = None
     else:
         topic = _stem_to_topic(stem)
         source = "filename"

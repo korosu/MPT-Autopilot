@@ -86,7 +86,9 @@ def process_file(
 
         if not tags:
             log.warn(f"LLM returned empty tags for {mp4_path.name}, using fallback")
-            tags = list(settings.always_include) or ["#shorts"]
+            tags = list(settings.always_include)
+            if not tags:
+                log.warn("No always_include configured — writing empty tags")
 
         # ── Build and write output ────────────────────────────────────────────
         block = build_hashtags_block(

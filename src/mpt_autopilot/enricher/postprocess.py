@@ -8,8 +8,6 @@ and platform-specific hard limits.
 
 from __future__ import annotations
 
-import re
-
 # ── Default constants (overridden by Settings values passed in) ───────────────
 
 _DEFAULT_MAX_TAG_LENGTH = 20
@@ -110,30 +108,8 @@ def check_platform_limit(
     total_tag_count: int,
     platform: str,
 ) -> tuple[bool, str]:
-    """
-    Check whether the total tag count (always_include + generated) is within
-    the target platform's tag-count limit. This is a safety-net check —
-    validate_and_filter() already truncates to hard_limit, so this should
-    only ever fire if something upstream bypassed it.
-
-    Returns:
-        (is_safe: bool, warning_message: str)
-        warning_message is empty when is_safe is True.
-    """
+    """Check whether total tag count exceeds the platform limit (safety net)."""
     hard_limit = platform_hard_limit(platform)
-
     if total_tag_count > hard_limit:
-        return False, (f"{total_tag_count} total tags exceed the {platform} limit of {hard_limit}.")
-
+        return False, f"{total_tag_count} total tags exceed the {platform} limit of {hard_limit}."
     return True, ""
-
-
-def tag_has_valid_charset(tag: str) -> bool:
-    """
-    Return True if the tag body contains only valid hashtag characters.
-
-    Valid: letters (any Unicode script), digits, underscores.
-    Invalid: punctuation, spaces, special symbols.
-    """
-    body = tag.lstrip("#")
-    return bool(re.match(r"^\w+$", body, re.UNICODE))
