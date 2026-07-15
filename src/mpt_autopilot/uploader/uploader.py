@@ -47,6 +47,7 @@ def upload_video(
     token_file: Path,
     *,
     sleep=time.sleep,
+    timeout: int = 600,
 ) -> str:
     """
     Shells out to youtubeuploader (https://github.com/porjo/youtubeuploader).
@@ -54,6 +55,15 @@ def upload_video(
     so a retry can never re-upload a video YouTube already finalized. Any other
     non-zero exit is permanent and fails fast. Returns combined stdout+stderr on
     success. Raises UploadLimitExceeded or UploadFailed on non-zero exit.
+
+    Args:
+        binary: Path to youtubeuploader executable.
+        video: Path to the MP4 video file.
+        meta_file: Path to the JSON metadata file.
+        client_secrets: Path to OAuth client secrets JSON.
+        token_file: Path to OAuth token cache file.
+        sleep: Sleep function for testing (default: time.sleep).
+        timeout: Max seconds to wait for upload (default: 600).
     """
     cmd = [
         str(binary),
@@ -71,7 +81,17 @@ def upload_video(
     last_exc = None
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            output = f"timeout after {timeout}s"
+            if _is_transient(output):
+                last_exc = UploadFailed(f"transient error: {output}")
+                if attempt < _MAX_RETRIES:
+                    delay = _BASE_DELAY * (2 ** (attempt - 1))
+                    print(f"[retry {attempt}/{_MAX_RETRIES}] timeout, retrying in {delay}s...")
+                    sleep(delay)
+                    continue
+            raise UploadFailed(output)
         except OSError as exc:
             raise UploadFailed(f"failed to execute {binary}: {exc}") from exc
 

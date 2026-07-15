@@ -30,6 +30,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -62,7 +63,8 @@ def find_videos(account: Account) -> list[Path]:
     if not account.videos_dir.exists():
         return []
     return sorted(
-        f for f in account.videos_dir.iterdir() if f.is_file() and f.suffix.lower() == ".mp4"
+        f for f in account.videos_dir.iterdir()
+        if f.is_file() and f.suffix.lower() == ".mp4" and f.stat().st_size > 0
     )
 
 
@@ -70,17 +72,15 @@ def move_to_uploaded(video: Path, sidecar: Path, uploaded_dir: Path) -> None:
     uploaded_dir.mkdir(parents=True, exist_ok=True)
     dst_video = uploaded_dir / video.name
     dst_video.unlink(missing_ok=True)
-    video.rename(dst_video)
+    shutil.move(str(video), str(dst_video))
     if sidecar.exists():
         dst_sidecar = uploaded_dir / sidecar.name
         dst_sidecar.unlink(missing_ok=True)
-        sidecar.rename(dst_sidecar)
+        shutil.move(str(sidecar), str(dst_sidecar))
 
 
 def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | None) -> int:
     videos = find_videos(account)
-    if limit is not None:
-        videos = videos[:limit]
 
     if not videos:
         if not account.videos_dir.exists():
@@ -101,6 +101,18 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
     conn = open_ledger(settings.ledger_path)
     notifiers = notify.build_notifiers(settings)
     try:
+        for row in conn.execute(
+            "SELECT video_name FROM uploads WHERE account = ? AND status = 'uploaded'",
+            (account.name,),
+        ):
+            uploaded_name = row[0]
+            video_path = account.videos_dir / uploaded_name
+            if video_path.exists():
+                content_hash = sha256_file(video_path)
+                print(f"[{account.name}] recovering: {uploaded_name} (was uploaded, moving)")
+                move_to_uploaded(video_path, sidecar_path(video_path), uploaded_dir)
+                mark_moved(conn, account.name, content_hash)
+
         uploaded = 0
         failed = 0
         stopped_early = False
@@ -145,7 +157,7 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
             except UploadFailed as exc:
                 failed += 1
                 print(f"[{account.name}] FAILED: {video.name}: {exc}")
-                notify.notify_all(notifiers, f"\u26a0\ufe0f [{account.name}] failed: {video.name}")
+                notify.notify_all(notifiers, f"⚠️ [{account.name}] failed: {video.name}")
                 if index < last_index:
                     time.sleep(settings.sleep_between_uploads)
                 continue
@@ -158,6 +170,8 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
             if account.daily_upload_limit is not None and uploaded >= account.daily_upload_limit:
                 self_limited = True
                 break
+            if limit is not None and uploaded >= limit:
+                break
             if index < last_index:
                 time.sleep(settings.sleep_between_uploads)
 
@@ -166,7 +180,7 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
 
     if not dry_run:
         ok = failed == 0 and not stopped_early
-        icon = "\u2705" if ok else "\u26a0\ufe0f"
+        icon = "✅" if ok else "⚠️"
         suffix = (
             " (stopped early: daily quota)"
             if stopped_early
@@ -179,10 +193,7 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
             f"{icon} [upload/{account.name}] uploaded: {uploaded}  failed: {failed}{suffix}",
         )
         print(f"[{account.name}] summary: uploaded={uploaded} failed={failed}{suffix}")
-
-    if stopped_early:
-        return EXIT_QUOTA_STOP
-    return EXIT_FAILURES if failed else EXIT_OK
+    return EXIT_QUOTA_STOP if stopped_early else EXIT_FAILURES if failed else EXIT_OK
 
 
 def run_all(settings: Settings, *, dry_run: bool, limit: int | None) -> int:

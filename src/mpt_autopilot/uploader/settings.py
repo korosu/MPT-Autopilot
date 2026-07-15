@@ -81,6 +81,10 @@ def load_settings(
 
     notify_raw = cfg.get("notify", {}) or {}
 
+    sleep_between_uploads = int(cfg.get("sleep_between_uploads", 5))
+    if sleep_between_uploads < 0:
+        raise ValueError(f"sleep_between_uploads must be >= 0, got {sleep_between_uploads}")
+
     accounts: dict[str, Account] = {}
     for name, raw in (acc_raw.get("accounts") or {}).items():
         try:
@@ -96,15 +100,15 @@ def load_settings(
                 token_file=Path(raw["token_file"]).expanduser(),
                 daily_upload_limit=daily_limit,
             )
-        except KeyError as exc:
+        except (KeyError, TypeError) as exc:
             raise ValueError(
-                f"account '{name}' in accounts.yaml is missing required field {exc}"
+                f"account '{name}' in accounts.yaml has invalid config: {exc}"
             ) from exc
 
     return Settings(
         uploader_binary=Path(cfg.get("uploader_binary", "youtubeuploader")).expanduser(),
         meta_dir=Path(cfg.get("meta_dir", "./meta")).expanduser(),
-        sleep_between_uploads=int(cfg.get("sleep_between_uploads", 5)),
+        sleep_between_uploads=sleep_between_uploads,
         uploaded_dir_name=cfg.get("uploaded_dir_name", "old_videos"),
         defaults=defaults,
         notify_enabled=bool(notify_raw.get("enabled", True)),
@@ -123,6 +127,15 @@ def get_account(settings: Settings, name: str) -> Account:
     return settings.accounts[name]
 
 
+def _is_executable(path: Path) -> bool:
+    """Return True if path exists and has executable permission (unix) or valid ext (win)."""
+    if not path.exists():
+        return False
+    if os.name == "nt":
+        return path.suffix.lower() in {".exe", ".cmd", ".bat"}
+    return os.access(path, os.X_OK)
+
+
 def find_uploader_binary(path: Path) -> Path | None:
     """
     Resolves the configured uploader binary: an explicit/relative path is
@@ -130,7 +143,7 @@ def find_uploader_binary(path: Path) -> Path | None:
     up on PATH. Returns None if it can't be found either way.
     """
     if path.is_absolute() or path.parent != Path("."):
-        return path if path.exists() else None
+        return path if _is_executable(path) else None
     resolved = shutil.which(str(path))
     return Path(resolved) if resolved else None
 

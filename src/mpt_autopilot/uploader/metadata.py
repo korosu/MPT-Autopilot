@@ -11,6 +11,7 @@ from yt_uploader.engine.settings import Defaults
 _logger = logging.getLogger(__name__)
 
 TITLE_MAX_LEN = 100
+DESCRIPTION_MAX_LEN = 5000
 
 
 @dataclass
@@ -122,7 +123,7 @@ def load_meta(video_path: Path, defaults: Defaults) -> VideoMeta:
         raise ValueError(f"invalid sidecar metadata file {sidecar}: {exc}") from exc
 
     title = str(raw.get("title") or title_from_filename(video_path))[:TITLE_MAX_LEN]
-    description = str(raw.get("description", ""))
+    description = str(raw.get("description", ""))[:DESCRIPTION_MAX_LEN]
 
     sidecar_tags = raw.get("tags")
     if sidecar_tags and isinstance(sidecar_tags, list) and len(sidecar_tags) > 0:
