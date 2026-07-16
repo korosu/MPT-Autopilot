@@ -60,7 +60,7 @@ pip install -e .
 
 ```bash
 cp .env.example .env
-cp config.yaml.example config.yaml
+cp config.example.yaml config.yaml
 cp accounts.example.yaml accounts.yaml
 ```
 

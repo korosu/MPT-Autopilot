@@ -10,7 +10,7 @@ Usage:
 
 Setup:
     cp .env.example .env
-    cp config.yaml.example config.yaml
+    cp config.example.yaml config.yaml
     cp accounts.example.yaml accounts.yaml
     # edit accounts.yaml with real paths, then get an OAuth token once via
     # youtubeuploader itself (see README)
