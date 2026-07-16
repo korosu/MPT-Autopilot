@@ -39,7 +39,7 @@ No video generator or special toolchain required.
 git clone https://github.com/korosu/hashtag-enricher.git
 cd hashtag-enricher
 cp .env.example .env
-cp config.yaml.example config.yaml
+cp config.example.yaml config.yaml
 ```
 
 Open `.env` and add your API key:
@@ -210,7 +210,7 @@ or `both` (default).
 
 ## Configuration
 
-Copy `config.yaml.example` to `config.yaml` and edit as needed:
+Copy `config.example.yaml` to `config.yaml` and edit as needed:
 
 ```yaml
 platform: youtube          # youtube | tiktok | instagram
