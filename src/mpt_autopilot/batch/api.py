@@ -74,10 +74,10 @@ def wait_for_task(
         if progress > max_progress_seen:
             max_progress_seen = progress
 
-        if state not in (0, 1):
-            raise RuntimeError(
-                f"task ended unexpectedly (state={state}){' — failed' if state == 3 else ''}"
-            )
+        # MPT states: -1=FAILED, 1=COMPLETE, 4=PROCESSING. Only -1 is terminal failure.
+        # State 1 is alive until progress hits 100 (checked below).
+        if state == -1:
+            raise RuntimeError(f"task failed (state={state})")
 
         if progress >= 100:
             return data
