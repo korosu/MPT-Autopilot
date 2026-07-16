@@ -29,6 +29,13 @@ class Settings:
     output_dir: Path
     seen_file: Path
 
+    # Per-language overrides — from config.yaml (optional)
+    # {code: {"file_suffix": "_es", ...}} — empty dict when absent
+    langs: dict[str, dict]
+
+    # Default jobs directory — from config.yaml (optional)
+    jobs_dir: Path | None
+
     # Voice presets — every bundled Edge TTS voice plus config.yaml's `voices:`
     # section on top (config.yaml wins on name collisions), already flattened
     # into {alias: {tts_server, voice_name, ...}}. See engine/voices.py.
@@ -90,11 +97,26 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
     def _resolve(value: str) -> Path:
         return (cfg_dir / value).expanduser().resolve()
 
+    # Parse langs section (optional — empty dict when absent)
+    langs_raw = cfg.get("langs") or {}
+    langs: dict[str, dict] = {}
+    for code, entry in langs_raw.items() if isinstance(langs_raw, dict) else []:
+        entry = entry or {}
+        langs[code] = {
+            "file_suffix": str(entry.get("file_suffix", f"_{code}")),
+        }
+
+    # Parse jobs_dir (optional)
+    cfg_jobs_dir = cfg.get("jobs_dir")
+    jobs_dir = _resolve(cfg_jobs_dir) if cfg_jobs_dir else None
+
     s = Settings(
         api_url=str(_require_cfg(cfg, "api_url")).rstrip("/"),
         mpt_storage=_resolve(str(_require_cfg(cfg, "mpt_storage"))),
         output_dir=_resolve(cfg.get("output_dir", "./exports")),
         seen_file=_resolve(cfg.get("seen_file", "./seen.txt")),
+        langs=langs,
+        jobs_dir=jobs_dir,
         voice_pool=voices.build_full_pool(cfg.get("voices", {})),
         log_file=_resolve(cfg.get("log_file", "./logs/batch.log")),
         log_max_bytes=int(cfg.get("log_max_mb", 10)) * 1024 * 1024,

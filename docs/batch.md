@@ -300,6 +300,68 @@ Cleanup always runs once at the end of a batch (when enabled). `cache_cleanup_in
 
 ---
 
+## Background music
+
+MoneyPrinterTurbo can mix background music into videos. mpt-batch helps you
+discover and manage BGM files in MPT's `resource/songs/` directory.
+
+### List available BGM
+
+```bash
+# List all .mp3 files in MPT's resource/songs/
+uv run batch --list-bgm
+
+# Filter by filename substring
+uv run batch --list-bgm calm
+```
+
+```
+$ uv run batch --list-bgm
+3 BGM file(s):
+
+  ambient_calm.mp3              2048 KB
+  upbeat_energy.mp3             1536 KB
+  lo-fi_chill.mp3               3072 KB
+
+Use in jobs.yaml as:  bgm_type: "custom"  bgm_file: "<name>"  bgm_volume: 0.2
+```
+
+### Upload your own BGM
+
+Copy `.mp3` files from a local directory into MPT's `resource/songs/`:
+
+```bash
+# Upload all .mp3 files from current directory
+uv run batch --upload-bgm
+
+# Upload from a specific directory
+uv run batch --upload-bgm ~/my_background_music/
+```
+
+### Use BGM in jobs.yaml
+
+Once files are in `resource/songs/`, reference them in your jobs:
+
+```yaml
+defaults:
+  bgm_type: "custom"       # "random" | "builtin" | "custom" | "none"
+  bgm_file: "ambient_calm.mp3"
+  bgm_volume: 0.2          # 0.0–1.0
+
+jobs:
+  - name: "Relaxing Morning Routine"
+    output_file: "morning_routine.mp4"
+    video_subject: "5 morning routine tips for productivity"
+    bgm_type: "custom"
+    bgm_file: "lo-fi_chill.mp3"
+    bgm_volume: 0.15
+```
+
+`bgm_type: "random"` picks a random file from `resource/songs/`; `"none"` disables
+background music entirely.
+
+---
+
 ## Running on a schedule (cron)
 
 ```bash

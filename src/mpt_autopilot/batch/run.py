@@ -463,9 +463,9 @@ Examples:
     parser.add_argument(
         "--jobs",
         type=Path,
-        default=Path("jobs.yaml"),
+        default=None,
         metavar="PATH",
-        help="Jobs file path (default: jobs.yaml)",
+        help="Jobs file path (default: jobs.yaml, or jobs_{suffix}.yaml with --lang)",
     )
     parser.add_argument(
         "--dry-run",
@@ -515,6 +515,17 @@ Examples:
         help=(
             "Override seen_file from config.yaml (e.g. --seen seen_es.txt for "
             "multi-language setups using shorts-pilot)."
+        ),
+    )
+    parser.add_argument(
+        "--lang",
+        type=str,
+        default=None,
+        metavar="CODE",
+        help=(
+            "Language code matching a key in config.yaml's langs: section. "
+            "Derives --jobs, --seen, and output_dir with the language's file_suffix. "
+            "E.g. --lang es → jobs_es.yaml, seen_es.txt, exports_es/"
         ),
     )
     return parser
@@ -585,8 +596,38 @@ def main() -> None:
         print(f"[ERROR] {e}")
         sys.exit(1)
 
-    # Resolve --seen path relative to config.yaml's location (same as seen_file)
+    # Resolve language suffix from --lang
+    lang_suffix = ""
+    if args.lang is not None:
+        if args.lang not in settings.langs:
+            print(
+                f"[ERROR] Unknown language '{args.lang}'. "
+                f"Available in config.yaml langs: {list(settings.langs) or '(none)'}"
+            )
+            sys.exit(1)
+        lang_suffix = settings.langs[args.lang].get("file_suffix", f"_{args.lang}")
+
+    # Resolve --jobs default: config's jobs_dir > cwd-relative
+    if args.jobs is None:
+        base_dir = settings.jobs_dir or Path.cwd()
+        args.jobs = base_dir / f"jobs{lang_suffix}.yaml"
+
+    # Resolve --seen default when --lang is set and --seen not explicitly passed
     seen_override: Path | None = None
+    if args.seen is None and lang_suffix:
+        # Derive from configured seen_file: seen.txt → seen_es.txt
+        cfg_dir = args.config.resolve().parent
+        seen_stem = settings.seen_file.stem
+        seen_suffix = settings.seen_file.suffix
+        args.seen = cfg_dir / f"{seen_stem}{lang_suffix}{seen_suffix}"
+
+    # Apply lang suffix to output_dir
+    if lang_suffix:
+        settings.output_dir = (
+            settings.output_dir.parent / f"{settings.output_dir.name}{lang_suffix}"
+        )
+
+    # Resolve --seen path relative to config.yaml's location (same as seen_file)
     if args.seen is not None:
         cfg_dir = args.config.resolve().parent
         seen_override = cfg_dir / args.seen if not args.seen.is_absolute() else args.seen
