@@ -78,7 +78,7 @@ The `file_suffix` field in `config.yaml` controls both jobs and seen filenames:
 git clone https://github.com/korosu/shorts-pilot.git
 cd shorts-pilot
 cp .env.example .env
-cp config.yaml.example config.yaml
+cp config.example.yaml config.yaml
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv python install 3.11
 uv sync

@@ -32,6 +32,7 @@ import argparse
 import math
 import re
 import sys
+import time
 from pathlib import Path
 
 from shorts_pilot.generator import jobs, seen
@@ -120,6 +121,10 @@ def build_duration_instruction(words: tuple[int, int | None]) -> str:
 
 # ── Deduplication + cleanup ───────────────────────────────────────────────────
 
+# Known valid values for MPT fields (whitelist for LLM output validation)
+_VALID_CONCAT_MODES = {"random", "sequential", "reverse", "transition"}
+_VALID_BGM_TYPES = {"random", "builtin", "local", "none"}
+
 
 def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
     """
@@ -159,10 +164,12 @@ def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
     if not isinstance(para, int) or isinstance(para, bool) or para <= 0:
         out["paragraph_number"] = defaults.get("paragraph_number", 2)
 
-    if not isinstance(out.get("video_concat_mode"), str) or not out.get("video_concat_mode"):
+    # video_concat_mode: must be a known MPT value
+    if out.get("video_concat_mode") not in _VALID_CONCAT_MODES:
         out["video_concat_mode"] = defaults.get("video_concat_mode", "random")
 
-    if not isinstance(out.get("bgm_type"), str) or not out.get("bgm_type"):
+    # bgm_type: must be a known MPT value
+    if out.get("bgm_type") not in _VALID_BGM_TYPES:
         out["bgm_type"] = defaults.get("bgm_type", "random")
 
     # ponytail: duration_range → video_script_prompt instruction + light paragraph coupling
@@ -571,8 +578,24 @@ def run(
 
         print(f"[{lang}] calling LLM for {this_count} ideas...")
 
-        raw_text = call_llm(system_prompt, user_prompt, settings, this_count)
-        raw_jobs = parse_json_array(raw_text)
+        # Retry on JSON parse errors (wasted API call otherwise)
+        json_parse_attempts = 0
+        while True:
+            raw_text = call_llm(system_prompt, user_prompt, settings, this_count)
+            try:
+                raw_jobs = parse_json_array(raw_text)
+                break
+            except ValueError as e:
+                json_parse_attempts += 1
+                if json_parse_attempts >= 2:
+                    raise  # Give up after 2 attempts
+                print(f"  [retry] LLM returned invalid JSON ({e}), retrying...")
+                time.sleep(1)
+                # Re-prompt with stronger instruction
+                user_prompt = (
+                    user_prompt.rstrip() + " (IMPORTANT: return ONLY valid JSON array, "
+                    "no prose, no explanation, no code fences)"
+                )
 
         if len(raw_jobs) < this_count:
             print(

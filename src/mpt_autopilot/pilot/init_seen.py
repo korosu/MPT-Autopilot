@@ -174,7 +174,7 @@ Examples:
     args = parser.parse_args()
 
     try:
-        settings = load_settings()
+        settings = load_settings(require_llm=False)  # init-seen doesn't use LLM
     except Exception as e:
         print(f"[ERROR] {e}")
         sys.exit(1)
