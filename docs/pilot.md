@@ -256,7 +256,7 @@ uv run init-seen --dir /your/videos --seen-dir /your/seen/files
 
 You can also define permanent scan paths in `config.yaml` under `scan_dirs` so you don't need to pass `--dir` every time:
 
-```
+```yml
 scan_dirs: [/your/path/to/videos,
             /your/path/to/videos/en,
             /your/path/to/videos/old_videos,
@@ -275,7 +275,7 @@ uv run init-seen
 
 Edit `config.yaml` to adjust thresholds, voices, or add new languages:
 
-```
+```yml
 generation:
   count: 21       # how many ideas to generate per refill
   threshold: 10   # refill when pending jobs drop below this
@@ -315,7 +315,7 @@ langs:
 
 Each generated entry added to the jobs yaml looks like this:
 
-```
+```yml
 - name: "fact_ants_outweigh_humans"
   enabled: true
   output_file: "fact_ants_outweigh_humans.mp4"
