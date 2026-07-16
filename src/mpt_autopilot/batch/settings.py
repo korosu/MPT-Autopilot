@@ -65,7 +65,7 @@ def _require_cfg(cfg: dict, key: str) -> object:
     if key not in cfg:
         raise KeyError(
             f"config.yaml is missing required key '{key}'. "
-            f"Check your config.yaml against the defaults in config.yaml.example."
+            f"Check your config.yaml against the defaults in config.example.yaml."
         )
     return cfg[key]
 
@@ -77,7 +77,7 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
     if not cfg_path.exists():
         raise FileNotFoundError(
             f"config.yaml not found: {cfg_path}\n"
-            f"Copy config.yaml.example to config.yaml and adjust as needed."
+            f"Copy config.example.yaml to config.yaml and adjust as needed."
         )
 
     with open(cfg_path, encoding="utf-8") as f:

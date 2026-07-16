@@ -39,7 +39,7 @@ interrupted session is always safe.
 git clone https://github.com/korosu/mpt-batch.git
 cd mpt-batch
 cp .env.example .env
-cp config.yaml.example config.yaml
+cp config.example.yaml config.yaml
 cp jobs.example.yaml jobs.yaml
 ```
 
@@ -274,7 +274,7 @@ Without `--seen`, mpt-batch uses `seen.txt` from config.yaml — videos from oth
 
 ## Configuration
 
-Copy `config.yaml.example` to `config.yaml` and edit as needed — every setting is documented inline:
+Copy `config.example.yaml` to `config.yaml` and edit as needed — every setting is documented inline:
 
 ```yaml
 api_url: "http://127.0.0.1:8080"
