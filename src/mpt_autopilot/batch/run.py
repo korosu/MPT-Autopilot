@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import signal
 import sys
 import time
 from datetime import datetime
@@ -311,15 +312,33 @@ def run(
         return
 
     lock_path = seen_file.with_name(seen_file.stem + ".lock")
+    _lock_timeout = 1800  # ponytail: 30 min stale lock timeout
     try:
         os.close(os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY))
     except FileExistsError:
-        log(
-            f"ERROR: Lock file exists at {lock_path} — another batch may be running. "
-            f"If not, delete it and re-run.",
-            settings,
-        )
-        return
+        try:
+            mtime = lock_path.stat().st_mtime
+            if time.time() - mtime > _lock_timeout:
+                log(
+                    f"Stale lock file (age {time.time() - mtime:.0f}s > {_lock_timeout}s) — "
+                    f"overwriting",
+                    settings,
+                )
+                os.close(os.open(str(lock_path), os.O_CREAT | os.O_TRUNC | os.O_WRONLY))
+            else:
+                log(
+                    f"ERROR: Lock file exists at {lock_path} — another batch may be running. "
+                    f"If not, delete it and re-run.",
+                    settings,
+                )
+                return
+        except OSError:
+            log(
+                f"ERROR: Lock file exists at {lock_path} and cannot be read. "
+                f"Delete manually if stale.",
+                settings,
+            )
+            return
 
     settings.output_dir.mkdir(parents=True, exist_ok=True)
     start_time = time.time()
@@ -330,61 +349,89 @@ def run(
         settings,
     )
 
-    ok: list[str] = []
-    failed: list[str] = []
-    skipped: list[str] = []
-    consecutive_failures = 0
-    last_cleanup_at = 0
+    # ── Lock cleanup on Ctrl+C / SIGTERM / exceptions ──
+    _lock_cleaned_up = False
 
-    for index, job in enumerate(jobs, start=1):
-        name = job.get("name", job.get("output_file", "?"))
+    def _cleanup_lock() -> None:
+        nonlocal _lock_cleaned_up
+        if not _lock_cleaned_up:
+            lock_path.unlink(missing_ok=True)
+            _lock_cleaned_up = True
 
-        if not job.get("enabled", True):
-            skipped.append(f"{name} (disabled)")
-            continue
+    def _on_signal(signum: int, _frame: object) -> None:  # _frame unused but required by signal API
+        _cleanup_lock()
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
 
-        if seen.contains(seen_file, job["output_file"]):
-            skipped.append(f"{name} (already done)")
-            log(f"skip: {job['output_file']} (in seen registry)", settings)
-            continue
+    _prev_sigint = signal.signal(signal.SIGINT, _on_signal)
+    try:
+        _prev_sigterm = signal.signal(signal.SIGTERM, _on_signal)
+    except AttributeError:
+        _prev_sigterm = None  # ponytail: Windows has no SIGTERM
 
-        success = run_job(job, defaults, voice_pool, settings, in_progress_path)
+    try:
+        ok: list[str] = []
+        failed: list[str] = []
+        skipped: list[str] = []
+        consecutive_failures = 0
+        last_cleanup_at = 0
 
-        if success:
-            ok.append(name)
-            consecutive_failures = 0
-            seen.add(seen_file, job["output_file"])
-            if (
-                settings.cache_cleanup_enabled
-                and settings.cache_cleanup_interval > 0
-                and len(ok) % settings.cache_cleanup_interval == 0
-            ):
-                log(f"periodic cache cleanup after {len(ok)} videos", settings)
-                cleanup_cache(settings)
-                last_cleanup_at = len(ok)
-        else:
-            failed.append(name)
-            consecutive_failures += 1
-            if consecutive_failures >= settings.max_consecutive_failures:
-                log(
-                    f"ABORT: {consecutive_failures} consecutive failures — "
-                    f"API may be down or token expired",
-                    settings,
-                )
-                notify.alert(
-                    f"Batch aborted: {consecutive_failures} consecutive failures "
-                    f"(last: {name})\n"
-                    f"Progress: {index}/{len(jobs)} jobs processed — "
-                    f"{len(ok)} succeeded, {len(failed)} failed so far.\n"
-                    f"Likely cause: API unreachable or an invalid/expired token. "
-                    f"Remaining jobs were not attempted.",
-                    settings,
-                )
-                break
+        for index, job in enumerate(jobs, start=1):
+            name = job.get("name", job.get("output_file", "?"))
 
-    if settings.cache_cleanup_enabled and len(ok) != last_cleanup_at:
-        cleanup_cache(settings)
-    lock_path.unlink(missing_ok=True)
+            if not job.get("enabled", True):
+                skipped.append(f"{name} (disabled)")
+                continue
+
+            if seen.contains(seen_file, job["output_file"]):
+                skipped.append(f"{name} (already done)")
+                log(f"skip: {job['output_file']} (in seen registry)", settings)
+                continue
+
+            success = run_job(job, defaults, voice_pool, settings, in_progress_path)
+
+            if success:
+                ok.append(name)
+                consecutive_failures = 0
+                seen.add(seen_file, job["output_file"])
+                if not _lock_cleaned_up:
+                    os.utime(lock_path, None)  # ponytail: keepalive so lock doesn't look stale
+                if (
+                    settings.cache_cleanup_enabled
+                    and settings.cache_cleanup_interval > 0
+                    and len(ok) % settings.cache_cleanup_interval == 0
+                ):
+                    log(f"periodic cache cleanup after {len(ok)} videos", settings)
+                    cleanup_cache(settings)
+                    last_cleanup_at = len(ok)
+            else:
+                failed.append(name)
+                consecutive_failures += 1
+                if consecutive_failures >= settings.max_consecutive_failures:
+                    log(
+                        f"ABORT: {consecutive_failures} consecutive failures — "
+                        f"API may be down or token expired",
+                        settings,
+                    )
+                    notify.alert(
+                        f"Batch aborted: {consecutive_failures} consecutive failures "
+                        f"(last: {name})\n"
+                        f"Progress: {index}/{len(jobs)} jobs processed — "
+                        f"{len(ok)} succeeded, {len(failed)} failed so far.\n"
+                        f"Likely cause: API unreachable or an invalid/expired token. "
+                        f"Remaining jobs were not attempted.",
+                        settings,
+                    )
+                    break
+
+        if settings.cache_cleanup_enabled and len(ok) != last_cleanup_at:
+            cleanup_cache(settings)
+    finally:
+        _cleanup_lock()
+        signal.signal(signal.SIGINT, _prev_sigint)
+        if _prev_sigterm is not None:
+            signal.signal(signal.SIGTERM, _prev_sigterm)
+
     _print_summary(ok, failed, skipped, settings, started_at=start_time)
 
 
