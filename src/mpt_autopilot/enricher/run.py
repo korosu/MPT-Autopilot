@@ -215,7 +215,7 @@ def main() -> None:
             sys.exit(1)
         mp4_files = [target]
     else:
-        directory = (args.dir or Path(".")).resolve()
+        directory = (args.dir or settings.directory or Path(".")).resolve()
         if not directory.is_dir():
             log.error(f"Directory not found: {directory}")
             sys.exit(1)

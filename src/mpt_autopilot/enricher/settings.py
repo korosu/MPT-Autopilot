@@ -151,6 +151,10 @@ class Settings:
         # Set to false for reasoning models (o1, o3, o4-mini) that reject temperature.
         self.supports_temperature: bool = cfg.get("supports_temperature", True)
 
+        # ── Default directory ───────────────────────────────────────────────────
+        raw_dir: str | None = cfg.get("directory")
+        self.directory: Path | None = Path(raw_dir) if raw_dir else None
+
         # ── Logging ───────────────────────────────────────────────────────────
         self.log_dir: Path = _ROOT / "logs"
         self.log_file: Path = self.log_dir / "enricher.log"
