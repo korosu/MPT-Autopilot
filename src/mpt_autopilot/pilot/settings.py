@@ -26,6 +26,7 @@ class LangSettings:
     voice_rate_max: float
     voices: list[str]
     job_defaults: dict[str, Any]
+    theme_list: list[str]
 
 
 @dataclass
@@ -40,7 +41,6 @@ class Settings:
     refill_threshold: int
     scan_dirs: list[str]
     langs: dict[str, LangSettings]
-    theme_list: list[str]
 
     # Paths — from config.yaml (optional; CLI flags always take priority)
     jobs_dir: Path | None
@@ -85,24 +85,23 @@ def load(
     scan_dirs = raw.get("scan_dirs") or []
     paths_raw = raw.get("paths") or {}
 
-    # Parse theme_list — list of strings, or a bare string (wraps to list).
-    # Anything else falls back to empty with a warning.
-    tl_raw = raw.get("theme_list")
-    if isinstance(tl_raw, list):
-        theme_list = [str(t).strip() for t in tl_raw if str(t).strip()]
-    elif isinstance(tl_raw, str) and tl_raw.strip():
-        theme_list = [tl_raw.strip()]
-    else:
-        theme_list = []
-    if tl_raw is not None and not theme_list:
-        print("[warn] theme_list in config.yaml is empty or malformed — ignoring")
-
     cfg_jobs_dir = paths_raw.get("jobs_dir")
     cfg_seen_dir = paths_raw.get("seen_dir")
 
     langs: dict[str, LangSettings] = {}
     for code, lr in langs_raw.items():
         lr = lr or {}  # a lang block with nothing under it (`en:` alone) → {}
+        # Parse theme_list — list of strings, or a bare string (wraps to list).
+        # Absent/malformed → empty list.
+        tl_raw = lr.get("theme_list")
+        if isinstance(tl_raw, list):
+            theme_list = [str(t).strip() for t in tl_raw if str(t).strip()]
+        elif isinstance(tl_raw, str) and tl_raw.strip():
+            theme_list = [tl_raw.strip()]
+        else:
+            theme_list = []
+        if tl_raw is not None and not theme_list:
+            print(f"[warn] lang '{code}' theme_list is empty or malformed — ignoring")
         langs[code] = LangSettings(
             label=lr.get("label", code.upper()),
             file_suffix=lr.get("file_suffix", ""),
@@ -110,6 +109,7 @@ def load(
             voice_rate_max=float(lr.get("voice_rate_max", 1.20)),
             voices=lr.get("voices", []),
             job_defaults=lr.get("job_defaults", {}),
+            theme_list=theme_list,
         )
 
     # Resolve relative paths against the config.yaml location, not cwd,
@@ -131,7 +131,6 @@ def load(
         refill_threshold=int(gen.get("threshold", 10)),
         scan_dirs=scan_dirs,
         langs=langs,
-        theme_list=theme_list,
         jobs_dir=jobs_dir,
         seen_dir=seen_dir,
     )

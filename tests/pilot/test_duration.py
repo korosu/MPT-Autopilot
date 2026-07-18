@@ -118,6 +118,7 @@ def test_validation_with_duration_range() -> None:
             "paragraph_number": 2,
             "duration_range": "90-120",
         },
+        theme_list=[],
     )
 
     job = {"video_subject": "Test fact about octopuses", "output_file": "test_octopuses.mp4"}
@@ -148,6 +149,7 @@ def test_validation_without_duration_range() -> None:
             "paragraph_number": 2,
             # No duration_range
         },
+        theme_list=[],
     )
 
     job = {"video_subject": "Test fact", "output_file": "test.mp4"}

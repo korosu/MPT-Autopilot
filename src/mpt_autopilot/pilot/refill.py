@@ -475,12 +475,12 @@ def run(
 
     # Resolve active themes: --theme narrows to specific theme(s); no --theme
     # but non-empty config.theme_list uses all configured themes.
-    configured = settings.theme_list
+    configured = lang_cfg.theme_list
     if themes:
         unknown = [t for t in themes if t not in configured]
         if unknown:
             raise ValueError(
-                f"--theme {unknown!r} not found in config.yaml theme_list {configured!r}. "
+                f"--theme {unknown!r} not found in language config theme_list {configured!r}. "
                 f"Add the theme(s) there first."
             )
         active_themes = list(dict.fromkeys(themes))  # dedupe, preserve order
@@ -667,7 +667,7 @@ Examples:
     refill --lang en --topics /path/to/topics.txt
 
     # Theme mode (LLM generates short titles about configured themes):
-    refill --lang en --force --count 20      # uses all themes from config.yaml theme_list
+    refill --lang en --force --count 20      # uses all themes from language config theme_list
     refill --lang en --theme job --force --count 5  # only themes matching "job"
 """,
     )
@@ -735,8 +735,9 @@ Examples:
         default=None,
         metavar="THEME",
         help="LLM theme mode: generate short topic titles constrained to this "
-        "theme from config.yaml theme_list. Repeatable. Without --theme "
-        "but with a non-empty theme_list, all configured themes are used.",
+        "theme from this language's theme_list in config.yaml. Repeatable. "
+        "Without --theme but with a non-empty theme_list in the language's "
+        "config block, all configured themes are used.",
     )
 
     args = parser.parse_args()

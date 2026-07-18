@@ -42,9 +42,9 @@ def make_settings(count: int = 21, threshold: int = 10, suffix: str = "") -> Set
                     "bgm_volume": 0.15,
                     "paragraph_number": 2,
                 },
+                theme_list=[],
             )
         },
-        theme_list=[],
         jobs_dir=None,
         seen_dir=None,
     )
