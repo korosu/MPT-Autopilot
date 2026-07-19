@@ -63,7 +63,8 @@ def find_videos(account: Account) -> list[Path]:
     if not account.videos_dir.exists():
         return []
     return sorted(
-        f for f in account.videos_dir.iterdir()
+        f
+        for f in account.videos_dir.iterdir()
         if f.is_file() and f.suffix.lower() == ".mp4" and f.stat().st_size > 0
     )
 
@@ -125,7 +126,7 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
                 print(f"[{account.name}] skip: {video.name} (already uploaded)")
                 continue
 
-            meta = load_meta(video, settings.defaults)
+            meta = load_meta(video, settings.defaults, account_name=account.name)
 
             if dry_run:
                 print(f"[{account.name}] would upload: {video.name}")

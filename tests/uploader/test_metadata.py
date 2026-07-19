@@ -11,6 +11,7 @@ from yt_uploader.engine.metadata import (
     _apply_description_placement,
     _apply_tags_placement,
     load_meta,
+    title_from_filename,
 )
 
 
@@ -141,6 +142,57 @@ def test_description_only_placement(tmp_path: Path):
 
     assert meta.tags == ["shorts"]  # defaults unchanged
     assert "#fun" in meta.description
+
+
+def test_title_from_filename_strips_account_suffix():
+    """Account suffix is stripped from the filename stem."""
+    # With matching account suffix
+    video = Path("mi_video_es.mp4")
+    assert title_from_filename(video, "es") == "mi video"
+
+    # Without account suffix (no strip)
+    video = Path("my_cool_video.mp4")
+    assert title_from_filename(video, "en") == "my cool video"
+
+    # No account name provided (backward compat)
+    video = Path("cool_video.mp4")
+    assert title_from_filename(video) == "cool video"
+
+    # Case-insensitive suffix match
+    video = Path("test_video_ES.mp4")
+    assert title_from_filename(video, "es") == "test video"
+
+
+def test_load_meta_strips_suffix_from_filename(tmp_path: Path):
+    """load_meta strips account suffix when deriving title from filename."""
+    video = tmp_path / "my_subject_es.mp4"
+    video.touch()
+
+    defaults = Defaults()
+    meta = load_meta(video, defaults, account_name="es")
+    assert meta.title == "my subject"
+
+
+def test_load_meta_no_strip_without_suffix(tmp_path: Path):
+    """load_meta doesn't mangle title when filename lacks the account suffix."""
+    video = tmp_path / "best_ai.mp4"
+    video.touch()
+
+    defaults = Defaults()
+    meta = load_meta(video, defaults, account_name="en")
+    assert meta.title == "best ai"
+
+
+def test_load_meta_sidecar_without_title_uses_account_name(tmp_path: Path):
+    """MPT script.json sidecars lack 'title', so suffix stripping still applies."""
+    sidecar = tmp_path / "my_video_es.json"
+    sidecar.write_text('{"tags": ["#test"]}')  # MPT-style sidecar (no title field)
+    video = tmp_path / "my_video_es.mp4"
+    video.touch()
+
+    defaults = Defaults()
+    meta = load_meta(video, defaults, account_name="es")
+    assert meta.title == "my video"  # suffix stripped
 
 
 if __name__ == "__main__":

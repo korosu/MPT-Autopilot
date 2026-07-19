@@ -28,8 +28,19 @@ def sidecar_path(video_path: Path) -> Path:
     return video_path.with_suffix(".json")
 
 
-def title_from_filename(video_path: Path) -> str:
-    name = video_path.stem.replace("_", " ").replace("-", " ")
+def title_from_filename(video_path: Path, account_name: str = "") -> str:
+    """Convert video filename to title, stripping account suffix if present.
+
+    Only strips a known suffix pattern (_<account_name>) to avoid
+    mangling legitimate titles. If the stem doesn't end with this suffix,
+    the title is derived as-is.
+    """
+    name = video_path.stem
+    if account_name:
+        suffix = f"_{account_name}"
+        if name.lower().endswith(suffix.lower()):
+            name = name[: len(name) - len(suffix)]
+    name = name.replace("_", " ").replace("-", " ")
     name = " ".join(name.split())
     return name[:TITLE_MAX_LEN]
 
@@ -86,7 +97,7 @@ def _apply_description_placement(title: str, description: str, sidecar_tags: lis
     return description + (" " if description else "") + " ".join(add_tags)
 
 
-def load_meta(video_path: Path, defaults: Defaults) -> VideoMeta:
+def load_meta(video_path: Path, defaults: Defaults, account_name: str = "") -> VideoMeta:
     """
     Reads <video>.json if present. The sidecar uses the same field names as
     youtubeuploader's own -metaJSON format, so no translation layer is needed:
@@ -106,11 +117,14 @@ def load_meta(video_path: Path, defaults: Defaults) -> VideoMeta:
     - "tags": writes to hidden metadata tags
     - "description": appends as visible hashtags to description
     - "both": applies both independently
+
+    If account_name is provided and the video filename ends with _<account_name>,
+    that suffix is stripped before deriving the title.
     """
     sidecar = sidecar_path(video_path)
     if not sidecar.exists():
         return VideoMeta(
-            title=title_from_filename(video_path),
+            title=title_from_filename(video_path, account_name),
             description="",
             tags=list(defaults.tags),
             privacy_status=defaults.privacy_status,
@@ -122,7 +136,7 @@ def load_meta(video_path: Path, defaults: Defaults) -> VideoMeta:
     except (json.JSONDecodeError, OSError) as exc:
         raise ValueError(f"invalid sidecar metadata file {sidecar}: {exc}") from exc
 
-    title = str(raw.get("title") or title_from_filename(video_path))[:TITLE_MAX_LEN]
+    title = str(raw.get("title") or title_from_filename(video_path, account_name))[:TITLE_MAX_LEN]
     description = str(raw.get("description", ""))[:DESCRIPTION_MAX_LEN]
 
     sidecar_tags = raw.get("tags")
