@@ -36,6 +36,10 @@ class Settings:
     base_url: str
     model: str
 
+    # Telegram alerts — from .env (optional)
+    telegram_token: str
+    telegram_chat_id: str
+
     # Generation — from config.yaml
     generate_count: int
     refill_threshold: int
@@ -127,6 +131,8 @@ def load(
         api_key=_env("LLM_API_KEY"),
         base_url=_env("LLM_BASE_URL").rstrip("/"),
         model=_env("LLM_MODEL"),
+        telegram_token=os.environ.get("TELEGRAM_TOKEN", ""),
+        telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", ""),
         generate_count=int(gen.get("count", 21)),
         refill_threshold=int(gen.get("threshold", 10)),
         scan_dirs=scan_dirs,

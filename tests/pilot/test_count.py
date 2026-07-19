@@ -25,6 +25,8 @@ def make_settings(count: int = 21, threshold: int = 10, suffix: str = "") -> Set
         api_key="",
         base_url="",
         model="",
+        telegram_token="",
+        telegram_chat_id="",
         generate_count=count,
         refill_threshold=threshold,
         scan_dirs=[],

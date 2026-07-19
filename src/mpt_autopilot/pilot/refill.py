@@ -37,6 +37,7 @@ from pathlib import Path
 
 from shorts_pilot.generator import jobs, seen
 from shorts_pilot.generator.llm import call_llm, parse_json_array
+from shorts_pilot.generator.notify import alert as notify_alert
 from shorts_pilot.generator.prompt import VIDEO_SUBJECT_MAX_CHARS, build_themes
 from shorts_pilot.generator.prompt import build as build_prompt
 from shorts_pilot.generator.seen import load_ordered as seen_load_ordered
@@ -431,6 +432,10 @@ def _run_topics(
         jobs.append(jobs_dir, suffix, lang, clean_jobs)
         jobs_file = jobs._new_path(jobs_dir, suffix).name
         print(f"[{lang}] appended {len(clean_jobs)} jobs to {jobs_file}")
+    else:
+        notify_alert(
+            f"[shorts-pilot] [{lang}] topics mode: 0 jobs added (all duplicates?)", settings
+        )
 
     return len(clean_jobs)
 
@@ -588,7 +593,11 @@ def run(
             except ValueError as e:
                 json_parse_attempts += 1
                 if json_parse_attempts >= 2:
-                    raise  # Give up after 2 attempts
+                    notify_alert(
+                        f"[shorts-pilot] [{lang}] FAILED: LLM invalid JSON after 2 retries",
+                        settings,
+                    )
+                    raise
                 print(f"  [retry] LLM returned invalid JSON ({e}), retrying...")
                 time.sleep(1)
                 # Re-prompt with stronger instruction
@@ -598,6 +607,11 @@ def run(
                 )
 
         if len(raw_jobs) < this_count:
+            notify_alert(
+                f"[shorts-pilot] [{lang}] WARNING: LLM gave {len(raw_jobs)}/{this_count} jobs "
+                f"(queue may stay low)",
+                settings,
+            )
             print(
                 f"[{lang}] WARNING: LLM returned {len(raw_jobs)} of {this_count} requested — queue may still be low after this run"  # noqa: E501
             )
@@ -642,6 +656,10 @@ def run(
 
     # Note: seen.txt is updated by batch_generate.py after each video is rendered,
     # not here — refill only writes to the jobs yaml.
+    notify_alert(
+        f"[shorts-pilot] [{lang}] done: {total_added} new jobs (pending {pending + total_added})",
+        settings,
+    )
     return total_added
 
 
@@ -790,6 +808,8 @@ Examples:
             themes=theme_list,
         )
     except Exception as e:
+        settings = load_settings(require_llm=False)
+        notify_alert(f"[shorts-pilot] [{args.lang}] FAILED: {e}", settings)
         print(f"[ERROR] {e}")
         sys.exit(1)
 
