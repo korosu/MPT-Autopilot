@@ -36,6 +36,10 @@ class Settings:
     # Default jobs directory — from config.yaml (optional)
     jobs_dir: Path | None
 
+    # Direct jobs file path — from config.yaml (optional)
+    # When set, uses this path directly; overrides --lang and jobs_dir defaults
+    jobs: Path | None
+
     # Voice presets — every bundled Edge TTS voice plus config.yaml's `voices:`
     # section on top (config.yaml wins on name collisions), already flattened
     # into {alias: {tts_server, voice_name, ...}}. See engine/voices.py.
@@ -110,6 +114,10 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
     cfg_jobs_dir = cfg.get("jobs_dir")
     jobs_dir = _resolve(cfg_jobs_dir) if cfg_jobs_dir else None
 
+    # Parse direct jobs path (optional) — overrides langs/jobs_dir defaults
+    cfg_jobs = cfg.get("jobs")
+    jobs = _resolve(cfg_jobs) if cfg_jobs else None
+
     s = Settings(
         api_url=str(_require_cfg(cfg, "api_url")).rstrip("/"),
         mpt_storage=_resolve(str(_require_cfg(cfg, "mpt_storage"))),
@@ -117,6 +125,7 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
         seen_file=_resolve(cfg.get("seen_file", "./seen.txt")),
         langs=langs,
         jobs_dir=jobs_dir,
+        jobs=jobs,
         voice_pool=voices.build_full_pool(cfg.get("voices", {})),
         log_file=_resolve(cfg.get("log_file", "./logs/batch.log")),
         log_max_bytes=int(cfg.get("log_max_mb", 10)) * 1024 * 1024,

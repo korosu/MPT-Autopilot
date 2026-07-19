@@ -654,10 +654,14 @@ def main() -> None:
             sys.exit(1)
         lang_suffix = settings.langs[args.lang].get("file_suffix", f"_{args.lang}")
 
-    # Resolve --jobs default: config's jobs_dir > cwd-relative
+    # Resolve --jobs default: config's jobs > jobs_dir > cwd-relative (with --lang suffix)
     if args.jobs is None:
-        base_dir = settings.jobs_dir or Path.cwd()
-        args.jobs = base_dir / f"jobs{lang_suffix}.yaml"
+        # Priority: 1) settings.jobs (direct path), 2) jobs_dir/lang_suffix, 3) cwd/jobs.yaml
+        if settings.jobs:
+            args.jobs = settings.jobs
+        else:
+            base_dir = settings.jobs_dir or Path.cwd()
+            args.jobs = base_dir / f"jobs{lang_suffix}.yaml"
 
     # Resolve --seen default when --lang is set and --seen not explicitly passed
     seen_override: Path | None = None
