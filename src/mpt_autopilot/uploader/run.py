@@ -100,7 +100,6 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
     uploaded_dir = account.videos_dir / settings.uploaded_dir_name
 
     conn = open_ledger(settings.ledger_path)
-    notifiers = notify.build_notifiers(settings)
     try:
         for row in conn.execute(
             "SELECT video_name FROM uploads WHERE account = ? AND status = 'uploaded'",
@@ -152,13 +151,13 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
             except UploadLimitExceeded:
                 msg = f"[{account.name}] daily upload limit reached after {uploaded} videos"
                 print(msg)
-                notify.notify_all(notifiers, f"\U0001f534 [upload/{account.name}] {msg}")
+                notify.alert(f"\U0001f534 [upload/{account.name}] {msg}", settings)
                 stopped_early = True
                 break
             except UploadFailed as exc:
                 failed += 1
                 print(f"[{account.name}] FAILED: {video.name}: {exc}")
-                notify.notify_all(notifiers, f"⚠️ [{account.name}] failed: {video.name}")
+                notify.alert(f"⚠️ [{account.name}] failed: {video.name}", settings)
                 if index < last_index:
                     time.sleep(settings.sleep_between_uploads)
                 continue
@@ -189,9 +188,9 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
             if self_limited
             else ""
         )
-        notify.notify_all(
-            notifiers,
+        notify.alert(
             f"{icon} [upload/{account.name}] uploaded: {uploaded}  failed: {failed}{suffix}",
+            settings,
         )
         print(f"[{account.name}] summary: uploaded={uploaded} failed={failed}{suffix}")
     return EXIT_QUOTA_STOP if stopped_early else EXIT_FAILURES if failed else EXIT_OK

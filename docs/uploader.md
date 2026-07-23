@@ -217,17 +217,15 @@ that video - no duplicate upload.
 
 ## Notifications
 
-Optional Telegram and/or Discord notifications on completion / failure / quota hit.
-Telegram credentials go in `.env` (`TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`).
-Discord webhook URL goes in `config.yaml`:
+Optional Telegram alerts on completion / failure / quota hit.
 
-```yaml
-notify:
-  enabled: true
-  discord_webhook_url: "https://discord.com/api/webhooks/.../..."
+Telegram credentials go in `.env`:
+```
+TELEGRAM_TOKEN=your_bot_token
+TELEGRAM_CHAT_ID=your_chat_id
 ```
 
-Both can be active simultaneously.
+Set `telegram_prefix` in `config.yaml` to identify the source (default: "yt-shorts-uploader").
 
 ## Development
 

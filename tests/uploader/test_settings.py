@@ -20,10 +20,9 @@ def _settings(uploader_binary: Path) -> Settings:
         sleep_between_uploads=0,
         uploaded_dir_name="old_videos",
         defaults=Defaults(),
-        notify_enabled=False,
         telegram_token="",
         telegram_chat_id="",
-        discord_webhook_url="",
+        telegram_prefix="yt-shorts-uploader",
         ledger_path=Path("./ledger.sqlite"),
         accounts={},
     )

@@ -37,10 +37,9 @@ class Settings:
     sleep_between_uploads: int
     uploaded_dir_name: str
     defaults: Defaults
-    notify_enabled: bool
     telegram_token: str
     telegram_chat_id: str
-    discord_webhook_url: str
+    telegram_prefix: str
     ledger_path: Path
     accounts: dict[str, Account]
 
@@ -79,8 +78,6 @@ def load_settings(
         hashtag_placement=hashtag_placement,
     )
 
-    notify_raw = cfg.get("notify", {}) or {}
-
     sleep_between_uploads = int(cfg.get("sleep_between_uploads", 5))
     if sleep_between_uploads < 0:
         raise ValueError(f"sleep_between_uploads must be >= 0, got {sleep_between_uploads}")
@@ -105,16 +102,16 @@ def load_settings(
                 f"account '{name}' in accounts.yaml has invalid config: {exc}"
             ) from exc
 
+    telegram_prefix = cfg.get("telegram_prefix", "yt-shorts-uploader")
     return Settings(
         uploader_binary=Path(cfg.get("uploader_binary", "youtubeuploader")).expanduser(),
         meta_dir=Path(cfg.get("meta_dir", "./meta")).expanduser(),
         sleep_between_uploads=sleep_between_uploads,
         uploaded_dir_name=cfg.get("uploaded_dir_name", "old_videos"),
         defaults=defaults,
-        notify_enabled=bool(notify_raw.get("enabled", True)),
         telegram_token=os.environ.get("TELEGRAM_TOKEN", ""),
         telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", ""),
-        discord_webhook_url=notify_raw.get("discord_webhook_url", ""),
+        telegram_prefix=telegram_prefix,
         ledger_path=config_path.parent / "yt-uploader-ledger.sqlite",
         accounts=accounts,
     )

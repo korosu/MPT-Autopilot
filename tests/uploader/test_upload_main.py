@@ -24,10 +24,9 @@ def _settings(tmp_path: Path) -> Settings:
         sleep_between_uploads=0,
         uploaded_dir_name="old_videos",
         defaults=Defaults(),
-        notify_enabled=False,
         telegram_token="",
         telegram_chat_id="",
-        discord_webhook_url="",
+        telegram_prefix="yt-shorts-uploader",
         ledger_path=tmp_path / "ledger.sqlite",
         accounts={},
     )
@@ -137,11 +136,10 @@ def test_run_does_not_notify_in_dry_run(tmp_path, monkeypatch):
     accounts = {"en": _account(tmp_path, "en", 1)}
     settings = _settings(tmp_path)
     settings.accounts = accounts
-    settings.notify_enabled = True
 
     notify_calls: list[str] = []
     monkeypatch.setattr(
-        "yt_uploader.engine.notify.notify_all", lambda notifiers, msg: notify_calls.append(msg)
+        "yt_uploader.engine.notify.requests.post", lambda *a, **kw: notify_calls.append("called")
     )
 
     run(settings, list(accounts.values())[0], dry_run=True, limit=None)
