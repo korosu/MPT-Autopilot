@@ -11,6 +11,7 @@ def test_lang_suffix_applied_to_seen_and_output() -> None:
     """When --lang is passed, seen_file and output_dir get the suffix."""
     langs = {"es": {"file_suffix": "_es"}}
     s = Settings(
+        jobs=None,
         api_url="http://127.0.0.1:8080",
         mpt_storage=Path("/tmp/mpt_storage"),
         output_dir=Path("/tmp/exports"),
@@ -53,6 +54,7 @@ def test_no_lang_suffix_when_lang_is_empty() -> None:
     """Empty suffix produces bare filenames."""
     langs = {"en": {"file_suffix": ""}}
     s = Settings(
+        jobs=None,
         api_url="http://127.0.0.1:8080",
         mpt_storage=Path("/tmp/mpt_storage"),
         output_dir=Path("/tmp/exports"),

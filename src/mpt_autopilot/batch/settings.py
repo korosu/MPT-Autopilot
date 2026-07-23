@@ -67,10 +67,6 @@ class Settings:
     telegram_chat_id: str
     telegram_prefix: str
 
-    @property
-    def telegram_enabled(self) -> bool:
-        return bool(self.telegram_token and self.telegram_chat_id)
-
 
 def _require_cfg(cfg: dict, key: str) -> object:
     if key not in cfg:

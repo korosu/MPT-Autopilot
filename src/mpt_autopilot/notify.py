@@ -14,7 +14,7 @@ from mpt_batch.engine.settings import Settings
 
 
 def alert(msg: str, settings: Settings) -> None:
-    if not settings.telegram_enabled:
+    if not settings.telegram_token or not settings.telegram_chat_id:
         return
     text = f"[{settings.telegram_prefix}] {msg}" if settings.telegram_prefix else msg
     url = f"https://api.telegram.org/bot{settings.telegram_token}/sendMessage"
@@ -25,6 +25,9 @@ def alert(msg: str, settings: Settings) -> None:
             timeout=10,
         )
         if not r.ok:
-            print(f"[mpt-batch] Telegram returned {r.status_code}: {r.text.strip()[:200]}")
+            print(
+                f"[{settings.telegram_prefix}] Telegram returned {r.status_code}: "
+                f"{r.text.strip()[:200]}"
+            )
     except Exception as exc:
-        print(f"[mpt-batch] Telegram send failed: {exc}")
+        print(f"[{settings.telegram_prefix}] Telegram send failed: {exc}")
