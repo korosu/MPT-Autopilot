@@ -36,9 +36,10 @@ class Settings:
     base_url: str
     model: str
 
-    # Telegram alerts — from .env (optional)
+    # Telegram alerts — token/chat_id from .env, prefix from config.yaml
     telegram_token: str
     telegram_chat_id: str
+    telegram_prefix: str
 
     # Generation — from config.yaml
     generate_count: int
@@ -127,12 +128,14 @@ def load(
             return _require_env(key)
         return os.environ.get(key, "").strip()
 
+    telegram_prefix = raw.get("telegram_prefix", "shorts-pilot")
     return Settings(
         api_key=_env("LLM_API_KEY"),
         base_url=_env("LLM_BASE_URL").rstrip("/"),
         model=_env("LLM_MODEL"),
         telegram_token=os.environ.get("TELEGRAM_TOKEN", ""),
         telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", ""),
+        telegram_prefix=telegram_prefix,
         generate_count=int(gen.get("count", 21)),
         refill_threshold=int(gen.get("threshold", 10)),
         scan_dirs=scan_dirs,
