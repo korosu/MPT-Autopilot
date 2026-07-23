@@ -19,7 +19,9 @@ from shorts_pilot.generator.settings import LangSettings, Settings  # noqa: E402
 from shorts_pilot.refill import run  # noqa: E402
 
 
-def make_settings(count: int = 21, threshold: int = 10, suffix: str = "") -> Settings:
+def make_settings(
+    count: int = 21, threshold: int = 10, suffix: str = "", prefix: str = "shorts-pilot"
+) -> Settings:
     """Build a minimal Settings with the given generation params."""
     return Settings(
         api_key="",
@@ -27,6 +29,7 @@ def make_settings(count: int = 21, threshold: int = 10, suffix: str = "") -> Set
         model="",
         telegram_token="",
         telegram_chat_id="",
+        telegram_prefix=prefix,
         generate_count=count,
         refill_threshold=threshold,
         scan_dirs=[],
