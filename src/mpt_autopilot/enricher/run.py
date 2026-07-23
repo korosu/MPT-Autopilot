@@ -19,6 +19,8 @@ import sys
 import traceback
 from pathlib import Path
 
+from hashtag_enricher.enricher.notify import alert
+
 from hashtag_enricher.enricher.config import settings, validate_tag_budget
 from hashtag_enricher.enricher.llm import detect_and_generate, generate_hashtags
 from hashtag_enricher.enricher.logger import Logger
@@ -112,6 +114,7 @@ def process_file(
     except Exception as exc:
         log.error(f"error processing {mp4_path.name}: {exc}")
         log.error(traceback.format_exc())
+        alert(f"Error: {mp4_path.name} - {exc}", settings)
         return "error"
 
 
@@ -244,6 +247,12 @@ def main() -> None:
         f"platform={effective_platform} | "
         f"tags={settings.min_tags}–{settings.max_tags} ==="
     )
+    alert(
+        f"Started: {len(mp4_files)} file(s) | platform={effective_platform}",
+        settings,
+    )
+
+    # ── Process ───────────────────────────────────────────────────────────────
 
     # ── Process ───────────────────────────────────────────────────────────────
     counts: dict[str, int] = {"ok": 0, "skipped": 0, "error": 0}
@@ -261,6 +270,11 @@ def main() -> None:
     log.info("=" * 55)
     log.info(f"Done. ok={counts['ok']}  skipped={counts['skipped']}  error={counts['error']}")
     log.info("=" * 55)
+
+    alert(
+        f"Finished: ok={counts['ok']}  skipped={counts['skipped']}  error={counts['error']}",
+        settings,
+    )
 
     if counts["error"] > 0:
         sys.exit(1)

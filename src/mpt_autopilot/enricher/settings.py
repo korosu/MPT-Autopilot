@@ -160,6 +160,11 @@ class Settings:
         self.log_file: Path = self.log_dir / "enricher.log"
         self.max_log_size: int = 5 * 1024 * 1024  # 5 MB
 
+        # ── Telegram ───────────────────────────────────────────────────────
+        self.telegram_token: str = os.getenv("TELEGRAM_TOKEN", "").strip()
+        self.telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+        self.telegram_prefix: str = cfg.get("telegram_prefix", "hashtag-enricher")
+
 
 # ── Lazy singleton ────────────────────────────────────────────────────────────
 
