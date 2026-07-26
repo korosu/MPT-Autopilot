@@ -134,7 +134,7 @@ def test_validation_with_duration_range() -> None:
 
 
 def test_validation_without_duration_range() -> None:
-    """Verify backward compat: no duration_range means no video_script_prompt."""
+    """Verify always-on hook: video_script_prompt is present even without duration_range."""
     lang_cfg = LangSettings(
         label="English",
         file_suffix="",
@@ -155,22 +155,31 @@ def test_validation_without_duration_range() -> None:
     job = {"video_subject": "Test fact", "output_file": "test.mp4"}
     result = _validate_against_config(job, lang_cfg)
 
-    assert "video_script_prompt" not in result, (
-        "should NOT have video_script_prompt when not configured"
+    # Always-on hook: video_script_prompt is always present
+    assert "video_script_prompt" in result, (
+        "should have video_script_prompt (always-on hook) even without duration_range"
+    )
+    assert "hook" in result["video_script_prompt"].lower(), (
+        f"instruction should contain hook wording, got: {result['video_script_prompt']}"
+    )
+    # No word-count guidance when duration_range is absent
+    assert "words" not in result["video_script_prompt"], (
+        "should NOT have word-count guidance when duration_range not set"
     )
 
-    # Test LLM hallucination defense: if LLM returns video_script_prompt anyway
+    # Hook is always ours — defense against LLM hallucination
     job_with_hallucination = {
         "video_subject": "Test fact",
         "output_file": "test.mp4",
-        "video_script_prompt": "LLM made this up",  # should be stripped
+        "video_script_prompt": "LLM made this up",
     }
     result2 = _validate_against_config(job_with_hallucination, lang_cfg)
-    assert "video_script_prompt" not in result2, (
-        "LLM hallucinated video_script_prompt should be removed"
+    # Our hook overwrites any LLM hallucination
+    assert "hook" in result2["video_script_prompt"].lower(), (
+        "our hook should replace LLM hallucination"
     )
 
-    print("[check] validation without duration_range (backward compat): OK")
+    print("[check] validation without duration_range (always-on hook): OK")
 
 
 def main() -> None:

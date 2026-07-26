@@ -70,6 +70,7 @@ def build(
         f"You are a YouTube Shorts content strategist.\n"
         f"Your job is to generate viral fact/myth-busting short video scripts in {lang_cfg.label}.\n"  # noqa: E501
         f"Each video is 30–45 seconds long, spoken in a direct, engaging voice.\n"
+        f"Each script opens with a single-sentence HOOK so the viewer stays past the 3-second mark.\n"
         f"Return ONLY a valid JSON array. No markdown, no explanation, no code fences."
     )
 
@@ -83,8 +84,11 @@ Rules:
 historical misconceptions, animal facts, body facts, space facts, psychology, \
 food science. Wide variety. Never repeat a topic from the list above.
 - video_subject: 3–5 sentences in {lang_cfg.label}, conversational and punchy. \
-State the surprising fact, explain WHY, end with a memorable kicker. \
-No hashtags, no emojis. Maximum {VIDEO_SUBJECT_MAX_CHARS} characters — be concise.
+Sentence 1 MUST be a hook that grabs the viewer in the first 3–5 seconds—a single \
+shocking claim, counterintuitive observation, teaser question, or vivid image \
+(no greetings, no "did you know", no throat-clearing). Sentences 2–4 deliver the \
+surprising fact and explain WHY. End with a memorable kicker. No hashtags, no emojis. \
+Maximum {VIDEO_SUBJECT_MAX_CHARS} characters — be concise.
 - name and output_file: snake_case, max 50 chars. \
 output_file must end with "{d["suffix"]}.mp4" (e.g. "fact_water_memory{d["suffix"]}.mp4").
 - voice_rate: float between {lang_cfg.voice_rate_min} and {lang_cfg.voice_rate_max}, vary across jobs.  # noqa: E501

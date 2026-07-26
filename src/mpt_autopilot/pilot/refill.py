@@ -105,19 +105,30 @@ def paragraph_floor(sec: tuple[int, int | None]) -> int:
     return 1
 
 
-def build_duration_instruction(words: tuple[int, int | None]) -> str:
-    """Build video_script_prompt instruction for the given word bounds."""
-    lo, hi = words
-    if hi is None:
-        return (
-            f"Narrate at least {lo} words. Do not pad artificially; keep a natural "
-            f"spoken pace. Do not mention word counts."
-        )
-    return (
-        f"Narrate between {lo} and {hi} words. Do not exceed {hi} words; do not fall "
-        f"below {lo} words. Do not pad or cut artificially; keep a natural spoken pace. "
-        f"Do not mention word counts."
-    )
+_HOOK_INSTRUCTION = (
+    "Open with a single-sentence hook in the first 3–5 seconds of voiceover: "
+    "a shocking claim, counterintuitive observation, teaser question, or vivid "
+    "image. Do NOT start with greetings, 'did you know', filler, or throat-clearing."
+)
+
+
+def build_duration_instruction(words: tuple[int, int | None] | None) -> str:
+    """Build video_script_prompt: always-on hook + (optional) word-count guidance."""
+    parts = [_HOOK_INSTRUCTION]
+    if words is not None:
+        lo, hi = words
+        if hi is None:
+            parts.append(
+                f"Narrate at least {lo} words. Do not pad artificially; keep a natural "
+                f"spoken pace. Do not mention word counts."
+            )
+        else:
+            parts.append(
+                f"Narrate between {lo} and {hi} words. Do not exceed {hi} words; "
+                f"do not fall below {lo} words. Do not pad or cut artificially; "
+                f"keep a natural spoken pace. Do not mention word counts."
+            )
+    return " ".join(parts)
 
 
 # ── Deduplication + cleanup ───────────────────────────────────────────────────
@@ -135,8 +146,9 @@ def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
     of range is replaced with a safe configured default instead of being
     written into the jobs yaml as-is.
 
-    Also handles duration_range: if configured, generates video_script_prompt
-    instruction and adjusts paragraph_number upward per the band floor.
+    Always injects an always-on hook instruction into video_script_prompt.
+    If duration_range is configured, also adds word-count guidance and may
+    adjust paragraph_number upward per the band floor.
     """
     defaults = lang_cfg.job_defaults
     out = dict(job)
@@ -173,15 +185,15 @@ def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
     if out.get("bgm_type") not in _VALID_BGM_TYPES:
         out["bgm_type"] = defaults.get("bgm_type", "random")
 
-    # ponytail: duration_range → video_script_prompt instruction + light paragraph coupling
+    # ponytail: always-on hook + optional duration-range guidance
     dur = defaults.get("duration_range")
+    words: tuple[int, int | None] | None = None
     if dur:
         sec = parse_duration_range(dur)
         if sec:
-            out["video_script_prompt"] = build_duration_instruction(duration_to_words(sec))
+            words = duration_to_words(sec)
             out["paragraph_number"] = max(out["paragraph_number"], paragraph_floor(sec))
-    else:
-        out.pop("video_script_prompt", None)  # defense against LLM hallucination
+    out["video_script_prompt"] = build_duration_instruction(words)
 
     return out
 
