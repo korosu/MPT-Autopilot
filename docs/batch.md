@@ -279,6 +279,7 @@ Copy `config.example.yaml` to `config.yaml` and edit as needed — every setting
 ```yaml
 api_url: "http://127.0.0.1:8080"
 mpt_storage: "/root/MoneyPrinterTurbo/storage"
+mpt_songs_dir: "/root/MoneyPrinterTurbo/resource/songs"
 output_dir: "./exports"
 seen_file: "./seen.txt"
 max_retries: 3
@@ -302,8 +303,9 @@ Cleanup always runs once at the end of a batch (when enabled). `cache_cleanup_in
 
 ## Background music
 
-MoneyPrinterTurbo can mix background music into videos. mpt-batch helps you
-discover and manage BGM files in MPT's `resource/songs/` directory.
+MoneyPrinterTurbo can mix background music into videos. Set `mpt_songs_dir` to
+MPT's real `resource/songs/` directory; it is separate from `mpt_storage`.
+mpt-batch uses that directory to discover and manage BGM files.
 
 ### List available BGM
 

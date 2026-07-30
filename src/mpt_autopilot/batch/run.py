@@ -602,7 +602,7 @@ def list_voices(settings: Settings, filter_str: str) -> None:
 
 
 def list_bgm_cmd(settings: Settings, filter_str: str) -> None:
-    songs = bgm.list_bgm_files(settings.mpt_storage, filter_str)
+    songs = bgm.list_bgm_files(settings.mpt_songs_dir, filter_str)
     suffix = f" matching '{filter_str}'" if filter_str else ""
     print(f"{len(songs)} BGM file(s){suffix}:\n")
     for name, size in songs:
@@ -612,7 +612,7 @@ def list_bgm_cmd(settings: Settings, filter_str: str) -> None:
 
 def upload_bgm_cmd(settings: Settings, source_dir: Path) -> None:
     source_path = source_dir.expanduser().resolve()
-    songs_dir = settings.mpt_storage / "resource" / "songs"
+    songs_dir = settings.mpt_songs_dir
 
     if not source_path.exists():
         print(f"[ERROR] Source directory not found: {source_path}")

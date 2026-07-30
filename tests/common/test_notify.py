@@ -17,6 +17,7 @@ def _settings(
     return Settings(
         api_url="http://localhost:8080",
         mpt_storage=Path("/tmp/storage"),
+        mpt_songs_dir=Path("/tmp/resource/songs"),
         output_dir=Path("/tmp/output"),
         seen_file=Path("/tmp/seen.txt"),
         langs={},

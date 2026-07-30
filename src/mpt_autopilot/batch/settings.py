@@ -24,6 +24,7 @@ class Settings:
     # MoneyPrinterTurbo connection — from config.yaml
     api_url: str
     mpt_storage: Path
+    mpt_songs_dir: Path
 
     # Output — from config.yaml
     output_dir: Path
@@ -117,6 +118,7 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
     s = Settings(
         api_url=str(_require_cfg(cfg, "api_url")).rstrip("/"),
         mpt_storage=_resolve(str(_require_cfg(cfg, "mpt_storage"))),
+        mpt_songs_dir=_resolve(str(_require_cfg(cfg, "mpt_songs_dir"))),
         output_dir=_resolve(cfg.get("output_dir", "./exports")),
         seen_file=_resolve(cfg.get("seen_file", "./seen.txt")),
         langs=langs,
