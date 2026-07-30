@@ -40,9 +40,7 @@ def test_upload_bgm_uses_configured_songs_directory(tmp_path: Path) -> None:
     storage_dir = tmp_path / "storage"
     songs_dir = tmp_path / "resource" / "songs"
 
-    settings = cast(
-        Settings, SimpleNamespace(mpt_storage=storage_dir, mpt_songs_dir=songs_dir)
-    )
+    settings = cast(Settings, SimpleNamespace(mpt_storage=storage_dir, mpt_songs_dir=songs_dir))
     upload_bgm_cmd(settings, source_dir)
 
     assert (songs_dir / "custom.mp3").read_bytes() == b"music"
