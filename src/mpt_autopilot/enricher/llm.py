@@ -47,6 +47,12 @@ _MAX_RETRIES = 2
 _RETRY_BASE_DELAY = 10.0
 _RETRY_MAX_DELAY = 20.0
 
+# Status codes treated as transient infra blips rather than permanent errors —
+# retried with the same backoff as 429. 404 is included because NVIDIA's
+# integrate.api.nvidia.com endpoint has been observed to return empty-body
+# 404s under load for a URL/model that succeeds on adjacent calls.
+_TRANSIENT_STATUS_CODES = frozenset({404, 500, 502, 503, 504})
+
 # ── Input limits ──────────────────────────────────────────────────────────────
 _MAX_TOPIC_LEN = 300
 
@@ -76,6 +82,9 @@ def _chat(prompt: str) -> str:
 
     Retries automatically (exponential backoff, up to _MAX_RETRIES) on:
       - 429 Too Many Requests — respects the Retry-After header when sent.
+      - Transient status codes (404/500/502/503/504, see _TRANSIENT_STATUS_CODES)
+        — some gateways return these intermittently under load for a request
+        that otherwise succeeds.
       - Network-level failures (read/connect timeouts, connection errors) —
         these happen when the request reaches the transport layer but no
         response comes back in time, e.g. a slow/overloaded LLM backend.
@@ -131,6 +140,33 @@ def _chat(prompt: str) -> str:
 
             _get_log().warn(
                 f"429 rate-limited — waiting {delay:.0f}s before retry {attempt + 1}/{_MAX_RETRIES}"
+            )
+            time.sleep(delay)
+            continue
+
+        # Some gateways (observed on NVIDIA's integrate.api.nvidia.com endpoint)
+        # return a transient, empty-body 404/5xx under load even though the
+        # same URL/model succeeds on other calls in the same run — an
+        # infra-level blip, not a real "wrong path". Retry those like 429.
+        if response.status_code in _TRANSIENT_STATUS_CODES:
+            if attempt == _MAX_RETRIES:
+                body_preview = response.text[:500].replace("\n", " ")
+                _get_log().error(
+                    f"HTTP {response.status_code} from {url} (final attempt) — "
+                    f"body: {body_preview}"
+                )
+                last_error = httpx.HTTPStatusError(
+                    f"{response.status_code} {response.reason_phrase} — "
+                    f"gave up after {_MAX_RETRIES} retries",
+                    request=response.request,
+                    response=response,
+                )
+                break
+
+            delay = min(_RETRY_BASE_DELAY * (2**attempt), _RETRY_MAX_DELAY)
+            _get_log().warn(
+                f"transient HTTP {response.status_code} from {url} — "
+                f"retrying in {delay:.0f}s (attempt {attempt + 1}/{_MAX_RETRIES})"
             )
             time.sleep(delay)
             continue
