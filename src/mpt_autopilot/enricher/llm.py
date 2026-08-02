@@ -20,6 +20,7 @@ the {platform} prompt placeholder and the platform hard-limit actually track
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 
@@ -35,7 +36,10 @@ from hashtag_enricher.enricher.postprocess import (
 
 # ── Shared persistent client ──────────────────────────────────────────────────
 # Reused across all calls to avoid per-call TLS handshakes.
-_CLIENT_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
+# Read timeout is configurable via LLM_TIMEOUT (seconds) since local/self-hosted
+# backends (e.g. Ollama on CPU) can be far slower than a hosted API.
+_READ_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "60"))
+_CLIENT_TIMEOUT = httpx.Timeout(_READ_TIMEOUT, connect=10.0)
 _client = httpx.Client(timeout=_CLIENT_TIMEOUT)
 
 # ── Retry settings ────────────────────────────────────────────────────────────
@@ -70,8 +74,11 @@ def _chat(prompt: str) -> str:
     """
     Send a single-turn chat request. Returns the raw text content.
 
-    Retries automatically on 429 Too Many Requests with exponential backoff.
-    Respects the Retry-After header when the server sends one.
+    Retries automatically (exponential backoff, up to _MAX_RETRIES) on:
+      - 429 Too Many Requests — respects the Retry-After header when sent.
+      - Network-level failures (read/connect timeouts, connection errors) —
+        these happen when the request reaches the transport layer but no
+        response comes back in time, e.g. a slow/overloaded LLM backend.
     """
     url = f"{settings.base_url}/chat/completions"
     headers = {
@@ -90,7 +97,22 @@ def _chat(prompt: str) -> str:
     last_error: Exception | None = None
 
     for attempt in range(_MAX_RETRIES + 1):
-        response = _client.post(url, headers=headers, json=payload)
+        try:
+            response = _client.post(url, headers=headers, json=payload)
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            # Network-level failure (read timeout, connect timeout, connection
+            # refused/reset) — not an HTTP error response, so it wasn't caught
+            # by the 429 branch below. Retry with the same backoff schedule.
+            last_error = exc
+            if attempt == _MAX_RETRIES:
+                break
+            delay = min(_RETRY_BASE_DELAY * (2**attempt), _RETRY_MAX_DELAY)
+            _get_log().warn(
+                f"{exc.__class__.__name__} — retrying in {delay:.0f}s "
+                f"(attempt {attempt + 1}/{_MAX_RETRIES})"
+            )
+            time.sleep(delay)
+            continue
 
         if response.status_code == 429:
             if attempt == _MAX_RETRIES:
