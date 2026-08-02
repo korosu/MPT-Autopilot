@@ -136,7 +136,13 @@ def _chat(prompt: str) -> str:
             continue
 
         if not response.is_success:
-            # Omit body to prevent API key leakage via provider error responses.
+            # Log the response body to the LOCAL log file only, for diagnosis —
+            # never include it in the raised exception, since that message
+            # flows into notify.alert() and could end up in Telegram.
+            body_preview = response.text[:500].replace("\n", " ")
+            _get_log().error(
+                f"HTTP {response.status_code} from {url} — body: {body_preview}"
+            )
             raise httpx.HTTPStatusError(
                 f"{response.status_code} {response.reason_phrase}",
                 request=response.request,
