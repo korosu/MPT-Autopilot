@@ -55,6 +55,14 @@ def call_llm(system: str, user: str, settings: Settings, count: int) -> str:
     max_tokens = _token_budget(count)
     if settings.is_anthropic:
         return _call_anthropic(system, user, settings, max_tokens)
+    if settings.reasoning_enabled is True:
+        # Additive, not a replacement: a reasoning model spends tokens on a
+        # hidden "reasoning_content" draft before it ever writes the visible
+        # `content`. If we just swapped in a flat reasoning_max_tokens here
+        # instead of adding it on top, we'd reintroduce the exact bug
+        # _token_budget was added to fix — a big --count truncating output —
+        # just for reasoning models specifically.
+        max_tokens += settings.reasoning_max_tokens
     return _call_openai_compat(system, user, settings, max_tokens)
 
 
@@ -115,10 +123,16 @@ def _call_anthropic(system: str, user: str, s: Settings, max_tokens: int) -> str
     }
     resp = _post_with_retry(url, payload, headers)
     resp.raise_for_status()
-    for block in resp.json().get("content", []):
+    data = resp.json()
+    for block in data.get("content", []):
         if block.get("type") == "text":
             return block["text"]
-    raise ValueError("Anthropic response contained no text block")
+    raise ValueError(
+        f"Anthropic response contained no text block (stop_reason="
+        f"{data.get('stop_reason')!r}). If a 'thinking' budget is configured "
+        "upstream and ate the whole max_tokens, raise max_tokens or lower "
+        "the thinking budget."
+    )
 
 
 def _call_openai_compat(system: str, user: str, s: Settings, max_tokens: int) -> str:
@@ -135,9 +149,51 @@ def _call_openai_compat(system: str, user: str, s: Settings, max_tokens: int) ->
             {"role": "user", "content": user},
         ],
     }
+
+    # chat_template_kwargs.reasoning_effort is a vLLM/SGLang/NVIDIA-NIM
+    # extension, NOT part of the official OpenAI API — it only means
+    # anything for a self-hosted backend that reads it. Only touch the
+    # payload when the user has explicitly opted in or out via
+    # config.yaml (reasoning_enabled=None → key omitted entirely →
+    # byte-for-byte previous behavior for every provider that doesn't
+    # need this, e.g. plain OpenAI/Groq/Together/Ollama endpoints).
+    # If you're on an official OpenAI reasoning model (o-series / gpt-5)
+    # instead, that provider takes a top-level `reasoning_effort` field,
+    # not chat_template_kwargs — check your provider's docs before relying
+    # on this flag there.
+    if s.reasoning_enabled is True:
+        payload["chat_template_kwargs"] = {"reasoning_effort": s.reasoning_effort}
+    elif s.reasoning_enabled is False:
+        payload["chat_template_kwargs"] = {"reasoning_effort": "none"}
+
     resp = _post_with_retry(url, payload, headers)
     resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
+    data = resp.json()
+    message = data["choices"][0]["message"]
+    content = message.get("content")
+
+    if content is None:
+        # The exact failure this replaces: `.strip()`/`["content"]` on a
+        # bare None blows up as a confusing AttributeError/KeyError deep in
+        # the caller. Most commonly hit when a reasoning model burns the
+        # whole max_tokens budget on `reasoning_content` and gets cut off
+        # (finish_reason="length") before writing the visible answer.
+        finish_reason = data["choices"][0].get("finish_reason")
+        reasoning_raw = message.get("reasoning_content") or message.get("reasoning") or ""
+        reasoning_preview = reasoning_raw[:500]
+        print(
+            f"  [error] LLM returned empty content (finish_reason={finish_reason}); "
+            f"reasoning preview: {reasoning_preview!r}"
+        )
+        raise ValueError(
+            f"LLM returned empty content (finish_reason={finish_reason}). "
+            "If this model has reasoning/thinking turned on by default, set "
+            "generation.reasoning_enabled: true in config.yaml (and raise "
+            "reasoning_max_tokens and/or lower reasoning_effort) so the "
+            "reasoning draft doesn't eat the whole token budget."
+        )
+
+    return content
 
 
 def parse_json_array(raw_text: str) -> list[dict[str, Any]]:

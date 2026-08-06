@@ -51,6 +51,14 @@ class Settings:
     jobs_dir: Path | None
     seen_dir: Path | None
 
+    # Reasoning-model support — from config.yaml (optional; see load() below).
+    # Tri-state: None = key absent from config.yaml, don't touch the request
+    # at all (byte-for-byte prior behavior). True/False = user explicitly
+    # opted in/out.
+    reasoning_enabled: bool | None = None
+    reasoning_effort: str = "medium"
+    reasoning_max_tokens: int = 8192
+
     @property
     def is_anthropic(self) -> bool:
         return "anthropic.com" in self.base_url
@@ -128,6 +136,21 @@ def load(
             return _require_env(key)
         return os.environ.get(key, "").strip()
 
+    # reasoning_enabled is deliberately read WITHOUT a default arg (gen.get(...),
+    # not gen.get(..., False)) — this must stay a 3-state read (None / True /
+    # False), not a 2-state bool. That's the only way to tell "key absent,
+    # config not updated yet" apart from "user explicitly turned it off".
+    # Absent → payload untouched downstream → identical behavior to before
+    # this setting existed, for every provider that doesn't need it.
+    reasoning_enabled = gen.get("reasoning_enabled")
+    if reasoning_enabled is not None and not isinstance(reasoning_enabled, bool):
+        raise ValueError(
+            f"generation.reasoning_enabled must be true, false, or omitted "
+            f"entirely — got {reasoning_enabled!r}"
+        )
+    reasoning_effort = str(gen.get("reasoning_effort", "medium"))
+    reasoning_max_tokens = int(gen.get("reasoning_max_tokens", 8192))
+
     telegram_prefix = raw.get("telegram_prefix", "shorts-pilot")
     return Settings(
         api_key=_env("LLM_API_KEY"),
@@ -142,4 +165,7 @@ def load(
         langs=langs,
         jobs_dir=jobs_dir,
         seen_dir=seen_dir,
+        reasoning_enabled=reasoning_enabled,
+        reasoning_effort=reasoning_effort,
+        reasoning_max_tokens=reasoning_max_tokens,
     )
