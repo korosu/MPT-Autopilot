@@ -56,6 +56,11 @@ _TRANSIENT_STATUS_CODES = frozenset({404, 500, 502, 503, 504})
 # ── Input limits ──────────────────────────────────────────────────────────────
 _MAX_TOPIC_LEN = 300
 
+# Default max_tokens for non-reasoning requests. When reasoning_enabled: true,
+# this is overridden per-request by settings.reasoning_max_tokens instead,
+# since hidden reasoning tokens are drawn from the same budget as the answer.
+_DEFAULT_MAX_TOKENS = 512
+
 # ── Lazy logger ───────────────────────────────────────────────────────────────
 _log: Logger | None = None
 
@@ -97,11 +102,21 @@ def _chat(prompt: str) -> str:
     payload: dict = {
         "model": settings.model,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 512,
+        "max_tokens": _DEFAULT_MAX_TOKENS,
     }
 
     if settings.supports_temperature:
         payload["temperature"] = 0.3
+
+    # Opt-in only: chat_template_kwargs is a vLLM/SGLang/NVIDIA-NIM extension,
+    # not part of the official OpenAI API, so it's added only when the user has
+    # explicitly configured reasoning_enabled — see config.py for the tri-state
+    # (absent/false/true) rationale.
+    if settings.reasoning_enabled is True:
+        payload["max_tokens"] = settings.reasoning_max_tokens
+        payload["chat_template_kwargs"] = {"reasoning_effort": settings.reasoning_effort}
+    elif settings.reasoning_enabled is False:
+        payload["chat_template_kwargs"] = {"reasoning_effort": "none"}
 
     last_error: Exception | None = None
 
@@ -152,8 +167,7 @@ def _chat(prompt: str) -> str:
             if attempt == _MAX_RETRIES:
                 body_preview = response.text[:500].replace("\n", " ")
                 _get_log().error(
-                    f"HTTP {response.status_code} from {url} (final attempt) — "
-                    f"body: {body_preview}"
+                    f"HTTP {response.status_code} from {url} (final attempt) — body: {body_preview}"
                 )
                 last_error = httpx.HTTPStatusError(
                     f"{response.status_code} {response.reason_phrase} — "
@@ -176,9 +190,7 @@ def _chat(prompt: str) -> str:
             # never include it in the raised exception, since that message
             # flows into notify.alert() and could end up in Telegram.
             body_preview = response.text[:500].replace("\n", " ")
-            _get_log().error(
-                f"HTTP {response.status_code} from {url} — body: {body_preview}"
-            )
+            _get_log().error(f"HTTP {response.status_code} from {url} — body: {body_preview}")
             raise httpx.HTTPStatusError(
                 f"{response.status_code} {response.reason_phrase}",
                 request=response.request,
@@ -188,9 +200,34 @@ def _chat(prompt: str) -> str:
         data = response.json()
 
         try:
-            return data["choices"][0]["message"]["content"].strip()
+            choice = data["choices"][0]
+            message = choice["message"]
         except (KeyError, IndexError) as exc:
             raise ValueError(f"Unexpected API response structure: {data}") from exc
+
+        content = message.get("content")
+        if content is None:
+            # Reasoning models (chat_template_kwargs / reasoning_enabled: true)
+            # can burn the whole max_tokens budget on hidden thinking and stop
+            # at finish_reason "length" before ever writing a visible answer —
+            # content comes back null, not an empty string. Log the reasoning
+            # preview to the LOCAL log only (never into the raised exception —
+            # that message flows into notify.alert() and could end up in
+            # Telegram), and raise a specific, actionable error instead of a
+            # bare AttributeError from calling .strip() on None.
+            finish_reason = choice.get("finish_reason")
+            reasoning_preview = (message.get("reasoning_content") or "")[:500].replace("\n", " ")
+            _get_log().error(
+                f"Empty content (finish_reason={finish_reason}) — "
+                f"reasoning_content preview: {reasoning_preview}"
+            )
+            raise ValueError(
+                f"Model returned empty content (finish_reason={finish_reason}). "
+                f"If reasoning_enabled: true, try raising reasoning_max_tokens or "
+                f"lowering reasoning_effort in config.yaml."
+            )
+
+        return content.strip()
 
     raise last_error  # type: ignore[misc]
 

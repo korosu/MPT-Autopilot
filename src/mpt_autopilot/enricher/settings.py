@@ -151,6 +151,50 @@ class Settings:
         # Set to false for reasoning models (o1, o3, o4-mini) that reject temperature.
         self.supports_temperature: bool = cfg.get("supports_temperature", True)
 
+        # ── Reasoning ("thinking") support ──────────────────────────────────────
+        # Controls the vLLM/SGLang/NVIDIA-NIM-style `chat_template_kwargs`
+        # extension (not part of the official OpenAI API). This whole block is
+        # opt-in by design: if `reasoning_enabled` is absent from config.yaml,
+        # `chat_template_kwargs` is never added to the request payload, so
+        # providers that don't understand that field (plain OpenAI, etc.) see
+        # no change in behavior.
+        #
+        #   absent                     → chat_template_kwargs omitted entirely
+        #   reasoning_enabled: false   → explicitly forces thinking off
+        #                                (chat_template_kwargs: {"reasoning_effort": "none"});
+        #                                use for models that default reasoning ON
+        #                                (e.g. Inkling) and would otherwise burn
+        #                                max_tokens on hidden thinking.
+        #   reasoning_enabled: true    → enables thinking at `reasoning_effort`
+        #                                and switches max_tokens to the larger
+        #                                `reasoning_max_tokens` budget, since
+        #                                hidden reasoning tokens count against it.
+        self.reasoning_enabled: bool | None = cfg.get("reasoning_enabled")
+        if self.reasoning_enabled is not None and not isinstance(self.reasoning_enabled, bool):
+            raise ValueError(
+                f"config.yaml: reasoning_enabled must be true or false (or omitted), "
+                f"got {self.reasoning_enabled!r}"
+            )
+
+        _valid_reasoning_efforts = {"none", "low", "medium", "high", "xhigh", "max"}
+        self.reasoning_effort: str = str(cfg.get("reasoning_effort", "medium")).lower()
+        if self.reasoning_effort not in _valid_reasoning_efforts:
+            raise ValueError(
+                f"config.yaml: reasoning_effort must be one of "
+                f"{sorted(_valid_reasoning_efforts)}, got '{self.reasoning_effort}'"
+            )
+
+        # Effective token budget used only when reasoning_enabled: true — hidden
+        # reasoning tokens are drawn from the same budget as the visible answer,
+        # so this needs to be far larger than the normal 512-token cap (NVIDIA's
+        # own Inkling example uses 8192).
+        self.reasoning_max_tokens: int = int(cfg.get("reasoning_max_tokens", 8192))
+        if self.reasoning_max_tokens < 1:
+            raise ValueError(
+                f"config.yaml: reasoning_max_tokens ({self.reasoning_max_tokens}) "
+                f"must be at least 1."
+            )
+
         # ── Default directory ───────────────────────────────────────────────────
         raw_dir: str | None = cfg.get("directory")
         self.directory: Path | None = Path(raw_dir) if raw_dir else None
