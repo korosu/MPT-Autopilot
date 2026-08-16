@@ -132,6 +132,7 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
                 print(f"    title: {meta.title}")
                 print(f"    tags:  {', '.join(meta.tags)}")
                 print(f"    privacy: {meta.privacy_status}  category: {meta.category_id}")
+                print(f"    AI use (containsSyntheticMedia): {meta.contains_synthetic_media}")
                 continue
 
             meta_dir.mkdir(parents=True, exist_ok=True)

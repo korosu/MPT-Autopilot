@@ -28,6 +28,7 @@ class Defaults:
     category_id: str = "22"
     tags: list[str] = field(default_factory=lambda: ["shorts"])
     hashtag_placement: str = "both"
+    contains_synthetic_media: bool = True
 
 
 @dataclass
@@ -76,6 +77,7 @@ def load_settings(
         category_id=str(defaults_raw.get("category_id", "22")),
         tags=list(defaults_raw.get("tags", ["shorts"])),
         hashtag_placement=hashtag_placement,
+        contains_synthetic_media=bool(defaults_raw.get("contains_synthetic_media", True)),
     )
 
     sleep_between_uploads = int(cfg.get("sleep_between_uploads", 5))

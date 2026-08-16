@@ -21,6 +21,7 @@ class VideoMeta:
     tags: list[str] = field(default_factory=list)
     privacy_status: str = "private"
     category_id: str = "22"
+    contains_synthetic_media: bool = True
 
 
 def sidecar_path(video_path: Path) -> Path:
@@ -107,10 +108,13 @@ def load_meta(video_path: Path, defaults: Defaults, account_name: str = "") -> V
           "description": "...",
           "tags": ["...", "..."],
           "privacyStatus": "private",
-          "categoryId": "22"
+          "categoryId": "22",
+          "containsSyntheticMedia": true
         }
 
-    Any field can be omitted; missing fields fall back to config.yaml defaults.
+    "containsSyntheticMedia" is YouTube's "AI use" disclosure (realistic
+    altered/synthetic content). Any field can be omitted; missing fields fall
+    back to config.yaml defaults.
     If there's no sidecar at all, the title is derived from the filename.
 
     When sidecar provides a "tags" list, applies hashtag_placement logic:
@@ -129,6 +133,7 @@ def load_meta(video_path: Path, defaults: Defaults, account_name: str = "") -> V
             tags=list(defaults.tags),
             privacy_status=defaults.privacy_status,
             category_id=defaults.category_id,
+            contains_synthetic_media=defaults.contains_synthetic_media,
         )
 
     try:
@@ -159,6 +164,9 @@ def load_meta(video_path: Path, defaults: Defaults, account_name: str = "") -> V
         tags=tags,
         privacy_status=str(raw.get("privacyStatus", defaults.privacy_status)),
         category_id=str(raw.get("categoryId", defaults.category_id)),
+        contains_synthetic_media=bool(
+            raw.get("containsSyntheticMedia", defaults.contains_synthetic_media)
+        ),
     )
 
 
@@ -170,6 +178,7 @@ def to_meta_json(meta: VideoMeta) -> str:
             "tags": meta.tags,
             "privacyStatus": meta.privacy_status,
             "categoryId": meta.category_id,
+            "containsSyntheticMedia": meta.contains_synthetic_media,
         },
         ensure_ascii=False,
     )

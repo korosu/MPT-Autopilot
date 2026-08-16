@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from yt_uploader.engine.metadata import (
     _apply_tags_placement,
     load_meta,
     title_from_filename,
+    to_meta_json,
 )
 
 
@@ -193,6 +195,49 @@ def test_load_meta_sidecar_without_title_uses_account_name(tmp_path: Path):
     defaults = Defaults()
     meta = load_meta(video, defaults, account_name="es")
     assert meta.title == "my video"  # suffix stripped
+
+
+def test_contains_synthetic_media_defaults_true_no_sidecar(tmp_path: Path):
+    """No sidecar -> AI-use disclosure falls back to config default (True)."""
+    video = tmp_path / "video.mp4"
+    video.touch()
+
+    defaults = Defaults()
+    meta = load_meta(video, defaults)
+    assert meta.contains_synthetic_media is True
+
+
+def test_contains_synthetic_media_defaults_false_from_config(tmp_path: Path):
+    """Config default of False is honored when sidecar is silent on it."""
+    video = tmp_path / "video.mp4"
+    video.touch()
+
+    defaults = Defaults(contains_synthetic_media=False)
+    meta = load_meta(video, defaults)
+    assert meta.contains_synthetic_media is False
+
+
+def test_contains_synthetic_media_sidecar_override(tmp_path: Path):
+    """Sidecar 'containsSyntheticMedia' overrides the config default."""
+    sidecar = tmp_path / "video.json"
+    sidecar.write_text('{"containsSyntheticMedia": false}')
+    video = tmp_path / "video.mp4"
+    video.touch()
+
+    defaults = Defaults(contains_synthetic_media=True)
+    meta = load_meta(video, defaults)
+    assert meta.contains_synthetic_media is False
+
+
+def test_to_meta_json_includes_contains_synthetic_media(tmp_path: Path):
+    """to_meta_json emits containsSyntheticMedia for youtubeuploader's -metaJSON."""
+    video = tmp_path / "video.mp4"
+    video.touch()
+
+    defaults = Defaults(contains_synthetic_media=True)
+    meta = load_meta(video, defaults)
+    payload = json.loads(to_meta_json(meta))
+    assert payload["containsSyntheticMedia"] is True
 
 
 if __name__ == "__main__":

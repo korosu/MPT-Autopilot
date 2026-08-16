@@ -125,3 +125,23 @@ def test_daily_upload_limit_must_be_positive(tmp_path):
             config_path=Path(config_file.name),
             accounts_path=Path(accounts_file.name),
         )
+
+
+def test_contains_synthetic_media_defaults_true_when_unset(tmp_path):
+    accounts_path = tmp_path / "accounts.yaml"
+    config_path = tmp_path / "config.yaml"
+    accounts_path.write_text("accounts: {}\n")
+    config_path.write_text("")
+
+    settings = load_settings(config_path=config_path, accounts_path=accounts_path)
+    assert settings.defaults.contains_synthetic_media is True
+
+
+def test_contains_synthetic_media_reads_false_from_config(tmp_path):
+    accounts_path = tmp_path / "accounts.yaml"
+    config_path = tmp_path / "config.yaml"
+    accounts_path.write_text("accounts: {}\n")
+    config_path.write_text("defaults:\n  contains_synthetic_media: false\n")
+
+    settings = load_settings(config_path=config_path, accounts_path=accounts_path)
+    assert settings.defaults.contains_synthetic_media is False
