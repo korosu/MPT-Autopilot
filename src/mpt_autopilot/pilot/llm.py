@@ -39,6 +39,11 @@ _TOKENS_OVERHEAD = 500  # slack for any preamble/formatting
 _MAX_RETRIES = 3
 _RETRY_BACKOFF_BASE = 2.0  # seconds; doubles each attempt
 
+# Per-request timeout (connect + read). Reasoning models (e.g. NVIDIA NIM
+# inkling) spend a long time on a hidden reasoning draft before writing the
+# visible answer, so a big --count can legitimately take minutes.
+_REQUEST_TIMEOUT = 480  # seconds
+
 
 def _token_budget(count: int) -> int:
     return max(_MIN_TOKENS, count * _TOKENS_PER_JOB + _TOKENS_OVERHEAD)
@@ -84,7 +89,7 @@ def _post_with_retry(url: str, payload: dict, headers: dict) -> requests.Respons
     resp: requests.Response | None = None
     for attempt in range(_MAX_RETRIES + 1):
         try:
-            resp = requests.post(url, json=payload, headers=headers, timeout=120)
+            resp = requests.post(url, json=payload, headers=headers, timeout=_REQUEST_TIMEOUT)
         except (requests.ConnectionError, requests.Timeout) as e:
             last_exc = e
             resp = None
