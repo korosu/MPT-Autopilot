@@ -1,0 +1,107 @@
+# Copy this file to jobs.yaml (or jobs_en.yaml, jobs_es.yaml, etc.) and edit.
+# jobs.yaml is gitignored — your video topics stay private.
+#
+# `defaults` below lists every MoneyPrinterTurbo VideoParams field. You don't
+# need to set them all — anything you delete here just isn't sent, and
+# MoneyPrinterTurbo falls back to its own server-side default. This file is
+# intentionally exhaustive so you have a single place to see what's tunable.
+
+defaults:
+  # ── Voice ────────────────────────────────────────────────────────────────
+  # `voice` resolves a friendly alias from config.yaml's `voices:` section
+  # into both tts_server and voice_name together, so the two can never drift
+  # out of sync. Ships with working presets already — see config.example.yaml.
+  # You can set tts_server / voice_name directly instead if you'd rather
+  # skip presets entirely.
+  voice: "gemini_puck"
+  voice_volume: 1
+  voice_rate: 1.1
+
+  # ── Script / subject ─────────────────────────────────────────────────────
+  video_subject: ""
+  video_script: ""
+  video_terms: ""
+  video_script_prompt: ""
+  custom_system_prompt: ""
+  paragraph_number: 3
+  video_language: "en"
+
+  # ── Video assembly ───────────────────────────────────────────────────────
+  video_aspect: "9:16"
+  video_concat_mode: "random"
+  video_transition_mode: "None"
+  video_clip_duration: 4
+  video_count: 1
+  video_source: "pexels"
+  video_materials:
+    - provider: "pexels"
+      url: ""
+      duration: 0
+  custom_audio_file: ""
+
+  # ── Background music ─────────────────────────────────────────────────────
+  bgm_type: "random"
+  bgm_file: ""
+  bgm_volume: 0.2
+
+  # ── Subtitles ────────────────────────────────────────────────────────────
+  subtitle_enabled: true
+  subtitle_position: "bottom"
+  custom_position: 50
+  font_name: "STHeitiMedium.ttc"
+  font_size: 60
+  text_fore_color: "#FFFFFF"
+  text_background_color: true
+  stroke_color: "#000000"
+  stroke_width: 2
+
+  # ── Rendering ────────────────────────────────────────────────────────────
+  n_threads: 2
+
+# Individual jobs.
+# Required per job:
+#   name        — label used in logs and Telegram alerts
+#   output_file — saved filename, must be unique (added to seen.txt after success)
+# Everything else overrides defaults for that job only.
+jobs:
+  - name: "what_air_traffic_controllers_never_tell_passengers_en"
+    output_file: "what_air_traffic_controllers_never_tell_passengers_en.mp4"
+    enabled: true
+    video_subject: "What Air Traffic Controllers Never Tell Passengers"
+    video_clip_duration: 4
+    video_concat_mode: "random"
+    voice: "gemini_aoede"   # overrides tts_server + voice_name together
+    voice_rate: 1.1
+    bgm_type: "random"
+    bgm_volume: 0.15
+    paragraph_number: 2
+
+  - name: "morning_routine_tips_en"
+    output_file: "morning_routine_tips_en.mp4"
+    enabled: true
+    video_subject: "5 simple morning routine tips to boost productivity"
+
+  - name: "sleep_better_tonight_en"
+    output_file: "sleep_better_tonight_en.mp4"
+    enabled: false
+    video_subject: "How to fall asleep faster and wake up energized"
+
+  # Per-job override example — Spanish via a bundled Edge TTS voice instead
+  # of the Gemini default. Run `uv run batch --list-voices es` to see all
+  # 45 Spanish variants (Spain, Mexico, Argentina, ...) and pick another.
+  - name: "consejos_productividad_es"
+    output_file: "consejos_productividad_es.mp4"
+    enabled: false
+    video_subject: "5 consejos para mejorar tu productividad al instante"
+    video_language: "es"
+    voice: "es_es_elvira"
+
+  # Skipping presets entirely and setting tts_server / voice_name directly
+  # also works — `voice` is purely a convenience layer
+  - name: "sin_presets_es"
+    output_file: "sin_presets_es.mp4"
+    enabled: false
+    video_subject: "5 consejos de productividad"
+    video_language: "es"
+    tts_server: "edge"
+    voice_name: "es-MX-DaliaNeural-Female"
