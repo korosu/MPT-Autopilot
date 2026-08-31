@@ -1,38 +1,43 @@
 """
-generator/seen.py
+seen.py — the single dedup registry shared by every MPT Autopilot stage.
 
-Tracks which output_file names have already been generated.
-Storage: one plain-text file per language suffix, one filename per line.
+Tracks which `output_file` names have already been produced. Storage is a plain
+text file, one filename per line, append-only: a crash mid-run never loses
+progress, and re-running picks up exactly where it left off.
 
-File naming logic:
-  file_suffix ""    → seen.txt         (default — no language separation)
-  file_suffix "_es" → seen_es.txt
-  file_suffix "_en" → seen_en.txt
+This module merges two previously separate implementations (the batch stage's
+path-first registry and the pilot stage's suffix-aware one). The public API is
+path-first; multi-language suffix handling lives in `resolve()`:
 
-Most users store everything in one seen.txt. Multi-language setups that
-use file_suffix get separate files automatically.
+    resolve(dir, "")    → <dir>/seen.txt
+    resolve(dir, "_es") → <dir>/seen_es.txt
 
-To migrate to a database later, replace this module with one that
-implements the same functions: load / add / add_many.
+Entries are cached per resolved path and kept in insertion order, because the
+pilot stage feeds the most recent entries back into its prompts.
+
+To migrate to a database later, replace this module with one implementing the
+same functions: resolve / load / load_ordered / contains / add / add_many /
+list_all.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from shorts_pilot.generator.lock import file_lock
+from mpt_autopilot.lock import file_lock
 
-# In-memory cache keyed by resolved file path string.
-# Stores entries in insertion order (list) for recency-aware slicing.
+# Cache keyed by the resolved path string, holding entries in file order
+# (oldest first) with duplicates already removed.
 _cache: dict[str, list[str]] = {}
 
 
-def _file(base_dir: Path, file_suffix: str) -> Path:
+def resolve(base_dir: Path, file_suffix: str = "") -> Path:
     """
-    Resolve seen file path from file_suffix:
+    Build the seen-file path for a language suffix.
+
       ""     → seen.txt
       "_es"  → seen_es.txt
-      "_en"  → seen_en.txt
+      "es"   → seen_es.txt   (a missing leading underscore is tolerated)
     """
     if file_suffix:
         slug = file_suffix.lstrip("_")
@@ -40,67 +45,66 @@ def _file(base_dir: Path, file_suffix: str) -> Path:
     return base_dir / "seen.txt"
 
 
-def _key(base_dir: Path, file_suffix: str) -> str:
-    return str(_file(base_dir, file_suffix))
-
-
-def _load_list(base_dir: Path, file_suffix: str) -> list[str]:
-    """Return entries in file order (oldest first). Uses cache."""
-    k = _key(base_dir, file_suffix)
-    if k not in _cache:
-        f = _file(base_dir, file_suffix)
-        if not f.exists():
-            _cache[k] = []
+def _load_list(path: Path) -> list[str]:
+    key = str(path)
+    if key not in _cache:
+        if not path.exists():
+            _cache[key] = []
         else:
-            lines = f.read_text(encoding="utf-8").splitlines()
-            seen_set: set[str] = set()
             ordered: list[str] = []
-            for line in lines:
+            known: set[str] = set()
+            for line in path.read_text(encoding="utf-8").splitlines():
                 entry = line.strip()
-                if entry and entry not in seen_set:
-                    seen_set.add(entry)
+                if entry and entry not in known:
+                    known.add(entry)
                     ordered.append(entry)
-            _cache[k] = ordered
-    return _cache[k]
+            _cache[key] = ordered
+    return _cache[key]
 
 
-def load(base_dir: Path, file_suffix: str) -> set[str]:
-    """Return the full set of known output_file names for this suffix."""
-    return set(_load_list(base_dir, file_suffix))
+def load(path: Path) -> set[str]:
+    """Every known output_file name. Cached per path."""
+    return set(_load_list(path))
 
 
-def load_ordered(base_dir: Path, file_suffix: str) -> list[str]:
-    """Return entries in insertion order (oldest first). Used for recency-aware prompts."""
-    return list(_load_list(base_dir, file_suffix))
+def load_ordered(path: Path) -> list[str]:
+    """Entries in insertion order (oldest first) — used for recency-aware prompts."""
+    return list(_load_list(path))
 
 
-def add(base_dir: Path, file_suffix: str, output_file: str) -> None:
-    """Append output_file to the seen file. Idempotent."""
-    existing = load(base_dir, file_suffix)
-    if output_file in existing:
+def contains(path: Path, output_file: str) -> bool:
+    return output_file in load(path)
+
+
+def add(path: Path, output_file: str) -> None:
+    """Append one entry. Idempotent."""
+    if output_file in load(path):
         return
-    k = _key(base_dir, file_suffix)
-    f = _file(base_dir, file_suffix)
-    # Lock around the write so two concurrent processes can't interleave
-    # bytes mid-write. A duplicate line from a rare race is harmless —
-    # _load_list() already de-duplicates on read.
-    with file_lock(f):
-        _cache[k].append(output_file)
-        with open(f, "a", encoding="utf-8") as fh:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Lock around the write so two concurrent processes can't interleave bytes
+    # mid-write. A duplicate line from a rare race is harmless — _load_list()
+    # already de-duplicates on read.
+    with file_lock(path):
+        _cache[str(path)].append(output_file)
+        with open(path, "a", encoding="utf-8") as fh:
             fh.write(f"{output_file}\n")
 
 
-def add_many(base_dir: Path, file_suffix: str, output_files: list[str]) -> None:
-    """Append multiple entries at once (one file write)."""
+def add_many(path: Path, output_files: list[str]) -> None:
+    """Append several entries in one write. Idempotent."""
     if not output_files:
         return
-    existing = load(base_dir, file_suffix)
+    existing = load(path)
     new = [name for name in output_files if name not in existing]
     if not new:
         return
-    k = _key(base_dir, file_suffix)
-    f = _file(base_dir, file_suffix)
-    with file_lock(f):
-        _cache[k].extend(new)
-        with open(f, "a", encoding="utf-8") as fh:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with file_lock(path):
+        _cache[str(path)].extend(new)
+        with open(path, "a", encoding="utf-8") as fh:
             fh.write("\n".join(new) + "\n")
+
+
+def list_all(path: Path) -> list[str]:
+    """All registered names, sorted alphabetically."""
+    return sorted(load(path))

@@ -1,19 +1,36 @@
 """
-engine/notify.py
+notify.py — the single Telegram notifier shared by every MPT Autopilot stage.
 
-Sends optional alerts to a Telegram chat.
-Silently does nothing when TELEGRAM_TOKEN / TELEGRAM_CHAT_ID are not set in .env.
-Never raises — a failed alert must not break the main batch run.
+Replaces four byte-identical copies that used to live in each of the merged
+tools. Accepts any settings object that carries the three Telegram fields, so
+every stage's own Settings dataclass works without a conversion step.
+
+Silently does nothing when TELEGRAM_TOKEN / TELEGRAM_CHAT_ID are unset in .env.
+Never raises — a failed alert must not break the run that triggered it.
 """
 
 from __future__ import annotations
 
+from typing import Protocol, runtime_checkable
+
 import requests
 
-from mpt_batch.engine.settings import Settings
+
+@runtime_checkable
+class TelegramSettings(Protocol):
+    """The only part of a stage's Settings this module needs."""
+
+    @property
+    def telegram_token(self) -> str: ...
+
+    @property
+    def telegram_chat_id(self) -> str: ...
+
+    @property
+    def telegram_prefix(self) -> str: ...
 
 
-def alert(msg: str, settings: Settings) -> None:
+def alert(msg: str, settings: TelegramSettings) -> None:
     if not settings.telegram_token or not settings.telegram_chat_id:
         return
     text = f"[{settings.telegram_prefix}] {msg}" if settings.telegram_prefix else msg

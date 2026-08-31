@@ -3,6 +3,9 @@ logger.py — file + stdout logger with size-based rotation.
 
 Uses Python's standard logging module with RotatingFileHandler
 for reliable multi-file rotation (keeps up to 3 backup files).
+
+Shared across MPT Autopilot stages. `name` keeps one stage's handlers separate
+from another's when several stages run in the same process (see `mpt run`).
 """
 
 from __future__ import annotations
@@ -19,10 +22,10 @@ class Logger:
     original info/warn/error interface used throughout the codebase.
     """
 
-    def __init__(self, log_file: Path, max_size: int) -> None:
+    def __init__(self, log_file: Path, max_size: int, name: str = "mpt_autopilot") -> None:
         log_file.parent.mkdir(parents=True, exist_ok=True)
 
-        self._logger = logging.getLogger("hashtag_enricher")
+        self._logger = logging.getLogger(name)
 
         # Guard against duplicate handlers when instantiated multiple times
         if self._logger.handlers:

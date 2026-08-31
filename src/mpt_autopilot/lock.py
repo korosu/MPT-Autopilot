@@ -1,9 +1,9 @@
 """
-generator/lock.py
+lock.py
 
 Minimal cross-platform advisory file lock. Used to stop two concurrent
-`refill` / `init-seen` runs from interleaving writes to the same
-jobs_<lang>.yaml or seen*.txt file. Implemented with atomic exclusive
+`mpt refill` / `mpt init-seen` / `mpt batch` runs from interleaving writes to
+the same jobs_<lang>.yaml or seen*.txt file. Implemented with atomic exclusive
 file creation so it behaves the same on Linux, macOS, and Windows
 without any extra dependencies.
 """
