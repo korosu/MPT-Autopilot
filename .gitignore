@@ -1,0 +1,46 @@
+# secrets and user-specific configuration
+.env
+config.yaml
+accounts.yaml
+
+# your actual jobs (topics are private) — copy from jobs.example.yaml
+jobs.yaml
+jobs_*.yaml
+!jobs.example.yaml
+
+# dedup registries — generated at runtime, contain personal video history
+seen.txt
+seen_*.txt
+seen.db
+*.in_progress.txt
+*.lock
+
+# generated output
+exports/
+exports_*/
+logs/
+meta/
+
+# uploader ledger
+*.sqlite
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+
+# tooling caches
+.uv-cache/
+.ruff_cache/
+.pytest_cache/
+
+# editors / OS
+.idea/
+.DS_Store
+
+# generated video files (can be large)
+*.mp4
+*.log
