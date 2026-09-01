@@ -1,16 +1,31 @@
-# yt-shorts-uploader accounts
-# Copy to accounts.yaml and edit. Real accounts.yaml is gitignored - it points
-# at OAuth credentials, which are secrets.
+# MPT Autopilot — accounts.example.yaml
 #
-# Each key is an account name, used with: upload --account <name>
-# There's no limit on how many you define - one per YouTube channel.
+#     cp accounts.example.yaml accounts.yaml
+#
+# Per-channel YouTube credentials for `mpt upload`. Kept separate from
+# config.yaml on purpose: it points at OAuth secrets, so it is the one file you
+# are most likely to store outside the repository. accounts.yaml is gitignored.
+#
+# `mpt upload` looks for accounts.yaml NEXT TO config.yaml. Point somewhere else
+# with `uploader.accounts_file` in config.yaml.
+#
+# Each key is an account name, used as: mpt upload --account <name>
+# Define as many as you like — one per YouTube channel.
+#
+# `mpt run` maps a language to an account by name, so naming these after your
+# language codes (en, es, ...) means no extra configuration. If you'd rather use
+# real channel names, add a pipeline.accounts mapping in config.yaml.
 
 accounts:
   en:
+    # Where rendered videos wait to be uploaded. This is normally the batch
+    # stage's output directory for the language, e.g. .../exports
     videos_dir: "/your/path/to/videos/en"
     client_secrets: "/root/youtubeuploader/client_secrets_en.json"
     token_file: "/root/youtubeuploader/request.token.en"
-    # daily_upload_limit: 10  # optional per-account daily upload limit
+    # Stop after this many uploads per run. YouTube's own daily quota still
+    # applies and is detected separately (exit code 2).
+    # daily_upload_limit: 10
 
   es:
     videos_dir: "/your/path/to/videos/es"

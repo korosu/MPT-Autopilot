@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+
+      # 3.10 is the floor declared in pyproject.toml (requires-python). Testing
+      # on the oldest supported version is what catches accidental use of newer
+      # syntax; anything newer would pass silently.
+      - run: uv python install 3.10
+      - run: uv sync --extra dev
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format
+        run: uv run ruff format --check .
+
+      - name: Types
+        run: uv run pyright src
+
+      # Unlike the four repos this project was merged from, CI runs the tests
+      # too: the shared config loader and `mpt run` mean a change in one stage
+      # can now break another.
+      - name: Tests
+        run: uv run pytest tests/ -v

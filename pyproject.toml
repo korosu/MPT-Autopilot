@@ -1,0 +1,57 @@
+[project]
+name = "mpt-autopilot"
+version = "1.0.0"
+description = "End-to-end automation for MoneyPrinterTurbo: idea generation, batch rendering, hashtag enrichment, and YouTube upload behind one `mpt` command"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "requests>=2.31",
+]
+
+[project.scripts]
+mpt = "mpt_autopilot.cli:main"
+
+[project.urls]
+Repository = "https://github.com/korosu/mpt-autopilot"
+Issues = "https://github.com/korosu/mpt-autopilot/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mpt_autopilot"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Prompt text and prompt-shaped test fixtures are copied verbatim from the
+# provider's own examples; rewrapping them changes what the model sees.
+"src/mpt_autopilot/pilot/prompt.py" = ["E501"]
+"tests/pilot/test_count.py" = ["E501"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"
+# Point pyright at the uv-managed environment; without this it resolves the
+# interpreter on PATH and reports every third-party import as missing.
+venvPath = "."
+venv = ".venv"
+
+[project.optional-dependencies]
+dev = ["ruff>=0.15.20", "pytest>=8.0", "pyright>=1.1"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.20",
+    "pytest>=8.0",
+    "pyright>=1.1",
+]

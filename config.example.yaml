@@ -1,0 +1,483 @@
+# =============================================================================
+# MPT Autopilot — config.example.yaml
+#
+# ONE config file for all four stages. Copy it and edit:
+#
+#     cp config.example.yaml config.yaml
+#     cp .env.example .env                # secrets go in .env, never here
+#     cp accounts.example.yaml accounts.yaml
+#     cp jobs.example.yaml jobs.yaml
+#
+# config.yaml, .env, and accounts.yaml are gitignored, so `git pull` will never
+# overwrite your settings.
+#
+# Layout:
+#     shared     — telegram_prefix, paths, langs   (read by several stages)
+#     pilot:     — mpt refill / mpt init-seen
+#     batch:     — mpt batch
+#     enricher:  — mpt enrich
+#     uploader:  — mpt upload
+#     pipeline:  — mpt run
+#
+# EVERY relative path in this file resolves against THIS FILE's directory, not
+# the directory you run `mpt` from. So a cron job can `mpt --config
+# /srv/mpt/config.yaml run` from anywhere and get identical behaviour.
+#
+# A stage only needs its own section. `mpt batch` never reads `enricher:`, so
+# you can leave sections you don't use out entirely.
+# =============================================================================
+
+
+# =============================================================================
+# SHARED
+# =============================================================================
+
+# Prefix on every Telegram alert, e.g. "[mpt-autopilot] Batch done".
+# Any section may override it with its own telegram_prefix (useful if you run
+# several farms into one chat). TELEGRAM_TOKEN / TELEGRAM_CHAT_ID go in .env —
+# leave them empty there to disable alerts entirely.
+telegram_prefix: "mpt-autopilot"
+
+# Default directories, shared by all stages. A stage-level key of the same name
+# wins over these. Leave any of them out to fall back to per-stage defaults.
+paths:
+  jobs_dir: "./jobs"        # jobs.yaml / jobs_es.yaml live here
+  seen_dir: "./jobs"        # seen.txt / seen_es.txt (defaults to jobs_dir)
+  exports_dir: "./exports"  # rendered videos (batch writes, enrich reads)
+
+# ── Language profiles ────────────────────────────────────────────────────────
+#
+# ONE shared block, because every stage needs the same answer to "what does the
+# _es suffix mean?". Before the merge each tool had its own copy and a typo in
+# one of them silently produced videos nothing downstream could find.
+#
+# file_suffix drives every derived name:
+#     ""    → jobs.yaml,    seen.txt,    exports/
+#     "_es" → jobs_es.yaml, seen_es.txt, exports_es/
+#
+# Only `pilot` reads voices / job_defaults / theme_list; `batch`, `enrich`, and
+# `run` only need file_suffix. Delete a language you don't produce.
+langs:
+  en:
+    label: English
+    file_suffix: ""          # no suffix → bare filenames
+    voice_rate_min: 1.05
+    voice_rate_max: 1.20
+    voices:
+      - gemini:aoede
+      - gemini:charon
+      - gemini:fenrir
+      - gemini:kore
+      - gemini:leda
+      - gemini:orus
+      - gemini:puck
+      - gemini:zephyr
+
+    # Optional theme mode for `mpt refill`: when non-empty, generated topics are
+    # constrained to these themes. Omit for free-topic generation.
+    # theme_list:
+    #   - job
+    #   - animal
+    #   - computer
+
+    # Written verbatim into every generated job entry.
+    job_defaults:
+      video_clip_duration: 3
+      video_concat_mode: random
+      bgm_type: random
+      bgm_volume: 0.15
+      paragraph_number: 2
+      # Target narration length, e.g. "30-60" or "120+" (seconds). Omit for no
+      # limit. Converted to word bounds and injected into the script prompt;
+      # paragraph_number is nudged up if needed, never down.
+      # duration_range: "30-60"
+
+  es:
+    label: Spanish
+    file_suffix: "_es"       # → jobs_es.yaml, seen_es.txt, exports_es/
+    voice_rate_min: 1.05
+    voice_rate_max: 1.15
+    voices:
+      - gemini:aoede
+      - gemini:kore
+      - gemini:puck
+    job_defaults:
+      video_clip_duration: 4
+      video_concat_mode: random
+      bgm_type: random
+      bgm_volume: 0.15
+      paragraph_number: 2
+
+
+# =============================================================================
+# pilot: — `mpt refill` and `mpt init-seen`
+#
+# Generates video ideas with an LLM and appends them to the jobs queue.
+# LLM_API_KEY / LLM_BASE_URL / LLM_MODEL come from .env.
+# =============================================================================
+pilot:
+  generation:
+    # How many new jobs one `mpt refill` adds.
+    count: 21
+
+    # Refill only fires when pending jobs drop below this. "Pending" = enabled
+    # in the jobs file AND not yet rendered (not in the seen registry).
+    # `--force` ignores the threshold.
+    threshold: 10
+
+    # Reasoning-model support. Leave the three keys out entirely and nothing is
+    # sent — identical behaviour to a plain OpenAI-compatible provider. Only
+    # relevant for self-hosted vLLM / SGLang / NVIDIA NIM serving a model that
+    # turns "thinking" on by default (DeepSeek-R1, Qwen3-thinking, Inkling):
+    # those can spend the whole token budget on a hidden draft and return an
+    # empty answer unless you ask for less reasoning or more room.
+    #
+    # This maps to chat_template_kwargs.reasoning_effort. It does NOT apply to
+    # official OpenAI reasoning models (o-series / gpt-5, which take a top-level
+    # reasoning_effort) or to Anthropic extended thinking.
+    reasoning_enabled: false     # true | false | omit entirely
+    # reasoning_effort: "medium" # none|low|medium|high|xhigh|max
+    # reasoning_max_tokens: 8192 # extra budget reserved for the hidden draft
+
+  # Directories scanned by `mpt init-seen` for existing .mp4 files, so refill
+  # never re-proposes a topic you already rendered. Combined with any --dir
+  # flags. Leave empty to always pass --dir at runtime.
+  scan_dirs: []
+
+  # Overrides for the shared paths: block, if pilot needs different ones.
+  # jobs_dir: "./jobs"
+  # seen_dir: "./jobs"
+
+
+# =============================================================================
+# batch: — `mpt batch`
+#
+# Renders pending jobs through the MoneyPrinterTurbo API.
+# =============================================================================
+batch:
+  # MoneyPrinterTurbo API endpoint (required).
+  api_url: "http://127.0.0.1:8080"
+
+  # MoneyPrinterTurbo's own directories (required). These are paths on the
+  # machine running MoneyPrinterTurbo, as it sees them.
+  mpt_storage: "/root/MoneyPrinterTurbo/storage"           # contains tasks/, cache_videos/
+  mpt_songs_dir: "/root/MoneyPrinterTurbo/resource/songs"  # background .mp3 files
+
+  # Where finished videos and their script.json files land. `mpt enrich` reads
+  # this same directory, with the language suffix applied (exports_es/ etc.).
+  # Defaults to paths.exports_dir.
+  # output_dir: "./exports"
+
+  # Dedup registry: one output_file name per line, append-only. A video is
+  # recorded only after it is fully copied, so a crash never loses or
+  # duplicates progress. --lang derives seen_es.txt from this name.
+  seen_file: "./seen.txt"
+
+  # Direct jobs file path (optional). When set it wins over --lang suffixes and
+  # jobs_dir. Usually you want the langs: mechanism instead.
+  # jobs: "./jobs_prod.yaml"
+
+  log_file: "./logs/batch.log"
+  log_max_mb: 10
+
+  # Give up waiting for one task after this long.
+  max_wait_seconds: 2400
+  # Give up if a task's progress does not move for this long.
+  stuck_threshold_seconds: 3600
+
+  # Retries cover transient trouble (dropped connection, MPT briefly down, a
+  # one-off stuck task). They will not fix bad credentials —
+  # max_consecutive_failures is the circuit breaker for that.
+  max_retries: 3
+  retry_delay_seconds: 180
+  max_consecutive_failures: 3
+
+  # MoneyPrinterTurbo's cache_videos/ folder grows without bound. Cleanup runs
+  # once at the end of every batch when enabled; the interval additionally
+  # triggers it every N successful videos during long runs (0 = only at the
+  # end). Set cache_cleanup_enabled: false to never touch it.
+  cache_cleanup_enabled: true
+  cache_cleanup_interval: 6
+
+  # ── Voice presets ────────────────────────────────────────────────────────
+  #
+  # MoneyPrinterTurbo picks the voice purely from the shape of `voice_name`: a
+  # "provider:voice" prefix like "gemini:puck" for paid providers, or a plain
+  # Edge TTS id like "es-ES-ElviraNeural" for the free default. `tts_server`
+  # rides along for readability.
+  #
+  # All 314 free Edge TTS voices are built in — you do NOT list them here.
+  # Browse them with:
+  #
+  #     mpt batch --list-voices es       # every Spanish variant
+  #     mpt batch --list-voices gemini   # your own presets
+  #
+  # and use any alias straight in jobs.yaml:
+  #
+  #     defaults:
+  #       voice: "es_es_elvira"          # es-ES-ElviraNeural (Female)
+  #
+  # This section is only for EXTRA presets: paid providers, or a bundled voice
+  # with a custom rate/volume. Each preset sets tts_server and voice_name
+  # together so they cannot drift apart. The grouping keys (gemini, ...) are
+  # for readability only — alias names must be unique across the whole section,
+  # and an alias here overrides a bundled one of the same name.
+  #
+  # Paid providers need their key configured on the MoneyPrinterTurbo SERVER;
+  # nothing here can supply it. If your fork supports siliconflow / mimo /
+  # elevenlabs / azure v2, check its voice.py for the voice_name shape and add
+  # a group the same way.
+  voices:
+    # Same bundled Edge voice, but slower — good for a dense script.
+    # edge_overrides:
+    #   es_es_elvira:
+    #     tts_server: "edge"
+    #     voice_name: "es-ES-ElviraNeural-Female"
+    #     voice_rate: 0.9
+
+    # Gemini TTS — paid, needs a Gemini key on the MPT server. Full list:
+    # https://ai.google.dev/gemini-api/docs/speech-generation
+    gemini:
+      gemini_puck:
+        tts_server: "gemini"
+        voice_name: "gemini:puck"
+      gemini_aoede:
+        tts_server: "gemini"
+        voice_name: "gemini:aoede"
+      gemini_kore:
+        tts_server: "gemini"
+        voice_name: "gemini:kore"
+      gemini_charon:
+        tts_server: "gemini"
+        voice_name: "gemini:charon"
+      gemini_fenrir:
+        tts_server: "gemini"
+        voice_name: "gemini:fenrir"
+      gemini_leda:
+        tts_server: "gemini"
+        voice_name: "gemini:leda"
+
+    # A preset may pin rate/volume too:
+    # gemini_aoede_fast:
+    #   tts_server: "gemini"
+    #   voice_name: "gemini:aoede"
+    #   voice_rate: 1.3
+    #   voice_volume: 1
+
+
+# =============================================================================
+# enricher: — `mpt enrich`
+#
+# Generates hashtags for rendered videos and writes them into the sidecar json
+# the upload stage reads. LLM credentials come from .env.
+# =============================================================================
+enricher:
+  # Directory scanned when --dir/--file is not given. Defaults to the current
+  # directory. In a `mpt run` pipeline this is ignored: the exports directory
+  # for the language is passed explicitly.
+  # videos_dir: "./exports"
+
+  # Target platform — affects both the prompt and the tag hard limit:
+  #   youtube    3–5 tags recommended, hard limit 60
+  #   tiktok     3–5 tags, hard limit 5
+  #   instagram  3–5 tags, hard limit 5
+  # `mpt enrich --platform tiktok` overrides this for one run.
+  platform: youtube
+
+  # The LLM generates between min_tags and max_tags CONTENT hashtags.
+  # always_include counts against max_tags. 3–5 total is current best practice
+  # across all major platforms.
+  min_tags: 3
+  max_tags: 5
+
+  # Tags longer than this (excluding the #) are dropped: nobody searches them.
+  max_tag_length: 20
+
+  # Never emitted, whatever the LLM returns. Empty by default — this tool has no
+  # opinion about which tags are bad for you.
+  # banned_tags:
+  #   - "#viral"
+  #   - "#foryou"
+  banned_tags: []
+
+  # Always prepended, in this order. The LLM is told to skip them, so there are
+  # no duplicates or ordering surprises.
+  always_include:
+    - "#shorts"
+
+  log_dir: "./logs"
+  log_max_mb: 5
+
+  # Set false for reasoning models (o1, o3, o4) that reject `temperature`.
+  supports_temperature: true
+
+  # Same three-state reasoning switch as pilot.generation above; see there for
+  # the full explanation. Omit entirely to send nothing.
+  reasoning_enabled: false
+  # reasoning_effort: "medium"
+  # reasoning_max_tokens: 8192
+
+  # ── Prompts ──────────────────────────────────────────────────────────────
+  # Required. Placeholders available in all three:
+  #   {video_subject}  topic (from the filename or script.json)
+  #   {platform}       youtube | tiktok | instagram
+  #   {min_tags} {max_tags} {max_tag_length}
+  #   {excluded_tags}  always_include + banned_tags, comma-joined
+  #   {language}       prompt_generate only
+  #   {text}           prompt_detect_language only
+
+  # Fallback only: used if the combined call below fails to parse, in which case
+  # the tool detects the language first and then generates tags.
+  prompt_detect_language: |
+    What language is the following text written in or intended for?
+    Reply with ONLY the language name in English (e.g. "English", "Spanish", "Russian").
+    Do not add any explanation or punctuation — just the language name.
+    Text: "{text}"
+
+  # Used when the language is NOT already known (no --lang, no video_language in
+  # script.json): detects the language and generates tags in ONE call.
+  # Must return {"language": "...", "tags": ["#tag1", ...]}.
+  prompt_detect_and_generate: |
+    You are a {platform} short-form video SEO specialist.
+
+    Video topic: "{video_subject}"
+
+    Task 1: Detect the language this content is in or intended for.
+    Task 2: Generate between {min_tags} and {max_tags} SEO hashtags for {platform}.
+
+    Hashtag rules:
+    - Primary tags (2–3): highly specific to THIS video's unique angle
+    - Secondary tags (1–2): niche-specific, medium competition
+    - All tags in the detected language
+    - Lowercase only, no CamelCase
+    - Preserve diacritics (e.g. #recuperación, #astronomía)
+    - Max {max_tag_length} characters per tag (after #)
+    - Tags to EXCLUDE (already included automatically): {excluded_tags}
+
+    Respond ONLY with a JSON object — no markdown, no explanation:
+    {{"language": "English", "tags": ["#tag1", "#tag2", "#tag3"]}}
+
+    Few-shot examples:
+    topic "ostriches never bury heads" →
+    {{"language": "English", "tags": ["#ostrichfacts", "#ostrichmyths", "#birdmyths", "#animalscience"]}}
+    topic "nadie puede oír tus gritos en el espacio" →
+    {{"language": "Spanish", "tags": ["#silencioenelespacio", "#sonidoenelespacio", "#vacíoespacial", "#curiosidadescósmicas"]}}
+
+  # Used when the language IS known (--lang, or video_language in script.json).
+  prompt_generate: |
+    You are a {platform} short-form video SEO specialist applying 2026 best practices.
+
+    Video topic: "{video_subject}"
+    Target language: {language}
+    Target platform: {platform}
+
+    Generate between {min_tags} and {max_tags} CONTENT hashtags.
+
+    ── PRIORITY ORDER (most to least important) ──────────────────────────────────
+
+    PRIMARY tags (generate 2–3):
+      Highly specific to THIS video's unique angle.
+      Ask yourself: "What would someone type into {platform} search to find exactly this video?"
+      Good examples:
+        topic "ostriches don't bury heads"    → #ostrichfacts  #ostrichmyths  #birdmyths
+        topic "sound impossible in space"     → #silencioenelespacio  #sonidoenelespacio
+        topic "opossum involuntarily faints"  → #involuntaryfainting  #opossumfacts
+      Bad examples (do NOT generate these):
+        ❌ #animals  ❌ #nature  ❌ #wildlife  ❌ #science  ❌ #espacio  ❌ #ciencia
+
+    SECONDARY tags (generate 1–2):
+      Describe the broader niche — medium competition level (not mega-popular, not obscure).
+      Think: "What community or sub-topic does this video belong to?"
+      Good examples: #animalscience  #astronomía  #curiosidadesdeluniverso  #animalbehavior
+
+    ── STRICT FORMATTING RULES ──────────────────────────────────────────────────
+    - All hashtags in {language} — never mix languages
+    - Every hashtag starts with #, no spaces inside
+    - ALL LOWERCASE — no CamelCase, no capitals
+    - Preserve native diacritics: #recuperación, #astronomía, #ñoño (NOT stripped)
+    - Max {max_tag_length} characters per hashtag (counting only the part after #)
+    - No duplicate tags
+
+    ── QUALITY RULES ────────────────────────────────────────────────────────────
+    - Relevance over volume — a niche tag beats a mega-tag every time
+    - NO off-topic tags (don't add #astronautas to a video about sound in a vacuum)
+    - NO awkward keyword-stuffed compounds (#didyouknowostriches, #funfactsaboutanimals)
+
+    Tags to EXCLUDE entirely (they are added automatically — do NOT include them):
+    {excluded_tags}
+
+    ── OUTPUT FORMAT ────────────────────────────────────────────────────────────
+    Return ONLY a valid JSON array of strings — no markdown fences, no explanation, nothing else.
+
+    Few-shot examples:
+
+    English / youtube / topic "ostriches don't bury heads":
+    ["#ostrichfacts", "#ostrichmyths", "#birdmyths", "#animalscience"]
+
+    Spanish / youtube / topic "sound impossible in space":
+    ["#silencioenelespacio", "#sonidoenelespacio", "#vacíoespacial", "#curiosidadescósmicas"]
+
+    English / tiktok / topic "opossum involuntarily faints":
+    ["#opossumfacts", "#involuntaryfainting", "#animalbiology", "#wildlifefacts"]
+
+    Spanish / instagram / topic "moon fits inside Russia":
+    ["#lalunacaberusia", "#curiosidadesdeluniverso", "#astronomía", "#datoscuriosos"]
+
+
+# =============================================================================
+# uploader: — `mpt upload`
+#
+# Uploads rendered videos to YouTube via youtubeuploader. Per-channel OAuth
+# paths live in the SEPARATE accounts.yaml, because that is the file you are
+# most likely to keep outside the repository.
+# =============================================================================
+uploader:
+  # The youtubeuploader binary: https://github.com/porjo/youtubeuploader
+  # A bare name (e.g. "youtubeuploader") is looked up on PATH.
+  uploader_binary: "/root/youtubeuploader/youtubeuploader"
+
+  # Where per-account metaJSON files are written before each upload.
+  meta_dir: "/root/youtubeuploader/meta"
+
+  # accounts.yaml location. Defaults to accounts.yaml beside THIS file.
+  # accounts_file: "./accounts.yaml"
+
+  # Pause between uploads, so YouTube does not see a burst.
+  sleep_between_uploads: 5
+
+  # Subfolder inside each account's videos_dir where a video is moved once its
+  # upload succeeds.
+  uploaded_dir_name: "old_videos"
+
+  # Used when a video has no <name>.json sidecar, or the sidecar omits a field.
+  defaults:
+    privacy_status: "private"   # private | unlisted | public
+    category_id: "22"           # 22 = People & Blogs
+    tags: ["shorts"]
+
+    # Where the hashtags from <video>.json land:
+    #   tags        hidden metadata tags field only
+    #   description visible hashtags appended to the description
+    #   both        both fields independently (default)
+    hashtag_placement: both
+
+    # YouTube's "AI use" disclosure (containsSyntheticMedia). Default true,
+    # because MoneyPrinterTurbo output is AI-generated realistic content. A
+    # sidecar can override it per video with "containsSyntheticMedia".
+    contains_synthetic_media: true
+
+
+# =============================================================================
+# pipeline: — `mpt run`
+#
+# `mpt run` chains refill → batch → enrich → upload, once per language. It
+# needs no configuration of its own; the only setting is the language→account
+# mapping below.
+# =============================================================================
+pipeline:
+  # Which uploader account (a key in accounts.yaml) each language uploads to.
+  # Omitted languages use the language code as the account name, so if your
+  # accounts are already named "en"/"es" you can delete this whole block.
+  # accounts:
+  #   en: main-channel
+  #   es: spanish-channel
