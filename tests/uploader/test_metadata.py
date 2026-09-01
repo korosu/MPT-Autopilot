@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from yt_uploader.engine.metadata import (
+from mpt_autopilot.uploader.metadata import (
     Defaults,
     _apply_description_placement,
     _apply_tags_placement,

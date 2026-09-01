@@ -13,8 +13,7 @@ src_dir = Path(__file__).parent.parent / "src"
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
 
-from shorts_pilot.generator.settings import LangSettings  # noqa: E402
-from shorts_pilot.refill import (  # noqa: E402
+from mpt_autopilot.pilot.refill import (  # noqa: E402
     WORDS_PER_SECOND,
     _validate_against_config,
     build_duration_instruction,
@@ -22,6 +21,7 @@ from shorts_pilot.refill import (  # noqa: E402
     paragraph_floor,
     parse_duration_range,
 )
+from mpt_autopilot.pilot.settings import LangSettings  # noqa: E402
 
 
 def test_words_per_second() -> None:

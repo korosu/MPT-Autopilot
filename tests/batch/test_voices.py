@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mpt_batch.engine import voices
+from mpt_autopilot.batch import voices
 
 
 def test_alias_for_edge_voice():

@@ -22,7 +22,7 @@ from typing import Any
 
 import requests
 
-from shorts_pilot.generator.settings import Settings
+from mpt_autopilot.pilot.settings import Settings
 
 # A fixed budget of 8000 tokens was previously used regardless of how many
 # jobs were requested. Each job is ~200-500 chars of video_subject plus ~10

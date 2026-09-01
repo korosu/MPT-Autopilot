@@ -6,9 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
-from mpt_batch.batch import upload_bgm_cmd
-from mpt_batch.engine.bgm import list_bgm_files
-from mpt_batch.engine.settings import Settings
+from mpt_autopilot.batch.bgm import list_bgm_files
+from mpt_autopilot.batch.run import upload_bgm_cmd
+from mpt_autopilot.batch.settings import Settings
 
 
 def test_list_bgm_files_reads_configured_songs_directory(tmp_path: Path) -> None:

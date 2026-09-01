@@ -5,7 +5,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from mpt_batch.engine import state
+from mpt_autopilot.batch import state
 
 
 def test_add_creates_entry():

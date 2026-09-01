@@ -15,8 +15,8 @@ src_dir = Path(__file__).parent.parent / "src"
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
 
-from shorts_pilot.generator.settings import LangSettings, Settings  # noqa: E402
-from shorts_pilot.refill import run  # noqa: E402
+from mpt_autopilot.pilot.refill import run  # noqa: E402
+from mpt_autopilot.pilot.settings import LangSettings, Settings  # noqa: E402
 
 
 def make_settings(
@@ -95,7 +95,7 @@ def test_count_one_call_regardless_of_threshold():
     # Patch both load_settings and call_llm in the refill module
     from unittest.mock import patch
 
-    import shorts_pilot.refill as refill
+    import mpt_autopilot.pilot.refill as refill
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
@@ -148,7 +148,7 @@ def test_count_bypasses_full_queue_guard():
 
     from unittest.mock import patch
 
-    import shorts_pilot.refill as refill
+    import mpt_autopilot.pilot.refill as refill
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
@@ -186,7 +186,7 @@ def test_no_count_uses_threshold_guard():
     """Without --count, threshold guard should still work (default behavior)."""
     from unittest.mock import patch
 
-    import shorts_pilot.refill as refill
+    import mpt_autopilot.pilot.refill as refill
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)

@@ -1,20 +1,25 @@
 """
-config.py — loads .env and config.yaml, exposes a single Settings object.
+enricher/settings.py — reads the `enricher:` section of the shared config.yaml
+and exposes it as a lazily-created singleton `settings`.
+
+The singleton is what the rest of the enricher stage imports, and it must stay
+lazy: `mpt --help` and unrelated subcommands have to work in a directory with
+no config.yaml. Nothing is read until the first attribute access.
+
+`configure(path)` lets the CLI point the singleton at a `--config` path before
+anything touches it.
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import cast
 
-import yaml
-from dotenv import load_dotenv
+from mpt_autopilot import config as shared_config
+from mpt_autopilot.enricher.postprocess import PLATFORM_HARD_LIMITS, platform_hard_limit
 
-from hashtag_enricher.enricher.postprocess import PLATFORM_HARD_LIMITS, platform_hard_limit
-
-_ROOT = Path.cwd()
-
-load_dotenv(_ROOT / ".env")
+SECTION = "enricher"
 
 
 def _require_env(key: str) -> str:
@@ -25,26 +30,6 @@ def _require_env(key: str) -> str:
             f"Copy .env.example to .env and fill in your values."
         )
     return value
-
-
-def _require_cfg(cfg: dict, key: str) -> str:
-    if key not in cfg:
-        raise KeyError(
-            f"config.yaml is missing required key '{key}'. "
-            f"Check your config.yaml against the defaults in config.example.yaml."
-        )
-    return cfg[key]
-
-
-def _load_yaml() -> dict:
-    config_file = _ROOT / "config.yaml"
-    if not config_file.exists():
-        raise FileNotFoundError(
-            f"config.yaml not found at {config_file}\n"
-            f"Copy config.example.yaml to config.yaml and adjust as needed."
-        )
-    with open(config_file, encoding="utf-8") as f:
-        return yaml.safe_load(f)
 
 
 def validate_tag_budget(platform: str, max_tags: int, always_include_count: int) -> int:
@@ -58,7 +43,7 @@ def validate_tag_budget(platform: str, max_tags: int, always_include_count: int)
     limit is not sufficient.
 
     Used both at Settings() init (for the configured `platform`) and by
-    enrich.py when `--platform` overrides the config at runtime, so the two
+    enricher/run.py when `--platform` overrides the config at runtime, so the two
     call sites can never drift apart.
 
     Args:
@@ -86,8 +71,10 @@ def validate_tag_budget(platform: str, max_tags: int, always_include_count: int)
 
 
 class Settings:
-    def __init__(self) -> None:
-        cfg = _load_yaml()
+    def __init__(self, config_path: Path | None = None) -> None:
+        shared = shared_config.load(config_path)
+        cfg = shared.section(SECTION)
+        self.config_path: Path = shared.path
 
         # ── LLM connection ────────────────────────────────────────────────────
         self.api_key: str = _require_env("LLM_API_KEY")
@@ -143,9 +130,11 @@ class Settings:
         validate_tag_budget(self.platform, self.max_tags, len(self.always_include))
 
         # ── Prompts ───────────────────────────────────────────────────────────
-        self.prompt_detect_language: str = _require_cfg(cfg, "prompt_detect_language")
-        self.prompt_generate: str = _require_cfg(cfg, "prompt_generate")
-        self.prompt_detect_and_generate: str = _require_cfg(cfg, "prompt_detect_and_generate")
+        self.prompt_detect_language: str = str(shared.require(SECTION, "prompt_detect_language"))
+        self.prompt_generate: str = str(shared.require(SECTION, "prompt_generate"))
+        self.prompt_detect_and_generate: str = str(
+            shared.require(SECTION, "prompt_detect_and_generate")
+        )
 
         # ── Temperature support ───────────────────────────────────────────────
         # Set to false for reasoning models (o1, o3, o4-mini) that reject temperature.
@@ -196,37 +185,58 @@ class Settings:
             )
 
         # ── Default directory ───────────────────────────────────────────────────
-        raw_dir: str | None = cfg.get("directory")
-        self.directory: Path | None = Path(raw_dir) if raw_dir else None
+        # Where `mpt enrich` looks when no path argument is given.
+        self.directory: Path | None = shared.path_value(SECTION, "videos_dir")
 
         # ── Logging ───────────────────────────────────────────────────────────
-        self.log_dir: Path = _ROOT / "logs"
+        log_dir = shared.path_value(SECTION, "log_dir", "./logs")
+        assert log_dir is not None  # a default was supplied
+        self.log_dir: Path = log_dir
         self.log_file: Path = self.log_dir / "enricher.log"
-        self.max_log_size: int = 5 * 1024 * 1024  # 5 MB
+        self.max_log_size: int = int(cfg.get("log_max_mb", 5)) * 1024 * 1024
 
         # ── Telegram ───────────────────────────────────────────────────────
         self.telegram_token: str = os.getenv("TELEGRAM_TOKEN", "").strip()
         self.telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-        self.telegram_prefix: str = cfg.get("telegram_prefix", "hashtag-enricher")
+        self.telegram_prefix: str = shared.telegram_prefix(SECTION)
 
 
 # ── Lazy singleton ────────────────────────────────────────────────────────────
+#
+# The enricher stage imports `settings` at module scope, so instantiation has to
+# stay lazy: `mpt --help` and every unrelated subcommand must keep working in a
+# directory that has no config.yaml. Nothing is read until an attribute is
+# actually touched.
 
 _settings: Settings | None = None
+_config_path: Path | None = None
+
+
+def configure(config_path: Path | None) -> None:
+    """
+    Point the singleton at a specific config.yaml. Called by the CLI before any
+    enricher code runs; resets an already-created instance so `mpt run` can
+    switch config between invocations in the same process.
+    """
+    global _settings, _config_path
+    _config_path = config_path
+    _settings = None
 
 
 def _get_settings() -> Settings:
     global _settings
     if _settings is None:
-        _settings = Settings()
+        _settings = Settings(_config_path)
     return _settings
 
 
 class _LazySettings:
     """Proxy that instantiates Settings on first attribute access."""
 
-    def __getattr__(self, name: str):  # type: ignore[override]
+    def __getattr__(self, name: str) -> object:
         return getattr(_get_settings(), name)
 
 
-settings: Settings = _LazySettings()  # type: ignore[assignment]
+# cast, not `# type: ignore`: the proxy is deliberately duck-typed, and callers
+# should still get real Settings completion and type checking.
+settings: Settings = cast(Settings, _LazySettings())

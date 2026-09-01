@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from hashtag_enricher.enricher.writer import build_hashtags_block, write_hashtags
+from mpt_autopilot.enricher.writer import build_hashtags_block, write_hashtags
 
 
 def test_write_hashtags_creates_flat_tags(tmp_path: Path):

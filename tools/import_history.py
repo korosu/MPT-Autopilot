@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from pathlib import Path
 
 # ── Path mappings ─────────────────────────────────────────────────────────────
 # Each mapping is {historical path: final path}. A path absent from the mapping

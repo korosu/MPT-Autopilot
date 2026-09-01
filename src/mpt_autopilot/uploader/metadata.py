@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from yt_uploader.engine.settings import Defaults
+from mpt_autopilot.uploader.settings import Defaults
 
 _logger = logging.getLogger(__name__)
 

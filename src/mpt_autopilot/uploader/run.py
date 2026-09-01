@@ -1,19 +1,20 @@
 """
-upload - uploads a folder of .mp4 files to YouTube for one account.
+uploader/run.py — uploads a folder of .mp4 files to YouTube for one account
+(`mpt upload`).
 
 Usage:
-    uv run upload --account en
-    uv run upload --account en --dry-run
-    uv run upload --account en --limit 5
-    uv run upload --all-accounts
-    uv run upload --all-accounts --dry-run
+    mpt upload --account en
+    mpt upload --account en --dry-run
+    mpt upload --account en --limit 5
+    mpt upload --all-accounts
+    mpt upload --all-accounts --dry-run
 
 Setup:
     cp .env.example .env
     cp config.example.yaml config.yaml
     cp accounts.example.yaml accounts.yaml
     # edit accounts.yaml with real paths, then get an OAuth token once via
-    # youtubeuploader itself (see README)
+    # youtubeuploader itself (see docs/uploader.md)
 
 Each video is uploaded together with an optional sidecar <name>.json (same
 schema youtubeuploader itself expects for -metaJSON). No sidecar -> title is
@@ -35,8 +36,9 @@ import sys
 import time
 from pathlib import Path
 
-from yt_uploader.engine import notify
-from yt_uploader.engine.ledger import (
+from mpt_autopilot import notify
+from mpt_autopilot.config import ConfigError
+from mpt_autopilot.uploader.ledger import (
     is_done,
     mark_moved,
     mark_started,
@@ -44,15 +46,15 @@ from yt_uploader.engine.ledger import (
     open_ledger,
     sha256_file,
 )
-from yt_uploader.engine.metadata import load_meta, sidecar_path, to_meta_json
-from yt_uploader.engine.settings import (
+from mpt_autopilot.uploader.metadata import load_meta, sidecar_path, to_meta_json
+from mpt_autopilot.uploader.settings import (
     Account,
     Settings,
     get_account,
     load_settings,
     validate_account_ready,
 )
-from yt_uploader.engine.uploader import UploadFailed, UploadLimitExceeded, upload_video
+from mpt_autopilot.uploader.uploader import UploadFailed, UploadLimitExceeded, upload_video
 
 EXIT_OK = 0
 EXIT_FAILURES = 1
@@ -120,6 +122,12 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
         last_index = len(videos) - 1
 
         for index, video in enumerate(videos):
+            if not video.exists():
+                # The crash-recovery loop above moves anything marked 'uploaded'
+                # that is still sitting at the source, which invalidates the
+                # snapshot find_videos() took before it ran. Without this guard
+                # sha256_file() below would raise FileNotFoundError.
+                continue
             content_hash = sha256_file(video)
             if is_done(conn, account.name, content_hash):
                 print(f"[{account.name}] skip: {video.name} (already uploaded)")
@@ -229,11 +237,14 @@ def run_all(settings: Settings, *, dry_run: bool, limit: int | None) -> int:
     return EXIT_OK
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="upload",
-        description="Upload a folder of .mp4 files to YouTube.",
-    )
+def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    """
+    Register the uploader stage's flags on `parser`.
+
+    Kept separate from build_parser() so `mpt`'s subparser and a standalone
+    parser share one definition — the CLI owns `--config` at the root level, so
+    it is deliberately not registered here.
+    """
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--account", help="account name, as defined in accounts.yaml")
     group.add_argument(
@@ -248,32 +259,55 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--limit", type=int, default=None, help="only process the first N videos")
     parser.add_argument(
-        "--config", type=Path, default=Path("config.yaml"), help="path to config.yaml"
-    )
-    parser.add_argument(
         "--accounts-file",
         type=Path,
-        default=Path("accounts.yaml"),
-        help="path to accounts.yaml",
+        default=None,
+        help="path to accounts.yaml (default: next to config.yaml)",
     )
     return parser
 
 
-def main() -> None:
-    args = build_parser().parse_args()
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="mpt upload",
+        description="Upload a folder of .mp4 files to YouTube.",
+    )
+    parser.add_argument(
+        "--config", type=Path, default=Path("config.yaml"), help="path to config.yaml"
+    )
+    return add_arguments(parser)
+
+
+def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
+    """
+    Run the uploader stage from already-parsed arguments.
+
+    Returns an exit code instead of calling sys.exit so `mpt run` can aggregate
+    stages in one process. The 0/1/2 contract is unchanged:
+    EXIT_OK / EXIT_FAILURES / EXIT_QUOTA_STOP.
+    """
+    if config_path is None:
+        config_path = getattr(args, "config", None)
 
     try:
-        settings = load_settings(config_path=args.config, accounts_path=args.accounts_file)
-    except (FileNotFoundError, ValueError) as exc:
+        settings = load_settings(config_path=config_path, accounts_path=args.accounts_file)
+    except (FileNotFoundError, ValueError, ConfigError) as exc:
         print(f"error: {exc}", file=sys.stderr)
-        sys.exit(EXIT_FAILURES)
+        return EXIT_FAILURES
 
     if args.all_accounts:
-        exit_code = run_all(settings, dry_run=args.dry_run, limit=args.limit)
-    else:
+        return run_all(settings, dry_run=args.dry_run, limit=args.limit)
+
+    try:
         account = get_account(settings, args.account)
-        exit_code = run(settings, account, dry_run=args.dry_run, limit=args.limit)
-    sys.exit(exit_code)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_FAILURES
+    return run(settings, account, dry_run=args.dry_run, limit=args.limit)
+
+
+def main() -> None:
+    sys.exit(execute(build_parser().parse_args()))
 
 
 if __name__ == "__main__":

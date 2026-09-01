@@ -1,8 +1,9 @@
 """
-engine/settings.py
+batch/settings.py
 
-Loads .env (Telegram credentials, optional) and config.yaml (everything else,
-including voice presets) into a single Settings object used across the package.
+Reads the `batch:` section of the shared config.yaml (plus the shared `langs:`
+and `paths:` blocks) and the Telegram credentials from .env into a single
+Settings object used across the batch stage.
 """
 
 from __future__ import annotations
@@ -11,12 +12,10 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
-from dotenv import load_dotenv
+from mpt_autopilot import config as shared_config
+from mpt_autopilot.batch import voices
 
-from mpt_batch.engine import voices
-
-_ROOT = Path.cwd()
+SECTION = "batch"
 
 
 @dataclass
@@ -30,7 +29,7 @@ class Settings:
     output_dir: Path
     seen_file: Path
 
-    # Per-language overrides — from config.yaml (optional)
+    # Per-language overrides — from the shared `langs:` block (optional)
     # {code: {"file_suffix": "_es", ...}} — empty dict when absent
     langs: dict[str, dict]
 
@@ -43,7 +42,7 @@ class Settings:
 
     # Voice presets — every bundled Edge TTS voice plus config.yaml's `voices:`
     # section on top (config.yaml wins on name collisions), already flattened
-    # into {alias: {tts_server, voice_name, ...}}. See engine/voices.py.
+    # into {alias: {tts_server, voice_name, ...}}. See batch/voices.py.
     voice_pool: dict[str, dict]
 
     # Logging — from config.yaml
@@ -69,76 +68,52 @@ class Settings:
     telegram_prefix: str
 
 
-def _require_cfg(cfg: dict, key: str) -> object:
-    if key not in cfg:
-        raise KeyError(
-            f"config.yaml is missing required key '{key}'. "
-            f"Check your config.yaml against the defaults in config.example.yaml."
-        )
-    return cfg[key]
-
-
 def load(config_path: Path | None = None, env_path: Path | None = None) -> Settings:
-    load_dotenv(env_path or (_ROOT / ".env"))
-
-    cfg_path = config_path or (_ROOT / "config.yaml")
-    if not cfg_path.exists():
-        raise FileNotFoundError(
-            f"config.yaml not found: {cfg_path}\n"
-            f"Copy config.example.yaml to config.yaml and adjust as needed."
-        )
-
-    with open(cfg_path, encoding="utf-8") as f:
-        cfg = yaml.safe_load(f) or {}
-
-    # Resolve relative paths against config.yaml's location, not cwd, so the
-    # tool behaves the same regardless of where the command is run from.
-    cfg_dir = cfg_path.resolve().parent
+    cfg = shared_config.load(config_path, env_path)
+    sec = cfg.section(SECTION)
 
     def _resolve(value: str) -> Path:
-        return (cfg_dir / value).expanduser().resolve()
+        return cfg.resolve(value)
 
-    # Parse langs section (optional — empty dict when absent)
-    langs_raw = cfg.get("langs") or {}
-    langs: dict[str, dict] = {}
-    for code, entry in langs_raw.items() if isinstance(langs_raw, dict) else []:
-        entry = entry or {}
-        langs[code] = {
-            "file_suffix": str(entry.get("file_suffix", f"_{code}")),
-        }
+    # `langs:` is shared with the pilot stage; the batch stage only needs the
+    # file suffix out of each entry.
+    langs: dict[str, dict] = {
+        code: {"file_suffix": str(entry["file_suffix"])} for code, entry in cfg.langs().items()
+    }
 
-    # Parse jobs_dir (optional)
-    cfg_jobs_dir = cfg.get("jobs_dir")
-    jobs_dir = _resolve(cfg_jobs_dir) if cfg_jobs_dir else None
+    jobs_dir = cfg.path_value(SECTION, "jobs_dir")
 
-    # Parse direct jobs path (optional) — overrides langs/jobs_dir defaults
-    cfg_jobs = cfg.get("jobs")
-    jobs = _resolve(cfg_jobs) if cfg_jobs else None
+    # Direct jobs path (optional) — overrides langs/jobs_dir defaults
+    cfg_jobs = sec.get("jobs")
+    jobs = _resolve(str(cfg_jobs)) if cfg_jobs else None
+
+    exports_default = cfg.path_value(SECTION, "exports_dir", "./exports")
+    assert exports_default is not None  # a default was supplied
 
     s = Settings(
-        api_url=str(_require_cfg(cfg, "api_url")).rstrip("/"),
-        mpt_storage=_resolve(str(_require_cfg(cfg, "mpt_storage"))),
-        mpt_songs_dir=_resolve(str(_require_cfg(cfg, "mpt_songs_dir"))),
-        output_dir=_resolve(cfg.get("output_dir", "./exports")),
-        seen_file=_resolve(cfg.get("seen_file", "./seen.txt")),
+        api_url=str(cfg.require(SECTION, "api_url")).rstrip("/"),
+        mpt_storage=_resolve(str(cfg.require(SECTION, "mpt_storage"))),
+        mpt_songs_dir=_resolve(str(cfg.require(SECTION, "mpt_songs_dir"))),
+        output_dir=_resolve(str(sec["output_dir"])) if sec.get("output_dir") else exports_default,
+        seen_file=_resolve(str(sec.get("seen_file", "./seen.txt"))),
         langs=langs,
         jobs_dir=jobs_dir,
         jobs=jobs,
-        voice_pool=voices.build_full_pool(cfg.get("voices", {})),
-        log_file=_resolve(cfg.get("log_file", "./logs/batch.log")),
-        log_max_bytes=int(cfg.get("log_max_mb", 10)) * 1024 * 1024,
-        max_wait_seconds=int(cfg.get("max_wait_seconds", 2400)),
-        stuck_threshold_seconds=int(cfg.get("stuck_threshold_seconds", 3600)),
-        max_retries=int(cfg.get("max_retries", 3)),
-        retry_delay_seconds=int(cfg.get("retry_delay_seconds", 180)),
-        max_consecutive_failures=int(cfg.get("max_consecutive_failures", 3)),
+        voice_pool=voices.build_full_pool(sec.get("voices", {})),
+        log_file=_resolve(str(sec.get("log_file", "./logs/batch.log"))),
+        log_max_bytes=int(sec.get("log_max_mb", 10)) * 1024 * 1024,
+        max_wait_seconds=int(sec.get("max_wait_seconds", 2400)),
+        stuck_threshold_seconds=int(sec.get("stuck_threshold_seconds", 3600)),
+        max_retries=int(sec.get("max_retries", 3)),
+        retry_delay_seconds=int(sec.get("retry_delay_seconds", 180)),
+        max_consecutive_failures=int(sec.get("max_consecutive_failures", 3)),
         cache_cleanup_enabled=(lambda v: v is True or v == 1)(
-            cfg.get("cache_cleanup_enabled", True)
+            sec.get("cache_cleanup_enabled", True)
         ),
-        cache_cleanup_interval=int(cfg.get("cache_cleanup_interval", 6)),
+        cache_cleanup_interval=int(sec.get("cache_cleanup_interval", 6)),
         telegram_token=os.getenv("TELEGRAM_TOKEN", "").strip(),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
-        telegram_prefix=cfg.get("telegram_prefix", "mpt-batch"),
+        telegram_prefix=cfg.telegram_prefix(SECTION),
     )
     validate(s)
     return s
@@ -148,8 +123,11 @@ def validate(s: Settings) -> None:
     """Warn about likely configuration mistakes (does not raise)."""
     if not s.mpt_storage.exists():
         print(
-            f"[mpt-batch] WARNING: mpt_storage '{s.mpt_storage}' does not exist — "
+            f"[{s.telegram_prefix}] WARNING: mpt_storage '{s.mpt_storage}' does not exist — "
             "API file paths and fallback lookups will fail"
         )
     if not s.api_url.startswith("http"):
-        print(f"[mpt-batch] WARNING: api_url '{s.api_url}' doesn't start with http — may not work")
+        print(
+            f"[{s.telegram_prefix}] WARNING: api_url '{s.api_url}' doesn't start with http — "
+            "may not work"
+        )

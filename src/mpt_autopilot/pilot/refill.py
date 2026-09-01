@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-refill.py — shorts-pilot entry point.
+refill.py — pilot stage entry point (`mpt refill`).
 
 Refills the queue by:
 - (default) calling LLM to generate new video ideas when pending jobs drop below threshold,
@@ -35,14 +35,15 @@ import sys
 import time
 from pathlib import Path
 
-from shorts_pilot.generator import jobs, seen
-from shorts_pilot.generator.llm import call_llm, parse_json_array
-from shorts_pilot.generator.notify import alert as notify_alert
-from shorts_pilot.generator.prompt import VIDEO_SUBJECT_MAX_CHARS, build_themes
-from shorts_pilot.generator.prompt import build as build_prompt
-from shorts_pilot.generator.seen import load_ordered as seen_load_ordered
-from shorts_pilot.generator.settings import LangSettings
-from shorts_pilot.generator.settings import load as load_settings
+from mpt_autopilot import seen
+from mpt_autopilot.notify import alert as notify_alert
+from mpt_autopilot.pilot import jobs
+from mpt_autopilot.pilot.llm import call_llm, parse_json_array
+from mpt_autopilot.pilot.prompt import VIDEO_SUBJECT_MAX_CHARS, build_themes
+from mpt_autopilot.pilot.prompt import build as build_prompt
+from mpt_autopilot.pilot.settings import LangSettings
+from mpt_autopilot.pilot.settings import load as load_settings
+from mpt_autopilot.seen import load_ordered as seen_load_ordered
 
 # ponytail: calibration for natural gemini TTS speed (~143 words/min).
 # voice_rate does NOT affect duration for gemini voices (see MPT voice.py:1813).
@@ -408,16 +409,16 @@ def _run_topics(
     lang_cfg.job_defaults via the shared _deduplicate pipeline.
     """
     suffix = lang_cfg.file_suffix
-    seen_set = seen.load(seen_dir, suffix)
+    seen_path = seen.resolve(seen_dir, suffix)
+    seen_set = seen.load(seen_path)
     cfg = jobs.load(jobs_dir, suffix, lang)
     already_known = seen_set | jobs.existing_names_from(cfg)
     foreign_suffixes = {
         c.file_suffix for code, c in settings.langs.items() if code != lang and c.file_suffix
     }
 
-    seen_file = "seen.txt" if not suffix else f"seen_{suffix.lstrip('_')}.txt"
     print(
-        f"[{lang}] topics mode: {len(topics)} topic(s) | jobs dir: {jobs_dir} | seen: {seen_file} (in {seen_dir})"  # noqa: E501
+        f"[{lang}] topics mode: {len(topics)} topic(s) | jobs dir: {jobs_dir} | seen: {seen_path.name} (in {seen_dir})"  # noqa: E501
     )
     print(f"[{lang}] known titles: {len(already_known)}")
 
@@ -445,9 +446,7 @@ def _run_topics(
         jobs_file = jobs._new_path(jobs_dir, suffix).name
         print(f"[{lang}] appended {len(clean_jobs)} jobs to {jobs_file}")
     else:
-        notify_alert(
-            f"[shorts-pilot] [{lang}] topics mode: 0 jobs added (all duplicates?)", settings
-        )
+        notify_alert(f"[{lang}] topics mode: 0 jobs added (all duplicates?)", settings)
 
     return len(clean_jobs)
 
@@ -470,8 +469,9 @@ def run(
     threshold_override: int | None,
     topics: list[str] | None = None,
     themes: list[str] | None = None,
+    config_path: Path | None = None,
 ) -> int:
-    settings = load_settings(require_llm=topics is None)
+    settings = load_settings(config_path, require_llm=topics is None)
 
     # Priority: explicit CLI flag > paths.* from config.yaml > current directory.
     jobs_dir = (jobs_dir or settings.jobs_dir or Path(".")).resolve()
@@ -509,8 +509,9 @@ def run(
     if active_themes:
         print(f"[{lang}] theme mode: {active_themes}")
 
-    seen_set = seen.load(seen_dir, suffix)
-    seen_list = seen_load_ordered(seen_dir, suffix)
+    seen_path = seen.resolve(seen_dir, suffix)
+    seen_set = seen.load(seen_path)
+    seen_list = seen_load_ordered(seen_path)
 
     threshold = threshold_override if threshold_override is not None else settings.refill_threshold
     generate_count = count_override if count_override is not None else settings.generate_count
@@ -522,7 +523,7 @@ def run(
     cfg = jobs.load(jobs_dir, suffix, lang)
     pending = jobs.count_pending_from(cfg, seen_set)
 
-    seen_file = "seen.txt" if not suffix else f"seen_{suffix.lstrip('_')}.txt"
+    seen_file = seen_path.name
     print(f"[{lang}] jobs dir: {jobs_dir}")
     print(
         f"[{lang}] pending jobs: {pending} | threshold: {threshold} | seen file: {seen_file} (in {seen_dir})"  # noqa: E501
@@ -606,7 +607,7 @@ def run(
                 json_parse_attempts += 1
                 if json_parse_attempts >= 2:
                     notify_alert(
-                        f"[shorts-pilot] [{lang}] FAILED: LLM invalid JSON after 2 retries",
+                        f"[{lang}] FAILED: LLM invalid JSON after 2 retries",
                         settings,
                     )
                     raise
@@ -620,7 +621,7 @@ def run(
 
         if len(raw_jobs) < this_count:
             notify_alert(
-                f"[shorts-pilot] [{lang}] WARNING: LLM gave {len(raw_jobs)}/{this_count} jobs "
+                f"[{lang}] WARNING: LLM gave {len(raw_jobs)}/{this_count} jobs "
                 f"(queue may stay low)",
                 settings,
             )
@@ -669,7 +670,7 @@ def run(
     # Note: seen.txt is updated by batch_generate.py after each video is rendered,
     # not here — refill only writes to the jobs yaml.
     notify_alert(
-        f"[shorts-pilot] [{lang}] done: {total_added} new jobs (pending {pending + total_added})",
+        f"[{lang}] done: {total_added} new jobs (pending {pending + total_added})",
         settings,
     )
     return total_added
@@ -678,29 +679,14 @@ def run(
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        prog="refill",
-        description="Auto-refill your MoneyPrinterTurbo jobs queue with LLM-generated video ideas.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-    refill --lang en
-    refill --lang en --jobs-dir /your/path/to/jobs
-    refill --lang en --jobs-dir /your/path/to/jobs --force
-    refill --lang en --jobs-dir /your/path/to/jobs --count 50
-    refill --lang en --jobs-dir /your/path/to/jobs --threshold 5
+def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    """
+    Register the pilot refill flags on `parser`.
 
-    # Import specific topics (no LLM):
-    refill --lang en --topic "The tongue is the strongest muscle in your body"
-    refill --lang en --topic "Antarctica is the driest desert" --topic "Octopuses have three hearts"
-    refill --lang en --topics /path/to/topics.txt
-
-    # Theme mode (LLM generates short titles about configured themes):
-    refill --lang en --force --count 20      # uses all themes from language config theme_list
-    refill --lang en --theme job --force --count 5  # only themes matching "job"
-""",
-    )
+    Kept separate from build_parser() so `mpt`'s subparser and a standalone
+    parser share one definition — the CLI owns `--config` at the root level, so
+    it is deliberately not registered here.
+    """
     parser.add_argument(
         "--lang",
         required=True,
@@ -731,14 +717,14 @@ Examples:
         type=int,
         default=None,
         metavar="N",
-        help="Override generation.count from config.yaml.",
+        help="Override pilot.generation.count from config.yaml.",
     )
     parser.add_argument(
         "--threshold",
         type=int,
         default=None,
         metavar="N",
-        help="Override generation.threshold from config.yaml.",
+        help="Override pilot.generation.threshold from config.yaml.",
     )
     parser.add_argument(
         "--topic",
@@ -769,22 +755,68 @@ Examples:
         "Without --theme but with a non-empty theme_list in the language's "
         "config block, all configured themes are used.",
     )
+    return parser
 
-    args = parser.parse_args()
+
+EPILOG = """
+Examples:
+    mpt refill --lang en
+    mpt refill --lang en --jobs-dir /your/path/to/jobs
+    mpt refill --lang en --jobs-dir /your/path/to/jobs --force
+    mpt refill --lang en --jobs-dir /your/path/to/jobs --count 50
+    mpt refill --lang en --jobs-dir /your/path/to/jobs --threshold 5
+
+    # Import specific topics (no LLM):
+    mpt refill --lang en --topic "The tongue is the strongest muscle in your body"
+    mpt refill --lang en --topic "Antarctica is the driest desert" --topic "Octopuses have three hearts"
+    mpt refill --lang en --topics /path/to/topics.txt
+
+    # Theme mode (LLM generates short titles about configured themes):
+    mpt refill --lang en --force --count 20      # all themes from the language's theme_list
+    mpt refill --lang en --theme job --force --count 5  # only themes matching "job"
+"""  # noqa: E501
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="mpt refill",
+        description="Auto-refill your MoneyPrinterTurbo jobs queue with LLM-generated video ideas.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Config file path (default: config.yaml)",
+    )
+    return add_arguments(parser)
+
+
+def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
+    """
+    Run the pilot refill stage from already-parsed arguments.
+
+    Returns an exit code instead of calling sys.exit so `mpt run` can aggregate
+    stages in one process.
+    """
+    if config_path is None:
+        config_path = getattr(args, "config", None)
 
     if args.count is not None and args.count <= 0:
         print("[ERROR] --count must be a positive integer")
-        sys.exit(1)
+        return 1
     if args.threshold is not None and args.threshold < 0:
         print("[ERROR] --threshold must be a non-negative integer")
-        sys.exit(1)
+        return 1
 
     # Topics mode: build list from --topic (repeatable) + --topics (file).
     topic_file_lines: list[str] = []
     if args.topics_file is not None:
         if not args.topics_file.is_file():
             print(f"[ERROR] --topics file not found: {args.topics_file}")
-            sys.exit(1)
+            return 1
         topic_file_lines = [
             ln.strip()
             for ln in args.topics_file.read_text(encoding="utf-8").splitlines()
@@ -795,10 +827,10 @@ Examples:
     topics = (topic_file_lines + inline_topics) if topics_requested else None
     if topics_requested and not topics:
         print("[ERROR] topics requested but none found (empty file and/or blank --topic values)")
-        sys.exit(1)
+        return 1
     if topics and args.theme:
         print("[ERROR] --topic/--topics (verbatim, no LLM) and --theme (LLM) can't be combined")
-        sys.exit(1)
+        return 1
     if topics and (args.count is not None or args.threshold is not None or args.force):
         print("[note] --count / --threshold / --force ignored in topics mode")
 
@@ -818,11 +850,25 @@ Examples:
             threshold_override=args.threshold,
             topics=topics,
             themes=theme_list,
+            config_path=config_path,
         )
     except Exception as e:
-        settings = load_settings(require_llm=False)
-        notify_alert(f"[shorts-pilot] [{args.lang}] FAILED: {e}", settings)
+        try:
+            settings = load_settings(config_path, require_llm=False)
+            notify_alert(f"[{args.lang}] FAILED: {e}", settings)
+        except Exception:
+            # A broken/missing config must not mask the original failure.
+            pass
         print(f"[ERROR] {e}")
-        sys.exit(1)
+        return 1
 
     print(f"\n[done] added {added} new jobs.")
+    return 0
+
+
+def main() -> None:
+    sys.exit(execute(build_parser().parse_args()))
+
+
+if __name__ == "__main__":
+    main()

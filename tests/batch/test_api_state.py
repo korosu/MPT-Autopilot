@@ -16,7 +16,7 @@ def test_wait_for_task_accepts_state_4_processing():
     because it checked `state not in (0, 1)`. MPT sets state=4 immediately
     on task creation.
     """
-    from mpt_batch.engine.api import wait_for_task
+    from mpt_autopilot.batch.api import wait_for_task
 
     # We need minimal settings for the test
     settings = MagicMock(
@@ -40,7 +40,7 @@ def test_wait_for_task_accepts_state_4_processing():
         MagicMock(json=lambda: {"data": {"progress": 100, "state": 1, "task_id": "test-123"}}),
     ]
 
-    with patch("mpt_batch.engine.api.requests.get") as mock_get:
+    with patch("mpt_autopilot.batch.api.requests.get") as mock_get:
         mock_get.side_effect = mock_responses
         result = wait_for_task("test-task", settings, log=mock_log)
 
@@ -50,7 +50,7 @@ def test_wait_for_task_accepts_state_4_processing():
 
 def test_wait_for_task_raises_on_state_minus_1():
     """State -1 (FAILED) should raise RuntimeError."""
-    from mpt_batch.engine.api import wait_for_task
+    from mpt_autopilot.batch.api import wait_for_task
 
     settings = MagicMock(
         api_url="http://localhost:8080",
@@ -60,7 +60,7 @@ def test_wait_for_task_raises_on_state_minus_1():
 
     mock_response = MagicMock(json=lambda: {"data": {"progress": 30, "state": -1}})
 
-    with patch("mpt_batch.engine.api.requests.get") as mock_get:
+    with patch("mpt_autopilot.batch.api.requests.get") as mock_get:
         mock_get.return_value = mock_response
         with pytest.raises(RuntimeError, match="task failed.*state=-1"):
             wait_for_task("test-task", settings)

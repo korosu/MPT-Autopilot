@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-init_seen.py — register existing .mp4 files into seen.txt.
+pilot/init_seen.py — register existing .mp4 files into seen.txt (`mpt init-seen`).
 
 Scans directories for .mp4 files and adds their names to the seen file
-so refill won't generate duplicate ideas for videos that already exist.
+so `mpt refill` won't generate duplicate ideas for videos that already exist.
 
 Safe to run multiple times — already-known names are never duplicated.
 
@@ -17,9 +17,9 @@ With --lang:
     Use this for multi-language setups where each lang has its own seen file.
 
 Usage:
-    init-seen --dir /your/path/to/videos
-    init-seen --dir /videos --dir /videos/old
-    init-seen --lang es --dir /your/path/to/videos
+    mpt init-seen --dir /your/path/to/videos
+    mpt init-seen --dir /videos --dir /videos/old
+    mpt init-seen --lang es --dir /your/path/to/videos
 """
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from shorts_pilot.generator import seen
-from shorts_pilot.generator.settings import load as load_settings
+from mpt_autopilot import seen
+from mpt_autopilot.pilot.settings import load as load_settings
 
 
 def collect_mp4_names(*dirs: Path) -> set[str]:
@@ -67,7 +67,8 @@ def init_all(scan_dirs: list[Path], seen_dir: Path) -> int:
     """
     print("→ seen.txt (no lang filter — registering all files)")
     found = collect_mp4_names(*scan_dirs)
-    existing = seen.load(seen_dir, "")
+    seen_path = seen.resolve(seen_dir, "")
+    existing = seen.load(seen_path)
     new_entries = found - existing
 
     print(f"  found on disk      : {len(found)}")
@@ -75,7 +76,7 @@ def init_all(scan_dirs: list[Path], seen_dir: Path) -> int:
     print(f"  new to add         : {len(new_entries)}")
 
     if new_entries:
-        seen.add_many(seen_dir, "", sorted(new_entries))
+        seen.add_many(seen_path, sorted(new_entries))
         print(f"  [OK] added {len(new_entries)} entries to seen.txt")
     else:
         print("  [OK] nothing new to add")
@@ -91,13 +92,13 @@ def init_lang(
     seen_dir: Path,
 ) -> int:
     """--lang mode: filter by suffix and write to the matching seen file."""
-    seen_filename = "seen.txt" if not file_suffix else f"seen_{file_suffix.lstrip('_')}.txt"
-    print(f"[{lang}] → {seen_filename}")
+    seen_path = seen.resolve(seen_dir, file_suffix)
+    print(f"[{lang}] → {seen_path.name}")
 
     found = collect_mp4_names(*scan_dirs)
     matched = _filter_by_suffix(found, file_suffix, all_suffixes)
     skipped = len(found) - len(matched)
-    existing = seen.load(seen_dir, file_suffix)
+    existing = seen.load(seen_path)
     new_entries = matched - existing
 
     print(f"  found on disk      : {len(found)}")
@@ -108,36 +109,22 @@ def init_lang(
     print(f"  new to add         : {len(new_entries)}")
 
     if new_entries:
-        seen.add_many(seen_dir, file_suffix, sorted(new_entries))
-        print(f"  [OK] added {len(new_entries)} entries to {seen_filename}")
+        seen.add_many(seen_path, sorted(new_entries))
+        print(f"  [OK] added {len(new_entries)} entries to {seen_path.name}")
     else:
         print("  [OK] nothing new to add")
 
     return len(new_entries)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        prog="init-seen",
-        description=(
-            "Scan directories for existing .mp4 files and register their names "
-            "so refill won't generate duplicates. "
-            "Safe to run multiple times."
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-    # Most users: register all videos into seen.txt (no lang filter)
-    init-seen --dir /your/path/to/videos
+def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    """
+    Register the init-seen flags on `parser`.
 
-    # Multiple directories
-    init-seen --dir /your/path/to/videos --dir /your/path/to/videos/old
-
-    # Multi-language: filter by lang and write to separate seen files
-    init-seen --lang en --dir /your/path/to/videos
-    init-seen --lang es --dir /your/path/to/videos
-""",
-    )
+    Kept separate from build_parser() so `mpt`'s subparser and a standalone
+    parser share one definition — the CLI owns `--config` at the root level, so
+    it is deliberately not registered here.
+    """
     parser.add_argument(
         "--lang",
         default=None,
@@ -157,7 +144,7 @@ Examples:
         help=(
             "Directory to scan for .mp4 files. "
             "Can be passed multiple times. "
-            "Combined with scan_dirs from config.yaml."
+            "Combined with pilot.scan_dirs from config.yaml."
         ),
     )
     parser.add_argument(
@@ -170,14 +157,59 @@ Examples:
             "Default: paths.seen_dir from config.yaml, else current directory."
         ),
     )
+    return parser
 
-    args = parser.parse_args()
+
+EPILOG = """
+Examples:
+    # Most users: register all videos into seen.txt (no lang filter)
+    mpt init-seen --dir /your/path/to/videos
+
+    # Multiple directories
+    mpt init-seen --dir /your/path/to/videos --dir /your/path/to/videos/old
+
+    # Multi-language: filter by lang and write to separate seen files
+    mpt init-seen --lang en --dir /your/path/to/videos
+    mpt init-seen --lang es --dir /your/path/to/videos
+"""
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="mpt init-seen",
+        description=(
+            "Scan directories for existing .mp4 files and register their names "
+            "so `mpt refill` won't generate duplicates. "
+            "Safe to run multiple times."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Config file path (default: config.yaml)",
+    )
+    return add_arguments(parser)
+
+
+def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
+    """
+    Run init-seen from already-parsed arguments.
+
+    Returns an exit code instead of calling sys.exit so `mpt run` can aggregate
+    stages in one process.
+    """
+    if config_path is None:
+        config_path = getattr(args, "config", None)
 
     try:
-        settings = load_settings(require_llm=False)  # init-seen doesn't use LLM
+        settings = load_settings(config_path, require_llm=False)  # init-seen doesn't use LLM
     except Exception as e:
         print(f"[ERROR] {e}")
-        sys.exit(1)
+        return 1
 
     seen_dir = (args.seen_dir or settings.seen_dir or Path(".")).resolve()
     config_dirs = [Path(d) for d in (settings.scan_dirs or [])]
@@ -186,8 +218,8 @@ Examples:
 
     if not all_dirs:
         print("[ERROR] No directories to scan.")
-        print("  Pass --dir /path/to/videos or add paths to scan_dirs in config.yaml.")
-        sys.exit(1)
+        print("  Pass --dir /path/to/videos or add paths to pilot.scan_dirs in config.yaml.")
+        return 1
 
     # Consistent with refill.py: any unexpected failure during the actual
     # scan/write (e.g. a permissions error on one of the directories)
@@ -203,9 +235,14 @@ Examples:
             added = init_lang(args.lang, lang_cfg.file_suffix, all_suffixes, all_dirs, seen_dir)
     except Exception as e:
         print(f"[ERROR] {e}")
-        sys.exit(1)
+        return 1
 
     print(f"\n[done] added {added} new entries.")
+    return 0
+
+
+def main() -> None:
+    sys.exit(execute(build_parser().parse_args()))
 
 
 if __name__ == "__main__":

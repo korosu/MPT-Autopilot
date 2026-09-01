@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-batch.py — mpt-batch entry point.
+batch/run.py — batch stage entry point (`mpt batch`).
 
 Reads a jobs YAML file and generates all pending videos through the
 MoneyPrinterTurbo API. Finished videos are tracked in seen.txt and
 skipped automatically, so re-running after a crash or Ctrl-C is safe.
 
 Usage:
-  batch
-  batch --jobs jobs_en.yaml
-  batch --config /path/to/config.yaml --jobs jobs_en.yaml
-  batch --dry-run
-  batch --status
-  batch --list-bgm
+  mpt batch
+  mpt batch --jobs jobs_en.yaml
+  mpt --config /path/to/config.yaml batch --jobs jobs_en.yaml
+  mpt batch --dry-run
+  mpt batch --status
+  mpt batch --list-bgm
 """
 
 from __future__ import annotations
@@ -28,10 +28,13 @@ from pathlib import Path
 
 import yaml
 
-from mpt_batch.engine import bgm, notify, seen, state, voices
-from mpt_batch.engine.api import health_check, submit_job, wait_for_task
-from mpt_batch.engine.settings import Settings
-from mpt_batch.engine.settings import load as load_settings
+from mpt_autopilot import config as shared_config
+from mpt_autopilot import notify, seen
+from mpt_autopilot.batch import bgm, state, voices
+from mpt_autopilot.batch.api import health_check, submit_job, wait_for_task
+from mpt_autopilot.batch.settings import Settings
+from mpt_autopilot.batch.settings import load as load_settings
+from mpt_autopilot.config import ConfigError
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -278,7 +281,7 @@ def run(
     to_run_count = len(jobs) - disabled_count - already_done_count
 
     log(
-        f"=== mpt-batch: {len(jobs)} jobs | {len(already_seen)} already seen ===",
+        f"=== batch: {len(jobs)} jobs | {len(already_seen)} already seen ===",
         settings,
         to_file=not dry_run,
     )
@@ -481,32 +484,14 @@ def _print_summary(
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="batch",
-        description="Batch video generator for MoneyPrinterTurbo.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-    batch
-    batch --jobs jobs_en.yaml
-    batch --config /path/to/config.yaml --jobs jobs_en.yaml
-    batch --dry-run
-    batch --status
-    batch --list-voices es
-    batch --list-bgm
+def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    """
+    Register the batch stage's flags on `parser`.
 
-    # Multi-language: override seen file to match shorts-pilot's per-lang seen files
-    batch --jobs jobs_es.yaml --seen seen_es.txt
-""",
-    )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=Path("config.yaml"),
-        metavar="PATH",
-        help="Config file path (default: config.yaml)",
-    )
+    Kept separate from build_parser() so `mpt`'s subparser and a standalone
+    parser share one definition — the CLI owns `--config` at the root level, so
+    it is deliberately not registered here.
+    """
     parser.add_argument(
         "--jobs",
         type=Path,
@@ -560,8 +545,8 @@ Examples:
         default=None,
         metavar="PATH",
         help=(
-            "Override seen_file from config.yaml (e.g. --seen seen_es.txt for "
-            "multi-language setups using shorts-pilot)."
+            "Override batch.seen_file from config.yaml (e.g. --seen seen_es.txt for "
+            "multi-language setups driven by `mpt refill`)."
         ),
     )
     parser.add_argument(
@@ -576,6 +561,38 @@ Examples:
         ),
     )
     return parser
+
+
+EPILOG = """
+Examples:
+    mpt batch
+    mpt batch --jobs jobs_en.yaml
+    mpt --config /path/to/config.yaml batch --jobs jobs_en.yaml
+    mpt batch --dry-run
+    mpt batch --status
+    mpt batch --list-voices es
+    mpt batch --list-bgm
+
+    # Multi-language: override the seen file to match per-language seen files
+    mpt batch --jobs jobs_es.yaml --seen seen_es.txt
+"""
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="mpt batch",
+        description="Batch video generator for MoneyPrinterTurbo.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Config file path (default: config.yaml)",
+    )
+    return add_arguments(parser)
 
 
 def list_voices(settings: Settings, filter_str: str) -> None:
@@ -634,14 +651,24 @@ def upload_bgm_cmd(settings: Settings, source_dir: Path) -> None:
     print(f"\nCopied {copied} file(s) to {songs_dir}")
 
 
-def main() -> None:
-    args = build_parser().parse_args()
+def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
+    """
+    Run the batch stage from already-parsed arguments.
+
+    `config_path` comes from the root `mpt --config` flag; when it is None the
+    shared loader falls back to ./config.yaml. Returns an exit code instead of
+    calling sys.exit so `mpt run` can aggregate stages in one process.
+    """
+    if config_path is None:
+        config_path = getattr(args, "config", None)
 
     try:
-        settings = load_settings(args.config)
-    except (FileNotFoundError, KeyError) as e:
+        settings = load_settings(config_path)
+    except (FileNotFoundError, KeyError, ConfigError) as e:
         print(f"[ERROR] {e}")
-        sys.exit(1)
+        return 1
+
+    cfg_dir = shared_config.resolve_path(config_path).resolve().parent
 
     # Resolve language suffix from --lang
     lang_suffix = ""
@@ -651,26 +678,26 @@ def main() -> None:
                 f"[ERROR] Unknown language '{args.lang}'. "
                 f"Available in config.yaml langs: {list(settings.langs) or '(none)'}"
             )
-            sys.exit(1)
+            return 1
         lang_suffix = settings.langs[args.lang].get("file_suffix", f"_{args.lang}")
 
     # Resolve --jobs default: config's jobs > jobs_dir > cwd-relative (with --lang suffix)
-    if args.jobs is None:
+    jobs_path: Path | None = args.jobs
+    if jobs_path is None:
         # Priority: 1) settings.jobs (direct path), 2) jobs_dir/lang_suffix, 3) cwd/jobs.yaml
         if settings.jobs:
-            args.jobs = settings.jobs
+            jobs_path = settings.jobs
         else:
             base_dir = settings.jobs_dir or Path.cwd()
-            args.jobs = base_dir / f"jobs{lang_suffix}.yaml"
+            jobs_path = base_dir / f"jobs{lang_suffix}.yaml"
 
     # Resolve --seen default when --lang is set and --seen not explicitly passed
-    seen_override: Path | None = None
-    if args.seen is None and lang_suffix:
+    seen_arg: Path | None = args.seen
+    if seen_arg is None and lang_suffix:
         # Derive from configured seen_file: seen.txt → seen_es.txt
-        cfg_dir = args.config.resolve().parent
         seen_stem = settings.seen_file.stem
         seen_suffix = settings.seen_file.suffix
-        args.seen = cfg_dir / f"{seen_stem}{lang_suffix}{seen_suffix}"
+        seen_arg = cfg_dir / f"{seen_stem}{lang_suffix}{seen_suffix}"
 
     # Apply lang suffix to output_dir
     if lang_suffix:
@@ -679,9 +706,9 @@ def main() -> None:
         )
 
     # Resolve --seen path relative to config.yaml's location (same as seen_file)
-    if args.seen is not None:
-        cfg_dir = args.config.resolve().parent
-        seen_override = cfg_dir / args.seen if not args.seen.is_absolute() else args.seen
+    seen_override: Path | None = None
+    if seen_arg is not None:
+        seen_override = seen_arg if seen_arg.is_absolute() else cfg_dir / seen_arg
 
     if args.status:
         seen_path = seen_override or settings.seen_file
@@ -690,26 +717,31 @@ def main() -> None:
         print(f"Total entries: {len(entries)}\n")
         for name in entries:
             print(f"  {name}")
-        return
+        return 0
 
     if args.list_voices is not None:
         list_voices(settings, args.list_voices)
-        return
+        return 0
 
     if args.list_bgm is not None:
         list_bgm_cmd(settings, args.list_bgm)
-        return
+        return 0
 
     if args.upload_bgm is not None:
         upload_bgm_cmd(settings, Path(args.upload_bgm))
-        return
+        return 0
 
-    if not args.jobs.exists():
-        print(f"[ERROR] Jobs file not found: {args.jobs}")
-        print(f"        Copy jobs.example.yaml to {args.jobs} and add your video topics.")
-        sys.exit(1)
+    if not jobs_path.exists():
+        print(f"[ERROR] Jobs file not found: {jobs_path}")
+        print(f"        Copy jobs.example.yaml to {jobs_path} and add your video topics.")
+        return 1
 
-    run(args.jobs, settings, dry_run=args.dry_run, seen_override=seen_override)
+    run(jobs_path, settings, dry_run=args.dry_run, seen_override=seen_override)
+    return 0
+
+
+def main() -> None:
+    sys.exit(execute(build_parser().parse_args()))
 
 
 if __name__ == "__main__":

@@ -28,7 +28,7 @@ from typing import Any
 
 import yaml
 
-from shorts_pilot.generator.lock import file_lock
+from mpt_autopilot.lock import file_lock
 
 # Canonical key order for serialised job entries — matches hand-written style.
 _KEY_ORDER = [

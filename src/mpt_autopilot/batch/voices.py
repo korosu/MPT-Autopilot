@@ -1,5 +1,5 @@
 """
-engine/voices.py
+batch/voices.py
 
 Optional convenience layer on top of MoneyPrinterTurbo's voice fields.
 
@@ -37,12 +37,13 @@ On top of whatever you define in config.yaml, this module also auto-loads
 every free Edge TTS voice (314 of them, all languages) from the bundled
 data/edge_voices.json, so they're usable as aliases without any config.yaml
 edits — e.g. "es_es_elvira" for es-ES-ElviraNeural (Female). Run
-`uv run batch --list-voices es` to browse/search them. config.yaml aliases
+`mpt batch --list-voices es` to browse/search them. config.yaml aliases
 win if a name collides with a bundled one.
 
 This module only resolves the alias to the underlying field(s) — it has no
 opinion about which provider is "best" and does not validate that a paid
-provider is actually configured on your MoneyPrinterTurbo server (see README).
+provider is actually configured on your MoneyPrinterTurbo server (see
+docs/batch.md).
 """
 
 from __future__ import annotations
@@ -54,7 +55,8 @@ from pathlib import Path
 # Fields a voice preset is allowed to set on the API payload.
 _ALLOWED_FIELDS = {"tts_server", "voice_name", "voice_rate", "voice_volume"}
 
-_EDGE_VOICES_DATA_FILE = Path(__file__).parent.parent / "data" / "edge_voices.json"
+# The data file ships inside this subpackage (src/mpt_autopilot/batch/data/).
+_EDGE_VOICES_DATA_FILE = Path(__file__).parent / "data" / "edge_voices.json"
 _edge_voices_cache: list[dict] = []
 
 
@@ -155,7 +157,7 @@ def resolve(payload: dict, pool: dict[str, dict]) -> dict:
     for field, value in pool[alias].items():
         if field == "tts_server" and "tts_server" in payload and payload["tts_server"] != value:
             print(
-                f"[mpt-batch] WARNING: voice alias '{alias}' sets tts_server='{value}' "
+                f"[batch] WARNING: voice alias '{alias}' sets tts_server='{value}' "
                 f"but job explicitly sets tts_server='{payload['tts_server']}' — "
                 f"voice_name takes precedence for voice selection, tts_server is cosmetic"
             )

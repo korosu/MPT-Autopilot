@@ -1,5 +1,10 @@
 """
-settings.py — YAML config loading with Settings dataclass.
+uploader/settings.py — reads the `uploader:` section of the shared config.yaml
+plus the separate accounts.yaml into a Settings dataclass.
+
+accounts.yaml stays a separate file on purpose: it holds per-channel OAuth
+secret paths and is the one file a user is most likely to keep outside the
+repository.
 """
 
 from __future__ import annotations
@@ -10,7 +15,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from dotenv import load_dotenv
+
+from mpt_autopilot import config as shared_config
+
+SECTION = "uploader"
+
+DEFAULT_ACCOUNTS_NAME = "accounts.yaml"
+LEDGER_NAME = "yt-uploader-ledger.sqlite"
 
 
 @dataclass
@@ -45,31 +56,37 @@ class Settings:
     accounts: dict[str, Account]
 
 
-def _load_yaml(path: Path) -> dict:
+def _load_accounts_yaml(path: Path) -> dict:
     if not path.exists():
         raise FileNotFoundError(
-            f"{path} not found. Copy {path.name}.example to {path.name} and edit it."
+            f"{path} not found. Copy {DEFAULT_ACCOUNTS_NAME.replace('.yaml', '')}"
+            f".example.yaml to {path.name} and edit it."
         )
     with path.open(encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 
 def load_settings(
-    config_path: Path = Path("config.yaml"),
-    accounts_path: Path = Path("accounts.yaml"),
-    env_path: Path = Path(".env"),
+    config_path: Path | None = None,
+    accounts_path: Path | None = None,
+    env_path: Path | None = None,
 ) -> Settings:
-    if env_path.exists():
-        load_dotenv(env_path)
+    cfg = shared_config.load(config_path, env_path)
+    sec = cfg.section(SECTION)
 
-    cfg = _load_yaml(config_path)
-    acc_raw = _load_yaml(accounts_path)
+    # accounts.yaml defaults to sitting next to config.yaml.
+    if accounts_path is None:
+        configured = sec.get("accounts_file")
+        accounts_path = (
+            cfg.resolve(str(configured)) if configured else cfg.dir / DEFAULT_ACCOUNTS_NAME
+        )
+    acc_raw = _load_accounts_yaml(accounts_path)
 
-    defaults_raw = cfg.get("defaults", {}) or {}
+    defaults_raw = sec.get("defaults", {}) or {}
     hashtag_placement = defaults_raw.get("hashtag_placement", "both")
     if hashtag_placement not in {"tags", "description", "both"}:
         raise ValueError(
-            f"config.yaml: hashtag_placement must be 'tags', 'description', or 'both', "
+            f"config.yaml: uploader.hashtag_placement must be 'tags', 'description', or 'both', "
             f"got '{hashtag_placement}'"
         )
     defaults = Defaults(
@@ -80,7 +97,7 @@ def load_settings(
         contains_synthetic_media=bool(defaults_raw.get("contains_synthetic_media", True)),
     )
 
-    sleep_between_uploads = int(cfg.get("sleep_between_uploads", 5))
+    sleep_between_uploads = int(sec.get("sleep_between_uploads", 5))
     if sleep_between_uploads < 0:
         raise ValueError(f"sleep_between_uploads must be >= 0, got {sleep_between_uploads}")
 
@@ -101,20 +118,22 @@ def load_settings(
             )
         except (KeyError, TypeError) as exc:
             raise ValueError(
-                f"account '{name}' in accounts.yaml has invalid config: {exc}"
+                f"account '{name}' in {accounts_path.name} has invalid config: {exc}"
             ) from exc
 
-    telegram_prefix = cfg.get("telegram_prefix", "yt-shorts-uploader")
+    meta_dir = cfg.path_value(SECTION, "meta_dir", "./meta")
+    assert meta_dir is not None  # a default was supplied
+
     return Settings(
-        uploader_binary=Path(cfg.get("uploader_binary", "youtubeuploader")).expanduser(),
-        meta_dir=Path(cfg.get("meta_dir", "./meta")).expanduser(),
+        uploader_binary=Path(sec.get("uploader_binary", "youtubeuploader")).expanduser(),
+        meta_dir=meta_dir,
         sleep_between_uploads=sleep_between_uploads,
-        uploaded_dir_name=cfg.get("uploaded_dir_name", "old_videos"),
+        uploaded_dir_name=sec.get("uploaded_dir_name", "old_videos"),
         defaults=defaults,
         telegram_token=os.environ.get("TELEGRAM_TOKEN", ""),
         telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", ""),
-        telegram_prefix=telegram_prefix,
-        ledger_path=config_path.parent / "yt-uploader-ledger.sqlite",
+        telegram_prefix=cfg.telegram_prefix(SECTION),
+        ledger_path=cfg.dir / LEDGER_NAME,
         accounts=accounts,
     )
 

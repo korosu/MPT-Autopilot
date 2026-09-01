@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mpt_batch.engine.settings import Settings
+from mpt_autopilot.batch.settings import Settings
 
 
 def test_lang_suffix_applied_to_seen_and_output() -> None:

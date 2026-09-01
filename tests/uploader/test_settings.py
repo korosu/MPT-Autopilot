@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from yt_uploader.engine.settings import (
+from mpt_autopilot.uploader.settings import (
     Account,
     Defaults,
     Settings,
@@ -11,6 +11,7 @@ from yt_uploader.engine.settings import (
     load_settings,
     validate_account_ready,
 )
+from tests.uploader.helpers import make_uploader_binary
 
 
 def _settings(uploader_binary: Path) -> Settings:
@@ -22,16 +23,14 @@ def _settings(uploader_binary: Path) -> Settings:
         defaults=Defaults(),
         telegram_token="",
         telegram_chat_id="",
-        telegram_prefix="yt-shorts-uploader",
+        telegram_prefix="mpt-autopilot",
         ledger_path=Path("./ledger.sqlite"),
         accounts={},
     )
 
 
 def test_find_uploader_binary_absolute_path_exists(tmp_path):
-    binary = tmp_path / "youtubeuploader"
-    binary.write_text("#!/bin/bash\n")
-    binary.chmod(0o755)
+    binary = make_uploader_binary(tmp_path)
     assert find_uploader_binary(binary) == binary
 
 
@@ -60,9 +59,7 @@ def test_find_uploader_binary_not_on_path(monkeypatch, tmp_path):
 
 
 def test_validate_account_ready_ok(tmp_path):
-    binary = tmp_path / "youtubeuploader"
-    binary.write_text("#!/bin/bash\n")
-    binary.chmod(0o755)
+    binary = make_uploader_binary(tmp_path)
     secrets = tmp_path / "secrets.json"
     secrets.write_text("{}")
 
@@ -90,11 +87,7 @@ def test_validate_account_ready_missing_binary(tmp_path):
 
 
 def test_validate_account_ready_missing_client_secrets(tmp_path):
-    binary = tmp_path / "youtubeuploader"
-    binary.write_text("#!/bin/bash\n")
-    binary.chmod(0o755)
-
-    settings = _settings(binary)
+    settings = _settings(make_uploader_binary(tmp_path))
     account = Account(
         name="en",
         videos_dir=tmp_path,
@@ -141,7 +134,30 @@ def test_contains_synthetic_media_reads_false_from_config(tmp_path):
     accounts_path = tmp_path / "accounts.yaml"
     config_path = tmp_path / "config.yaml"
     accounts_path.write_text("accounts: {}\n")
-    config_path.write_text("defaults:\n  contains_synthetic_media: false\n")
+    # Now sectioned: `defaults:` lives under `uploader:`, not at the top level.
+    config_path.write_text("uploader:\n  defaults:\n    contains_synthetic_media: false\n")
 
     settings = load_settings(config_path=config_path, accounts_path=accounts_path)
     assert settings.defaults.contains_synthetic_media is False
+
+
+def test_load_settings_reads_accounts_from_uploader_section(tmp_path):
+    """accounts_file under `uploader:` is resolved relative to config.yaml."""
+    (tmp_path / "channels.yaml").write_text(
+        "accounts:\n  en:\n    videos_dir: ./v\n    client_secrets: ./s.json\n    token_file: ./t\n"
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("uploader:\n  accounts_file: ./channels.yaml\n")
+
+    settings = load_settings(config_path=config_path)
+    assert set(settings.accounts) == {"en"}
+
+
+def test_ledger_lives_next_to_config(tmp_path):
+    """The ledger must not follow cwd, or a cron run would start a fresh one."""
+    (tmp_path / "accounts.yaml").write_text("accounts: {}\n")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("")
+
+    settings = load_settings(config_path=config_path)
+    assert settings.ledger_path.parent == tmp_path

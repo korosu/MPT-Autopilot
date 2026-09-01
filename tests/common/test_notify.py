@@ -4,8 +4,8 @@ from pathlib import Path
 
 import requests
 
-from mpt_batch.engine.notify import alert
-from mpt_batch.engine.settings import Settings
+from mpt_autopilot.batch.settings import Settings
+from mpt_autopilot.notify import alert
 
 
 def _settings(
@@ -46,7 +46,7 @@ def test_sends_to_telegram_api(monkeypatch):
         calls.append({"url": url, "json": kw.get("json")})
         return type("R", (), {"ok": True})()
 
-    monkeypatch.setattr("mpt_batch.engine.notify.requests.post", fake_post)
+    monkeypatch.setattr("mpt_autopilot.notify.requests.post", fake_post)
     alert("hello", _settings())
     assert len(calls) == 1
     assert "api.telegram.org/bot123:ABC/sendMessage" in calls[0]["url"]
@@ -59,7 +59,7 @@ def test_missing_token_skips(monkeypatch):
     def fake_post(url, **kw):
         calls.append(1)
 
-    monkeypatch.setattr("mpt_batch.engine.notify.requests.post", fake_post)
+    monkeypatch.setattr("mpt_autopilot.notify.requests.post", fake_post)
     alert("hi", _settings(token=""))
     assert calls == []
 
@@ -70,7 +70,7 @@ def test_missing_chat_id_skips(monkeypatch):
     def fake_post(url, **kw):
         calls.append(1)
 
-    monkeypatch.setattr("mpt_batch.engine.notify.requests.post", fake_post)
+    monkeypatch.setattr("mpt_autopilot.notify.requests.post", fake_post)
     alert("hi", _settings(chat_id=""))
     assert calls == []
 
@@ -79,7 +79,7 @@ def test_exception_is_swallowed(monkeypatch):
     def boom(*a, **kw):
         raise requests.ConnectionError("down")
 
-    monkeypatch.setattr("mpt_batch.engine.notify.requests.post", boom)
+    monkeypatch.setattr("mpt_autopilot.notify.requests.post", boom)
     alert("hi", _settings())  # Does not raise
 
 

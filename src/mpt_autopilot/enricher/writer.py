@@ -62,7 +62,7 @@ def write_hashtags(
 
     existing["hashtags"] = hashtags_block
 
-    # Also write a flat "tags" key for downstream consumers (e.g. yt-shorts-uploader).
+    # Also write a flat "tags" key for downstream consumers (the upload stage).
     tags_list = hashtags_block["tags_list"]
     existing["tags"] = list(tags_list)
 

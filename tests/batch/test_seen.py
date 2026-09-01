@@ -5,7 +5,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from mpt_batch.engine import seen
+from mpt_autopilot import seen
 
 
 def test_load_empty_file():

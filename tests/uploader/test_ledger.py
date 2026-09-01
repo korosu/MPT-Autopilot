@@ -4,14 +4,15 @@ from pathlib import Path
 
 import pytest
 
-from yt_uploader.engine.ledger import (
+from mpt_autopilot.uploader.ledger import (
     mark_started,
     mark_uploaded,
     open_ledger,
     sha256_file,
 )
-from yt_uploader.engine.settings import Account, Defaults, Settings
-from yt_uploader.upload import EXIT_OK, run
+from mpt_autopilot.uploader.run import EXIT_OK, run
+from mpt_autopilot.uploader.settings import Account, Defaults, Settings
+from tests.uploader.helpers import make_uploader_binary
 
 
 def _account(tmp_path: Path, n_videos: int) -> Account:
@@ -31,11 +32,8 @@ def _account(tmp_path: Path, n_videos: int) -> Account:
 
 
 def _settings(tmp_path: Path) -> Settings:
-    binary = tmp_path / "youtubeuploader"
-    binary.write_text("#!/bin/bash\n")
-    binary.chmod(0o755)
     return Settings(
-        uploader_binary=binary,
+        uploader_binary=make_uploader_binary(tmp_path),
         meta_dir=tmp_path / "meta",
         sleep_between_uploads=0,
         uploaded_dir_name="old_videos",
@@ -62,15 +60,19 @@ def test_ledger_skips_video_marked_uploaded(tmp_path, monkeypatch):
     conn.close()
 
     called = []
-    monkeypatch.setattr("yt_uploader.upload.upload_video", lambda *a, **k: called.append(1) or "ok")
+    monkeypatch.setattr(
+        "mpt_autopilot.uploader.run.upload_video", lambda *a, **k: called.append(1) or "ok"
+    )
 
     exit_code = run(settings, account, dry_run=False, limit=None)
 
     assert exit_code == EXIT_OK
     assert len(called) == 2  # video_0 and video_2 were uploaded; video_1 was skipped
-    # skipped video was not moved, still at source
-    assert (account.videos_dir / "video_1.mp4").exists()
-    assert len(list((account.videos_dir / "old_videos").glob("*.mp4"))) == 2
+    # video_1 is not re-uploaded, but it IS moved: status 'uploaded' with the file
+    # still at source means a previous run crashed between upload and move, so the
+    # crash-recovery pass at the top of run() finishes the move.
+    assert not (account.videos_dir / "video_1.mp4").exists()
+    assert len(list((account.videos_dir / "old_videos").glob("*.mp4"))) == 3
 
 
 def test_ledger_retries_started_row(tmp_path, monkeypatch):
@@ -85,7 +87,9 @@ def test_ledger_retries_started_row(tmp_path, monkeypatch):
     conn.close()
 
     called = []
-    monkeypatch.setattr("yt_uploader.upload.upload_video", lambda *a, **k: called.append(1) or "ok")
+    monkeypatch.setattr(
+        "mpt_autopilot.uploader.run.upload_video", lambda *a, **k: called.append(1) or "ok"
+    )
 
     exit_code = run(settings, account, dry_run=False, limit=None)
 
@@ -96,7 +100,7 @@ def test_ledger_retries_started_row(tmp_path, monkeypatch):
 def test_ledger_marks_moved_after_success(tmp_path, monkeypatch):
     account = _account(tmp_path, 2)
     settings = _settings(tmp_path)
-    monkeypatch.setattr("yt_uploader.upload.upload_video", lambda *a, **k: "ok")
+    monkeypatch.setattr("mpt_autopilot.uploader.run.upload_video", lambda *a, **k: "ok")
 
     exit_code = run(settings, account, dry_run=False, limit=None)
 

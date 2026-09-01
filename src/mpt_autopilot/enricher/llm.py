@@ -26,13 +26,13 @@ import time
 
 import httpx
 
-from hashtag_enricher.enricher.config import settings
-from hashtag_enricher.enricher.logger import Logger
-from hashtag_enricher.enricher.postprocess import (
+from mpt_autopilot.enricher.postprocess import (
     check_platform_limit,
     platform_hard_limit,
     validate_and_filter,
 )
+from mpt_autopilot.enricher.settings import settings
+from mpt_autopilot.logger import Logger
 
 # ── Shared persistent client ──────────────────────────────────────────────────
 # Reused across all calls to avoid per-call TLS handshakes.

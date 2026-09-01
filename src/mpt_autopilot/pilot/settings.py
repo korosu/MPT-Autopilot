@@ -1,8 +1,9 @@
 """
-generator/settings.py
+pilot/settings.py
 
-Loads .env (API credentials) and config.yaml (generation settings)
-into a single Settings object used across the package.
+Reads the `pilot:` section of the shared config.yaml (plus the shared `langs:`
+and `paths:` blocks) and the LLM/Telegram credentials from .env into a single
+Settings object used across the pilot stage.
 """
 
 from __future__ import annotations
@@ -12,10 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
-from dotenv import load_dotenv
+from mpt_autopilot import config as shared_config
 
-_ROOT = Path.cwd()
+SECTION = "pilot"
 
 
 @dataclass
@@ -82,28 +82,14 @@ def load(
     *,
     require_llm: bool = True,
 ) -> Settings:
-    load_dotenv(env_path or (_ROOT / ".env"))
+    cfg = shared_config.load(config_path, env_path)
+    sec = cfg.section(SECTION)
 
-    cfg_path = config_path or (_ROOT / "config.yaml")
-    if not cfg_path.exists():
-        raise FileNotFoundError(f"config.yaml not found: {cfg_path}")
-
-    with open(cfg_path, encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
-
-    raw = raw if isinstance(raw, dict) else {}
-
-    gen = raw.get("generation") or {}
-    langs_raw = raw.get("langs") or {}
-    scan_dirs = raw.get("scan_dirs") or []
-    paths_raw = raw.get("paths") or {}
-
-    cfg_jobs_dir = paths_raw.get("jobs_dir")
-    cfg_seen_dir = paths_raw.get("seen_dir")
+    gen = sec.get("generation") or {}
+    scan_dirs = sec.get("scan_dirs") or []
 
     langs: dict[str, LangSettings] = {}
-    for code, lr in langs_raw.items():
-        lr = lr or {}  # a lang block with nothing under it (`en:` alone) → {}
+    for code, lr in cfg.langs().items():
         # Parse theme_list — list of strings, or a bare string (wraps to list).
         # Absent/malformed → empty list.
         tl_raw = lr.get("theme_list")
@@ -125,11 +111,8 @@ def load(
             theme_list=theme_list,
         )
 
-    # Resolve relative paths against the config.yaml location, not cwd,
-    # so it behaves the same regardless of where the command is run from.
-    cfg_dir = cfg_path.resolve().parent
-    jobs_dir = (cfg_dir / cfg_jobs_dir).resolve() if cfg_jobs_dir else None
-    seen_dir = (cfg_dir / cfg_seen_dir).resolve() if cfg_seen_dir else jobs_dir
+    jobs_dir = cfg.path_value(SECTION, "jobs_dir")
+    seen_dir = cfg.path_value(SECTION, "seen_dir") or jobs_dir
 
     def _env(key: str) -> str:
         if require_llm:
@@ -145,20 +128,19 @@ def load(
     reasoning_enabled = gen.get("reasoning_enabled")
     if reasoning_enabled is not None and not isinstance(reasoning_enabled, bool):
         raise ValueError(
-            f"generation.reasoning_enabled must be true, false, or omitted "
+            f"pilot.generation.reasoning_enabled must be true, false, or omitted "
             f"entirely — got {reasoning_enabled!r}"
         )
     reasoning_effort = str(gen.get("reasoning_effort", "medium"))
     reasoning_max_tokens = int(gen.get("reasoning_max_tokens", 8192))
 
-    telegram_prefix = raw.get("telegram_prefix", "shorts-pilot")
     return Settings(
         api_key=_env("LLM_API_KEY"),
         base_url=_env("LLM_BASE_URL").rstrip("/"),
         model=_env("LLM_MODEL"),
         telegram_token=os.environ.get("TELEGRAM_TOKEN", ""),
         telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", ""),
-        telegram_prefix=telegram_prefix,
+        telegram_prefix=cfg.telegram_prefix(SECTION),
         generate_count=int(gen.get("count", 21)),
         refill_threshold=int(gen.get("threshold", 10)),
         scan_dirs=scan_dirs,

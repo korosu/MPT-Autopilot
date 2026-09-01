@@ -16,7 +16,7 @@ from collections.abc import Callable
 
 import requests
 
-from mpt_batch.engine.settings import Settings
+from mpt_autopilot.batch.settings import Settings
 
 
 def health_check(settings: Settings) -> bool:
