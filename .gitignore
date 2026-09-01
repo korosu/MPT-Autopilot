@@ -13,7 +13,11 @@ seen.txt
 seen_*.txt
 seen.db
 *.in_progress.txt
-*.lock
+
+# stale lock markers left behind by an interrupted run (see src/mpt_autopilot/lock.py).
+# Narrower than *.lock on purpose: uv.lock must stay tracked.
+*.txt.lock
+*.yaml.lock
 
 # generated output
 exports/
