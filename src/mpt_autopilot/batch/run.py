@@ -694,10 +694,14 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
     # Resolve --seen default when --lang is set and --seen not explicitly passed
     seen_arg: Path | None = args.seen
     if seen_arg is None and lang_suffix:
-        # Derive from configured seen_file: seen.txt → seen_es.txt
-        seen_stem = settings.seen_file.stem
-        seen_suffix = settings.seen_file.suffix
-        seen_arg = cfg_dir / f"{seen_stem}{lang_suffix}{seen_suffix}"
+        # Derive from the configured seen_file: seen.txt → seen_es.txt, keeping
+        # its own directory. Deriving from cfg_dir instead would silently point
+        # at a different registry whenever seen_file lives in a subdirectory
+        # (e.g. batch.seen_file: ./jobs/seen.txt), and every video would be
+        # re-rendered.
+        seen_arg = settings.seen_file.with_name(
+            f"{settings.seen_file.stem}{lang_suffix}{settings.seen_file.suffix}"
+        )
 
     # Apply lang suffix to output_dir
     if lang_suffix:

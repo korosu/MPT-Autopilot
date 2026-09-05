@@ -1,5 +1,5 @@
 """
-generator/llm.py
+pilot/llm.py
 
 Single LLM client that works with any OpenAI-compatible provider
 AND Anthropic natively — detected automatically by LLM_BASE_URL.

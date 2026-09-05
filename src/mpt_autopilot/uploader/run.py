@@ -103,17 +103,32 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
 
     conn = open_ledger(settings.ledger_path)
     try:
-        for row in conn.execute(
-            "SELECT video_name FROM uploads WHERE account = ? AND status = 'uploaded'",
-            (account.name,),
-        ):
-            uploaded_name = row[0]
-            video_path = account.videos_dir / uploaded_name
-            if video_path.exists():
-                content_hash = sha256_file(video_path)
-                print(f"[{account.name}] recovering: {uploaded_name} (was uploaded, moving)")
-                move_to_uploaded(video_path, sidecar_path(video_path), uploaded_dir)
-                mark_moved(conn, account.name, content_hash)
+        # Finish the move for anything a previous run uploaded but was killed
+        # before it could file away. Skipped in a dry run: --dry-run must not
+        # touch the filesystem, and the next real run does the same recovery.
+        if dry_run:
+            pending_recovery = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT video_name FROM uploads WHERE account = ? AND status = 'uploaded'",
+                    (account.name,),
+                )
+                if (account.videos_dir / row[0]).exists()
+            ]
+            for name in pending_recovery:
+                print(f"[{account.name}] would recover: {name} (uploaded earlier, not yet moved)")
+        else:
+            for row in conn.execute(
+                "SELECT video_name FROM uploads WHERE account = ? AND status = 'uploaded'",
+                (account.name,),
+            ):
+                uploaded_name = row[0]
+                video_path = account.videos_dir / uploaded_name
+                if video_path.exists():
+                    content_hash = sha256_file(video_path)
+                    print(f"[{account.name}] recovering: {uploaded_name} (was uploaded, moving)")
+                    move_to_uploaded(video_path, sidecar_path(video_path), uploaded_dir)
+                    mark_moved(conn, account.name, content_hash)
 
         uploaded = 0
         failed = 0
@@ -141,6 +156,16 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
                 print(f"    tags:  {', '.join(meta.tags)}")
                 print(f"    privacy: {meta.privacy_status}  category: {meta.category_id}")
                 print(f"    AI use (containsSyntheticMedia): {meta.contains_synthetic_media}")
+                # Count dry-run candidates against the same caps a real run
+                # honours, so the preview matches what would actually happen.
+                uploaded += 1
+                if account.daily_upload_limit is not None and uploaded >= (
+                    account.daily_upload_limit
+                ):
+                    self_limited = True
+                    break
+                if limit is not None and uploaded >= limit:
+                    break
                 continue
 
             meta_dir.mkdir(parents=True, exist_ok=True)
@@ -267,13 +292,34 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     return parser
 
 
+EPILOG = """
+Examples:
+  mpt upload --account en
+  mpt upload --account en --dry-run
+  mpt upload --account en --limit 5
+  mpt upload --all-accounts
+  mpt upload --all-accounts --accounts-file /srv/mpt/accounts.yaml
+
+Exit codes: 0 = uploaded or nothing to do, 1 = failure,
+            2 = stopped on YouTube's daily quota.
+
+See docs/uploader.md for accounts.yaml, metadata sidecars, and the ledger.
+"""
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mpt upload",
         description="Upload a folder of .mp4 files to YouTube.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
     )
     parser.add_argument(
-        "--config", type=Path, default=Path("config.yaml"), help="path to config.yaml"
+        "--config",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="path to config.yaml (default: ./config.yaml)",
     )
     return add_arguments(parser)
 

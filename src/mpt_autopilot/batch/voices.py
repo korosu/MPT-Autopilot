@@ -150,8 +150,8 @@ def resolve(payload: dict, pool: dict[str, dict]) -> dict:
     if alias not in pool:
         raise KeyError(
             f"voice alias '{alias}' not found among the bundled Edge TTS voices "
-            "or config.yaml's voices: section. Run `batch --list-voices` to browse, "
-            "or `batch --list-voices <filter>` to search."
+            "or config.yaml's batch.voices: section. Run `mpt batch --list-voices` "
+            "to browse, or `mpt batch --list-voices <filter>` to search."
         )
 
     for field, value in pool[alias].items():

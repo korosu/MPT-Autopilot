@@ -1,4 +1,4 @@
-"""engine/bgm.py — Background music discovery for MoneyPrinterTurbo."""
+"""batch/bgm.py — Background music discovery for MoneyPrinterTurbo."""
 
 from __future__ import annotations
 

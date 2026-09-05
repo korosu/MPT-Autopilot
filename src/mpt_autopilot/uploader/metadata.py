@@ -146,7 +146,7 @@ def load_meta(video_path: Path, defaults: Defaults, account_name: str = "") -> V
 
     sidecar_tags = raw.get("tags")
     if sidecar_tags and isinstance(sidecar_tags, list) and len(sidecar_tags) > 0:
-        placement = getattr(defaults, "hashtag_placement", "both")
+        placement = defaults.hashtag_placement
         if placement == "tags":
             tags = _apply_tags_placement(list(defaults.tags), sidecar_tags)
         elif placement == "description":

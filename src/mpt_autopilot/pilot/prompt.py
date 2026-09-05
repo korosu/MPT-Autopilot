@@ -1,5 +1,5 @@
 """
-generator/prompt.py
+pilot/prompt.py
 
 Builds the system + user prompts sent to the LLM.
 Kept separate so the prompt can be tuned without touching any other logic.

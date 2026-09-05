@@ -151,7 +151,10 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         "--dir",
         metavar="PATH",
         type=Path,
-        help="Directory to scan for *.mp4 files (default: current directory)",
+        help=(
+            "Directory to scan for *.mp4 files "
+            "(default: enricher.videos_dir from config.yaml, else the current directory)"
+        ),
     )
     source.add_argument(
         "--file",

@@ -28,14 +28,26 @@ def test_all_stages_are_registered():
 
 def test_every_stage_exposes_the_hook_pair():
     for name, _help in cli.STAGES:
-        add_arguments, execute = cli._stage_hooks(name)
-        assert callable(add_arguments)
-        assert callable(execute)
+        hooks = cli._stage_hooks(name)
+        assert callable(hooks.add_arguments)
+        assert callable(hooks.execute)
+        assert hooks.epilog.strip(), f"{name} has no examples in its EPILOG"
 
 
 def test_unknown_stage_hook_raises():
     with pytest.raises(ValueError, match="unknown stage"):
         cli._stage_hooks("nope")
+
+
+@pytest.mark.parametrize("stage", ["refill", "init-seen", "batch", "enrich", "upload", "run"])
+def test_stage_help_shows_the_stage_examples(stage, tmp_path, monkeypatch, capsys):
+    """Each stage's EPILOG has to reach `mpt <stage> --help`, not just its standalone parser."""
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit):
+        cli.main([stage, "--help"])
+    out = capsys.readouterr().out
+    assert "Examples:" in out
+    assert f"mpt {stage}" in out
 
 
 def test_root_help_needs_no_config(tmp_path, monkeypatch, capsys):
@@ -73,13 +85,13 @@ def test_root_config_reaches_the_stage(monkeypatch, tmp_path):
     real_hooks = cli._stage_hooks
 
     def hooks(name):
-        add_arguments, _ = real_hooks(name)
+        real = real_hooks(name)
 
         def fake_execute(args, config_path):
             seen["config"] = config_path
             return 0
 
-        return add_arguments, fake_execute
+        return real._replace(execute=fake_execute)
 
     monkeypatch.setattr(cli, "_stage_hooks", hooks)
 
@@ -93,13 +105,13 @@ def test_stage_config_wins_over_root_config(monkeypatch, tmp_path):
     real_hooks = cli._stage_hooks
 
     def hooks(name):
-        add_arguments, _ = real_hooks(name)
+        real = real_hooks(name)
 
         def fake_execute(args, config_path):
             seen["config"] = config_path
             return 0
 
-        return add_arguments, fake_execute
+        return real._replace(execute=fake_execute)
 
     monkeypatch.setattr(cli, "_stage_hooks", hooks)
 
@@ -113,8 +125,7 @@ def test_stage_exit_code_is_propagated(monkeypatch):
     real_hooks = cli._stage_hooks
 
     def hooks(name):
-        add_arguments, _ = real_hooks(name)
-        return add_arguments, lambda args, config_path: 2
+        return real_hooks(name)._replace(execute=lambda args, config_path: 2)
 
     monkeypatch.setattr(cli, "_stage_hooks", hooks)
     assert cli.main(["batch"]) == 2

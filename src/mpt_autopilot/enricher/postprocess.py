@@ -25,12 +25,12 @@ def platform_hard_limit(platform: str) -> int:
     Return the hard tag-count limit for a given platform.
 
     Single source of truth for PLATFORM_HARD_LIMITS lookups so callers
-    (config.py, llm.py, enrich.py) never drift from each other when a
+    (settings.py, llm.py, run.py) never drift from each other when a
     platform is looked up dynamically (e.g. via --platform).
 
     Falls back to _DEFAULT_HARD_LIMIT for an unrecognised platform name —
     callers that need strict validation should check membership themselves
-    (see config.py's platform allow-list check).
+    (see settings.py's platform allow-list check).
     """
     return PLATFORM_HARD_LIMITS.get(platform, _DEFAULT_HARD_LIMIT)
 

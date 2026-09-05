@@ -134,9 +134,17 @@ def build_duration_instruction(words: tuple[int, int | None] | None) -> str:
 
 # ── Deduplication + cleanup ───────────────────────────────────────────────────
 
-# Known valid values for MPT fields (whitelist for LLM output validation)
-_VALID_CONCAT_MODES = {"random", "sequential", "reverse", "transition"}
-_VALID_BGM_TYPES = {"random", "builtin", "local", "none"}
+# Known valid values for MPT fields (whitelist for LLM output validation).
+#
+# Both lists mirror MoneyPrinterTurbo's own handling, not a superset of it:
+#   * VideoConcatMode is an enum with exactly two members. "reverse" and
+#     "transition" are separate parameters there, not concat modes.
+#   * get_bgm_file() honours "random" (pick from the songs dir) and treats any
+#     other truthy value as "use the bgm_file I was given" — which is what
+#     `mpt batch --list-bgm` suggests as bgm_type: "custom". "none" means no
+#     background music.
+_VALID_CONCAT_MODES = {"random", "sequential"}
+_VALID_BGM_TYPES = {"random", "custom", "none"}
 
 
 def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
@@ -667,8 +675,8 @@ def run(
         print(f"[{lang}] nothing new after dedup — try again or use --force")
         return 0
 
-    # Note: seen.txt is updated by batch_generate.py after each video is rendered,
-    # not here — refill only writes to the jobs yaml.
+    # Note: the seen registry is updated by the batch stage after each video is
+    # rendered, not here — refill only writes to the jobs yaml.
     notify_alert(
         f"[{lang}] done: {total_added} new jobs (pending {pending + total_added})",
         settings,

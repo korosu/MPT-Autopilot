@@ -1,5 +1,5 @@
 """
-engine/state.py — In-progress job tracking.
+batch/state.py — In-progress job tracking.
 
 Persists (output_file, task_id, attempt) right after submit_job succeeds,
 before polling begins. On restart after a crash or Ctrl-C, pending entries

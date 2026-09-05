@@ -4,6 +4,12 @@ from pathlib import Path
 
 import pytest
 
+from mpt_autopilot.uploader.ledger import (
+    mark_started,
+    mark_uploaded,
+    open_ledger,
+    sha256_file,
+)
 from mpt_autopilot.uploader.run import EXIT_FAILURES, EXIT_OK, EXIT_QUOTA_STOP, run
 from mpt_autopilot.uploader.settings import Account, Defaults, Settings
 from mpt_autopilot.uploader.uploader import UploadFailed, UploadLimitExceeded
@@ -161,6 +167,50 @@ def test_run_daily_upload_limit_stops_early(tmp_path, monkeypatch):
     # Only 2 should be uploaded due to daily_limit
     uploaded = list((account.videos_dir / "old_videos").glob("*.mp4"))
     assert len(uploaded) == 2
+
+
+def test_dry_run_honours_limit(tmp_path, capsys):
+    """A preview that ignored --limit would describe work the real run won't do."""
+    account = _account(tmp_path, n_videos=5)
+    settings = _settings(tmp_path)
+
+    assert run(settings, account, dry_run=True, limit=2) == EXIT_OK
+
+    assert capsys.readouterr().out.count("would upload:") == 2
+
+
+def test_dry_run_honours_daily_upload_limit(tmp_path, capsys):
+    account = _account(tmp_path, n_videos=5, daily_limit=3)
+    settings = _settings(tmp_path)
+
+    assert run(settings, account, dry_run=True, limit=None) == EXIT_OK
+
+    assert capsys.readouterr().out.count("would upload:") == 3
+
+
+def test_dry_run_moves_nothing_during_crash_recovery(tmp_path, monkeypatch, capsys):
+    """
+    A row stuck in 'uploaded' means a prior run died between the upload and the
+    move. A real run finishes that move; a dry run must only report it, because
+    --dry-run promises to leave the filesystem alone.
+    """
+    account = _account(tmp_path, n_videos=1)
+    settings = _settings(tmp_path)
+    monkeypatch.setattr("mpt_autopilot.uploader.run.upload_video", lambda *a, **k: "ok")
+
+    video = account.videos_dir / "video_0.mp4"
+    conn = open_ledger(settings.ledger_path)
+    content_hash = sha256_file(video)
+    mark_started(conn, account.name, content_hash, video.name)
+    mark_uploaded(conn, account.name, content_hash)
+    conn.close()
+
+    assert run(settings, account, dry_run=True, limit=None) == EXIT_OK
+
+    out = capsys.readouterr().out
+    assert "would recover: video_0.mp4" in out
+    assert video.exists()  # still at the source
+    assert not (account.videos_dir / "old_videos").exists()
 
 
 if __name__ == "__main__":

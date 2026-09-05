@@ -59,8 +59,7 @@ class Settings:
 def _load_accounts_yaml(path: Path) -> dict:
     if not path.exists():
         raise FileNotFoundError(
-            f"{path} not found. Copy {DEFAULT_ACCOUNTS_NAME.replace('.yaml', '')}"
-            f".example.yaml to {path.name} and edit it."
+            f"{path} not found. Copy accounts.example.yaml to {path.name} and edit it."
         )
     with path.open(encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
@@ -86,8 +85,8 @@ def load_settings(
     hashtag_placement = defaults_raw.get("hashtag_placement", "both")
     if hashtag_placement not in {"tags", "description", "both"}:
         raise ValueError(
-            f"config.yaml: uploader.hashtag_placement must be 'tags', 'description', or 'both', "
-            f"got '{hashtag_placement}'"
+            f"config.yaml: uploader.defaults.hashtag_placement must be 'tags', "
+            f"'description', or 'both', got '{hashtag_placement}'"
         )
     defaults = Defaults(
         privacy_status=defaults_raw.get("privacy_status", "private"),

@@ -1,5 +1,5 @@
 """
-generator/jobs.py
+pilot/jobs.py
 
 All YAML I/O for jobs.yaml / jobs_<suffix>.yaml files.
 

@@ -12,7 +12,7 @@ Public functions:
 
 `platform` is optional on generate_hashtags()/detect_and_generate(): it defaults
 to settings.platform (config.yaml), but callers pass it explicitly whenever
---platform overrides the config for a run (see enrich.py) — this is what makes
+--platform overrides the config for a run (see run.py) — this is what makes
 the {platform} prompt placeholder and the platform hard-limit actually track
 --platform instead of silently generating under the config.yaml platform.
 """
@@ -110,7 +110,7 @@ def _chat(prompt: str) -> str:
 
     # Opt-in only: chat_template_kwargs is a vLLM/SGLang/NVIDIA-NIM extension,
     # not part of the official OpenAI API, so it's added only when the user has
-    # explicitly configured reasoning_enabled — see config.py for the tri-state
+    # explicitly configured reasoning_enabled — see settings.py for the tri-state
     # (absent/false/true) rationale.
     if settings.reasoning_enabled is True:
         payload["max_tokens"] = settings.reasoning_max_tokens
@@ -379,7 +379,7 @@ def _finalize_tags(tags: list[str], platform: str | None = None) -> list[str]:
     # Reserve room for always_include, which is merged in on top of the LLM's
     # content tags below (step 3) — otherwise an LLM that ignores max_tags and
     # returns more content tags than instructed could push the merged total
-    # past the platform limit, even though config.py's validate_tag_budget()
+    # past the platform limit, even though settings.py's validate_tag_budget()
     # already guarantees max_tags + always_include fits it on the happy path.
     content_tag_limit = max(effective_hard_limit - len(settings.always_include), 0)
 

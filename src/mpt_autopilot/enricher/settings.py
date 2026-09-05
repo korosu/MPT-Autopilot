@@ -48,8 +48,8 @@ def validate_tag_budget(platform: str, max_tags: int, always_include_count: int)
 
     Args:
         platform:              Platform name (must be a PLATFORM_HARD_LIMITS key).
-        max_tags:               config.yaml's max_tags.
-        always_include_count:   len(config.yaml's always_include).
+        max_tags:               config.yaml's enricher.max_tags.
+        always_include_count:   len(config.yaml's enricher.always_include).
 
     Returns:
         The platform's hard limit, on success.
@@ -62,10 +62,10 @@ def validate_tag_budget(platform: str, max_tags: int, always_include_count: int)
     total = max_tags + always_include_count
     if total > hard_limit:
         raise ValueError(
-            f"max_tags ({max_tags}) + always_include ({always_include_count} tag(s)) "
-            f"= {total} exceeds the {platform} limit of {hard_limit}. "
-            f"Lower max_tags in config.yaml, trim always_include, or choose a "
-            f"different platform."
+            f"enricher.max_tags ({max_tags}) + enricher.always_include "
+            f"({always_include_count} tag(s)) = {total} exceeds the {platform} limit of "
+            f"{hard_limit}. Lower enricher.max_tags in config.yaml, trim "
+            f"enricher.always_include, or choose a different platform."
         )
     return hard_limit
 
@@ -86,7 +86,7 @@ class Settings:
         valid_platforms = set(PLATFORM_HARD_LIMITS.keys())
         if self.platform not in valid_platforms:
             raise ValueError(
-                f"config.yaml: platform must be one of {sorted(valid_platforms)}, "
+                f"config.yaml: enricher.platform must be one of {sorted(valid_platforms)}, "
                 f"got '{self.platform}'"
             )
 
@@ -98,24 +98,26 @@ class Settings:
         self.max_tags: int = int(cfg.get("max_tags", 5))
 
         if self.min_tags < 1:
-            raise ValueError(f"config.yaml: min_tags ({self.min_tags}) must be at least 1.")
+            raise ValueError(
+                f"config.yaml: enricher.min_tags ({self.min_tags}) must be at least 1."
+            )
         if self.min_tags >= self.max_tags:
             raise ValueError(
-                f"config.yaml: min_tags ({self.min_tags}) must be less than "
-                f"max_tags ({self.max_tags})."
+                f"config.yaml: enricher.min_tags ({self.min_tags}) must be less than "
+                f"enricher.max_tags ({self.max_tags})."
             )
         if self.max_tags > self.hard_limit:
             raise ValueError(
-                f"config.yaml: max_tags ({self.max_tags}) exceeds the "
+                f"config.yaml: enricher.max_tags ({self.max_tags}) exceeds the "
                 f"{self.platform} limit of {self.hard_limit}. "
-                f"Lower max_tags to {self.hard_limit} or less."
+                f"Lower enricher.max_tags to {self.hard_limit} or less."
             )
 
         # ── Tag quality filters ───────────────────────────────────────────────
         self.max_tag_length: int = int(cfg.get("max_tag_length", 20))
         if self.max_tag_length < 2:
             raise ValueError(
-                f"config.yaml: max_tag_length ({self.max_tag_length}) must be at least 2."
+                f"config.yaml: enricher.max_tag_length ({self.max_tag_length}) must be at least 2."
             )
 
         raw_banned: list[str] = cfg.get("banned_tags", [])
@@ -161,7 +163,7 @@ class Settings:
         self.reasoning_enabled: bool | None = cfg.get("reasoning_enabled")
         if self.reasoning_enabled is not None and not isinstance(self.reasoning_enabled, bool):
             raise ValueError(
-                f"config.yaml: reasoning_enabled must be true or false (or omitted), "
+                f"config.yaml: enricher.reasoning_enabled must be true or false (or omitted), "
                 f"got {self.reasoning_enabled!r}"
             )
 
@@ -169,7 +171,7 @@ class Settings:
         self.reasoning_effort: str = str(cfg.get("reasoning_effort", "medium")).lower()
         if self.reasoning_effort not in _valid_reasoning_efforts:
             raise ValueError(
-                f"config.yaml: reasoning_effort must be one of "
+                f"config.yaml: enricher.reasoning_effort must be one of "
                 f"{sorted(_valid_reasoning_efforts)}, got '{self.reasoning_effort}'"
             )
 
@@ -180,7 +182,7 @@ class Settings:
         self.reasoning_max_tokens: int = int(cfg.get("reasoning_max_tokens", 8192))
         if self.reasoning_max_tokens < 1:
             raise ValueError(
-                f"config.yaml: reasoning_max_tokens ({self.reasoning_max_tokens}) "
+                f"config.yaml: enricher.reasoning_max_tokens ({self.reasoning_max_tokens}) "
                 f"must be at least 1."
             )
 

@@ -31,6 +31,7 @@ Stage-to-stage wiring:
 from __future__ import annotations
 
 import argparse
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -106,6 +107,43 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         help="Passed to the upload stage: only process the first N videos per account.",
     )
     return parser
+
+
+EPILOG = """
+Examples:
+  mpt run                              # every language in config.yaml
+  mpt run --lang en                    # one language
+  mpt run --lang en --lang es          # two, in that order
+  mpt run --dry-run                    # show what would happen, touch nothing
+  mpt run --only batch --only enrich   # a slice of the pipeline
+  mpt run --skip upload                # produce everything, upload later
+  mpt run --continue-on-error          # don't stop a language on the first failure
+
+  # From cron, with a config elsewhere
+  mpt --config /srv/mpt/config.yaml run
+
+Exit codes: 0 = ok, 1 = a stage failed, 2 = an upload stopped on YouTube's
+            daily quota (failure wins over a quota stop).
+
+See docs/pipeline.md for stage wiring and failure handling.
+"""
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="mpt run",
+        description="Run the whole pipeline: refill → batch → enrich → upload, per language.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Path to config.yaml (default: ./config.yaml)",
+    )
+    return add_arguments(parser)
 
 
 def resolve_stages(only: list[str] | None, skip: list[str] | None) -> list[str]:
@@ -308,3 +346,11 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
         print(f"  {r.lang:<6} {r.stage:<10} {label}{note}")
 
     return _aggregate(results)
+
+
+def main() -> None:
+    sys.exit(execute(build_parser().parse_args()))
+
+
+if __name__ == "__main__":
+    main()
