@@ -46,6 +46,9 @@ you want.
   the sectioned config.
 - **Stale module references across docstrings** — `engine/`, `generator/`,
   `config.py` — updated to `batch/`, `pilot/`, `settings.py`.
+- **One HTTP client, not two.** `requests` has been removed; the Telegram
+  notifier, the batch API client, and the pilot LLM client all use `httpx`,
+  matching the enricher.
 
 ### Preserved history
 
@@ -53,10 +56,3 @@ All four repositories were imported with `git fast-export` → path rewrite →
 `git fast-import`. `git blame` and `git log --follow` reach back into each
 file's original commits. Per-tool release tags stay in the archived repos;
 this one starts at 1.0.0.
-
-### Known tech debt
-
-`httpx` and `requests` both ship — the enricher LLM client is httpx-based, the
-shared notify uses requests. Collapsing onto one client is a worthwhile
-follow-up, to be done as its own change with the enricher's retry tests as
-the guard.

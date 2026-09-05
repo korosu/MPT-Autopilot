@@ -14,7 +14,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
-import requests
+import httpx
 
 from mpt_autopilot.batch.settings import Settings
 
@@ -22,7 +22,7 @@ from mpt_autopilot.batch.settings import Settings
 def health_check(settings: Settings) -> bool:
     """Quick GET to verify the MPT API is reachable. Returns True if healthy."""
     try:
-        r = requests.get(f"{settings.api_url}/api/v1/tasks", timeout=10)
+        r = httpx.get(f"{settings.api_url}/api/v1/tasks", timeout=10)
         r.raise_for_status()
         return True
     except Exception:
@@ -31,7 +31,7 @@ def health_check(settings: Settings) -> bool:
 
 def submit_job(payload: dict, settings: Settings) -> str:
     """Submit a video generation job. Returns the task_id."""
-    r = requests.post(f"{settings.api_url}/api/v1/videos", json=payload, timeout=60)
+    r = httpx.post(f"{settings.api_url}/api/v1/videos", json=payload, timeout=60)
     r.raise_for_status()
     return r.json()["data"]["task_id"]
 
@@ -56,7 +56,7 @@ def wait_for_task(
             raise TimeoutError(f"task timed out after {settings.max_wait_seconds}s")
 
         try:
-            r = requests.get(f"{settings.api_url}/api/v1/tasks/{task_id}", timeout=30)
+            r = httpx.get(f"{settings.api_url}/api/v1/tasks/{task_id}", timeout=30)
             r.raise_for_status()
             data = r.json()["data"]
         except Exception as exc:

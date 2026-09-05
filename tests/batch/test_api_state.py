@@ -40,7 +40,7 @@ def test_wait_for_task_accepts_state_4_processing():
         MagicMock(json=lambda: {"data": {"progress": 100, "state": 1, "task_id": "test-123"}}),
     ]
 
-    with patch("mpt_autopilot.batch.api.requests.get") as mock_get:
+    with patch("mpt_autopilot.batch.api.httpx.get") as mock_get:
         mock_get.side_effect = mock_responses
         result = wait_for_task("test-task", settings, log=mock_log)
 
@@ -60,7 +60,7 @@ def test_wait_for_task_raises_on_state_minus_1():
 
     mock_response = MagicMock(json=lambda: {"data": {"progress": 30, "state": -1}})
 
-    with patch("mpt_autopilot.batch.api.requests.get") as mock_get:
+    with patch("mpt_autopilot.batch.api.httpx.get") as mock_get:
         mock_get.return_value = mock_response
         with pytest.raises(RuntimeError, match="task failed.*state=-1"):
             wait_for_task("test-task", settings)

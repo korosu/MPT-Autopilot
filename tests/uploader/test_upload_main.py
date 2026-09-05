@@ -139,7 +139,7 @@ def test_run_does_not_notify_in_dry_run(tmp_path, monkeypatch):
 
     notify_calls: list[str] = []
     monkeypatch.setattr(
-        "mpt_autopilot.notify.requests.post", lambda *a, **kw: notify_calls.append("called")
+        "mpt_autopilot.notify.httpx.post", lambda *a, **kw: notify_calls.append("called")
     )
 
     run(settings, list(accounts.values())[0], dry_run=True, limit=None)

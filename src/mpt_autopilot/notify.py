@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-import requests
+import httpx
 
 
 @runtime_checkable
@@ -36,12 +36,12 @@ def alert(msg: str, settings: TelegramSettings) -> None:
     text = f"[{settings.telegram_prefix}] {msg}" if settings.telegram_prefix else msg
     url = f"https://api.telegram.org/bot{settings.telegram_token}/sendMessage"
     try:
-        r = requests.post(
+        r = httpx.post(
             url,
             json={"chat_id": settings.telegram_chat_id, "text": text},
             timeout=10,
         )
-        if not r.ok:
+        if not r.is_success:
             print(
                 f"[{settings.telegram_prefix}] Telegram returned {r.status_code}: "
                 f"{r.text.strip()[:200]}"

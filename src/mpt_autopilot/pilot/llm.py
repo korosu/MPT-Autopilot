@@ -20,7 +20,7 @@ import re
 import time
 from typing import Any
 
-import requests
+import httpx
 
 from mpt_autopilot.pilot.settings import Settings
 
@@ -55,7 +55,7 @@ def call_llm(system: str, user: str, settings: Settings, count: int) -> str:
     `count` is the number of job objects being requested — used to size
     max_tokens so a larger --count doesn't get silently truncated.
     Returns the raw text response.
-    Raises requests.HTTPError on non-2xx responses.
+    Raises httpx.HTTPStatusError on non-2xx responses.
     """
     max_tokens = _token_budget(count)
     if settings.is_anthropic:
@@ -79,23 +79,25 @@ def _anthropic_base(base_url: str) -> str:
     return url
 
 
-def _post_with_retry(url: str, payload: dict, headers: dict) -> requests.Response:
+def _post_with_retry(url: str, payload: dict, headers: dict) -> httpx.Response:
     """
     POST with a small retry/backoff for transient failures: connection
     errors, timeouts, 429 (rate limit), and 5xx responses. Anything else
     (4xx client errors) is returned as-is for raise_for_status() to handle.
     """
     last_exc: Exception | None = None
-    resp: requests.Response | None = None
+    resp: httpx.Response | None = None
     for attempt in range(_MAX_RETRIES + 1):
         try:
-            resp = requests.post(url, json=payload, headers=headers, timeout=_REQUEST_TIMEOUT)
-        except (requests.ConnectionError, requests.Timeout) as e:
+            resp = httpx.post(url, json=payload, headers=headers, timeout=_REQUEST_TIMEOUT)
+        except (httpx.ConnectError, httpx.TimeoutException) as e:
             last_exc = e
             resp = None
         else:
             if resp.status_code == 429 or resp.status_code >= 500:
-                last_exc = requests.HTTPError(f"{resp.status_code} {resp.reason}", response=resp)
+                last_exc = httpx.HTTPStatusError(
+                    f"{resp.status_code} {resp.reason_phrase}", request=resp.request, response=resp
+                )
             else:
                 return resp
 
