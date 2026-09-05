@@ -18,8 +18,11 @@
 
 accounts:
   en:
-    # Where rendered videos wait to be uploaded. This is normally the batch
-    # stage's output directory for the language, e.g. .../exports
+    # Where rendered videos wait to be uploaded. For `mpt run` this MUST be the
+    # directory batch renders this language into — config.yaml's
+    # batch.output_dir plus the language's file_suffix (so ./exports for a
+    # language with an empty suffix, ./exports_es for "_es"). Nothing validates
+    # the pairing; `mpt run --dry-run` is how you check it.
     videos_dir: "/your/path/to/videos/en"
     client_secrets: "/root/youtubeuploader/client_secrets_en.json"
     token_file: "/root/youtubeuploader/request.token.en"

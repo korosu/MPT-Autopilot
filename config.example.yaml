@@ -436,8 +436,9 @@ uploader:
   # A bare name (e.g. "youtubeuploader") is looked up on PATH.
   uploader_binary: "/root/youtubeuploader/youtubeuploader"
 
-  # Where per-account metaJSON files are written before each upload.
-  meta_dir: "/root/youtubeuploader/meta"
+  # Scratch directory for the metaJSON file handed to youtubeuploader before
+  # each upload. Created if missing; defaults to ./meta beside this file.
+  meta_dir: "./meta"
 
   # accounts.yaml location. Defaults to accounts.yaml beside THIS file.
   # accounts_file: "./accounts.yaml"
@@ -481,3 +482,14 @@ pipeline:
   # accounts:
   #   en: main-channel
   #   es: spanish-channel
+
+# One join `mpt run` cannot make for you: each account's `videos_dir` in
+# accounts.yaml must be the directory batch renders that language into —
+# batch.output_dir plus the language's file_suffix. With the settings above:
+#
+#   batch.output_dir: ./exports    →  en uses ./exports
+#                                     es uses ./exports_es
+#
+# Nothing validates this, because uploading from a folder no batch run produced
+# is a legitimate use. `mpt run --dry-run` shows it: upload finding no files
+# right after batch listed jobs to render is the symptom of a mismatch.

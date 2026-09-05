@@ -2,6 +2,8 @@
 name = "mpt-autopilot"
 version = "1.0.0"
 description = "End-to-end automation for MoneyPrinterTurbo: idea generation, batch rendering, hashtag enrichment, and YouTube upload behind one `mpt` command"
+readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
     "httpx>=0.27",
@@ -14,6 +16,7 @@ dependencies = [
 mpt = "mpt_autopilot.cli:main"
 
 [project.urls]
+Homepage = "https://github.com/korosu/mpt-autopilot"
 Repository = "https://github.com/korosu/mpt-autopilot"
 Issues = "https://github.com/korosu/mpt-autopilot/issues"
 
@@ -23,6 +26,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mpt_autopilot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100

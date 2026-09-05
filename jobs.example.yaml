@@ -1,6 +1,10 @@
 # Copy this file to jobs.yaml (or jobs_en.yaml, jobs_es.yaml, etc.) and edit.
 # jobs.yaml is gitignored — your video topics stay private.
 #
+# `mpt refill` appends generated jobs here; `mpt batch` renders the pending ones.
+# With a language configured, --lang picks the file: langs.es.file_suffix "_es"
+# means `mpt batch --lang es` reads jobs_es.yaml.
+#
 # `defaults` below lists every MoneyPrinterTurbo VideoParams field. You don't
 # need to set them all — anything you delete here just isn't sent, and
 # MoneyPrinterTurbo falls back to its own server-side default. This file is
@@ -8,7 +12,7 @@
 
 defaults:
   # ── Voice ────────────────────────────────────────────────────────────────
-  # `voice` resolves a friendly alias from config.yaml's `voices:` section
+  # `voice` resolves a friendly alias from config.yaml's `batch.voices:` section
   # into both tts_server and voice_name together, so the two can never drift
   # out of sync. Ships with working presets already — see config.example.yaml.
   # You can set tts_server / voice_name directly instead if you'd rather
@@ -87,7 +91,7 @@ jobs:
     video_subject: "How to fall asleep faster and wake up energized"
 
   # Per-job override example — Spanish via a bundled Edge TTS voice instead
-  # of the Gemini default. Run `uv run batch --list-voices es` to see all
+  # of the Gemini default. Run `mpt batch --list-voices es` to see all
   # 45 Spanish variants (Spain, Mexico, Argentina, ...) and pick another.
   - name: "consejos_productividad_es"
     output_file: "consejos_productividad_es.mp4"
