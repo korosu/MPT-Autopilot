@@ -14,6 +14,32 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+# Same cap as enricher/llm.py::_MAX_TOPIC_LEN — the value ends up in an LLM prompt.
+_MAX_TOPIC_LEN = 300
+
+
+def _is_printable(ch: str) -> bool:
+    """
+    str.isprintable() is too permissive for our purposes: it returns True for
+    VT (\\x0b), FF (\\x0c) and CR (\\x0d), all of which are control characters
+    that must not reach an LLM prompt.
+    """
+    return ch.isprintable() and not ch.isspace()
+
+
+def _sanitise_subject(raw: object) -> str:
+    """
+    Make a script.json video_subject safe to put into an LLM prompt.
+
+    script.json is written by the batch stage but sits on disk as a plain file a
+    user can hand-edit, so video_subject is untrusted here just like the
+    filename. Stripping non-printables mirrors enricher/llm.py::_sanitise_topic
+    and closes the asymmetry where the filename path was filtered but the
+    script.json path was not.
+    """
+    cleaned = "".join(ch for ch in str(raw) if _is_printable(ch))
+    return cleaned[:_MAX_TOPIC_LEN].strip()
+
 
 @dataclass
 class VideoMeta:
@@ -84,8 +110,10 @@ def resolve_meta(mp4_path: Path, lang_override: str | None = None) -> VideoMeta:
     # --- Try script.json first ---
     if json_path.exists():
         data = _read_script_json(json_path)
-        params = data.get("params", {})
-        video_subject = params.get("video_subject", "").strip()
+        params = data.get("params", {}) if isinstance(data, dict) else {}
+        if not isinstance(params, dict):
+            params = {}
+        video_subject = _sanitise_subject(params.get("video_subject", ""))
         script_lang = _normalize_lang(params.get("video_language"))
 
         if video_subject:

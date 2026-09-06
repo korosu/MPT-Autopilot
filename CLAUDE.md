@@ -1,156 +1,177 @@
-# CLAUDE.md
+# AGENTS.md
 
-> Shared rules (environment, style, workflow, CI, summaries, plugins, agents): see `../CLAUDE.md`.
+MPT Autopilot standing orders. Read [CLAUDE.md](CLAUDE.md) for project
+overview, architecture, and the stage contract — this file is the imperative
+half. CLAUDE.md and AGENTS.md must always be identical: any change to one is a
+change to both.
 
-## Project Overview
+## Honesty rule
 
-MPT Autopilot automates MoneyPrinterTurbo end to end: generate video ideas, render
-them, tag them, upload them. It is a merge of four repositories that used to be
-installed and configured separately:
+Never claim a file was created, modified, or deleted unless a verification step
+(`read`, `glob`, `Test-Path`, etc.) confirmed it. If a tool returned an error,
+the file still exists, or the result is uncertain — say so explicitly and
+investigate. Do not report success before checking.
 
-| Was | Now |
-|---|---|
-| shorts-pilot | `pilot/` — `mpt refill`, `mpt init-seen` |
-| mpt-batch | `batch/` — `mpt batch` |
-| hashtag-enricher | `enricher/` — `mpt enrich` |
-| yt-shorts-uploader | `uploader/` — `mpt upload` |
+## Behavioral guidelines
 
-`mpt run` chains all four per language. See `docs/migration.md` for the mapping in
-user-facing terms.
+These rules bias toward caution. Use judgment on trivial tasks.
 
-## Architecture
+### 1. Think Before Coding
 
-```
-src/mpt_autopilot/
-  cli.py           # the only entry point; registers every stage
-  pipeline.py      # `mpt run` — chains the stages per language
-  config.py        # shared sectioned config.yaml + .env loader
-  seen.py          # shared dedup registry (all stages)
-  notify.py        # shared Telegram alerts (all stages)
-  lock.py          # file lock with timeout
-  logger.py        # stdout + rotating file logging
-  pilot/     {refill, init_seen, jobs, llm, prompt, settings}.py
-  batch/     {run, api, bgm, state, voices, settings}.py + data/edge_voices.json
-  enricher/  {run, settings, llm, postprocess, reader, writer}.py
-  uploader/  {run, settings, uploader, metadata, ledger}.py
-```
+Don't assume. Don't hide confusion. Surface tradeoffs.
 
-The four stage packages do not import each other. Everything they share goes
-through the seven top-level modules — that separation is what keeps a change in
-one stage from silently altering another.
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them — don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
 
-## The stage contract
+### 2. Simplicity First
 
-Every stage entry point (`pilot/refill.py`, `pilot/init_seen.py`, `batch/run.py`,
-`enricher/run.py`, `uploader/run.py`, `pipeline.py`) exposes exactly four things:
+Minimum code that solves the problem. Nothing speculative.
 
-```python
-def add_arguments(parser) -> parser   # stage flags ONLY — never --config
-EPILOG = "..."                        # examples, shown in --help
-def build_parser() -> parser          # standalone parser; adds --config
-def execute(args, config_path=None) -> int   # returns an exit code
-```
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
 
-Adding a flag means editing `add_arguments` and nothing else: the `mpt`
-subparser and the standalone parser both build from it, so they cannot drift.
+### 3. Surgical Changes
 
-`execute` **returns** its exit code and never calls `sys.exit` — that is what lets
-`pipeline.py` call stages in-process and aggregate their results. Only `main()`
-exits, via `sys.exit(execute(build_parser().parse_args()))`.
+Touch only what you must. Clean up only your own mess.
 
-Two subtleties that look like mistakes and are not:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it — don't delete it.
 
-- Each subparser's `--config` uses `dest="stage_config"`, not `dest="config"`. A
-  shared dest would let the subparser's own default overwrite the root value, so
-  `mpt --config X batch` would silently read `./config.yaml`. Dispatch reads
-  `getattr(args, "stage_config", None) or args.config`.
-- `cli._stage_hooks(name)` imports a stage's module **inside the function**. This
-  is the one sanctioned exception to top-level imports: `mpt --help` must work in
-  a directory with no config.yaml and without importing httpx/requests/yaml for
-  five stages you are not running. `tests/common/test_cli.py` locks this in by
-  running every `--help` from an empty directory.
+Remove imports/variables/functions that YOUR changes made unused. Don't remove
+pre-existing dead code unless asked.
 
-## Configuration
+### 4. Goal-Driven Execution
 
-One `config.yaml`, sectioned. `config.example.yaml` is the authoritative
-reference — read it before changing any loader.
+Define success criteria. Loop until verified.
 
-```yaml
-telegram_prefix: "mpt-autopilot"   # shared; any section may override
-paths:    {jobs_dir, seen_dir, exports_dir}
-langs:    {en: {label, file_suffix, voices, job_defaults, theme_list}, ...}
-pilot:    {generation: {count, threshold, ...}, scan_dirs}
-batch:    {api_url, mpt_storage, mpt_songs_dir, output_dir, seen_file, voices, ...}
-enricher: {platform, min_tags, max_tags, banned_tags, always_include, prompt_*}
-uploader: {uploader_binary, meta_dir, defaults: {...}}
-pipeline: {accounts: {<lang>: <account>}}
+- "Fix a bug" → write a failing test, then make it pass.
+- "Refactor X" → ensure tests pass before and after.
+- State a brief plan before multi-step work.
+
+---
+
+## Version bump policy
+
+Before finishing any task that changes tracked project files, update the version
+in `pyproject.toml` exactly once:
+
+- Bugfix, refactor, docs, config → bump PATCH by `0.0.1`.
+- New user-visible content or new logic → bump MINOR by `0.1.0`, reset PATCH to
+  `0`.
+
+## Git / PR conventions
+
+- Use [Conventional Commits](https://www.conventionalcommits.org/) subjects
+  (`feat:`, `fix:`, `refactor:`, `docs:`, etc.).
+- CI runs on pushes to `main`, PRs targeting `main`, and tags matching `v*`.
+- The test suite is the only automated quality gate. Run it before pushing.
+
+## Quality gates (mandatory on every code submission)
+
+After any change to tracked project files, run **all three** commands and
+confirm each exits 0 before submitting:
+
+```bash
+uv run ruff check
+uv run ruff format
+uv run pyright
 ```
 
-Invariants worth knowing before you touch a settings module:
+All three must pass. Fix every issue before considering the work done.
 
-- **Relative paths resolve against config.yaml's directory**, never cwd. This is
-  what makes `mpt --config /srv/mpt/config.yaml run` behave identically from any
-  working directory, and it is easy to break by reaching for `Path(x).resolve()`.
-  Use `cfg.resolve()` / `cfg.path_value()`. Covered by
-  `test_paths_resolve_against_config_not_cwd`.
-- **`langs:` is top-level, deliberately.** pilot reads the whole entry, batch reads
-  only `file_suffix`, and `mpt run` derives jobs/seen/exports names from that same
-  suffix. One source of truth is the point; do not move it under a section.
-- **`reasoning_enabled` is tri-state** in both pilot and enricher settings:
-  `None` / `True` / `False`. Absent means "send nothing", which is not the same as
-  `false` ("explicitly turn thinking off"). Read it with `get("reasoning_enabled")`
-  and no default.
-- **The enricher's `settings` singleton must stay lazy.** The stage imports it at
-  module scope, so instantiating eagerly would make `mpt --help` require a
-  config.yaml. `execute()` calls `configure(config_path)` first; the module-level
-  `settings` is a `cast`-wrapped proxy that reads nothing until first attribute
-  access.
+## Conventions
 
-## Exit codes
+- **Python style:** `snake_case` for functions/variables, `PascalCase` for
+  classes, `UPPERCASE` for module constants.
+- **Imports:** are `from __future__ import annotations` first, stdlib third,
+  third-party last, local last. The four stage packages never import each other.
+- **Async:** use `async def` for I/O in batch, enricher, and uploader stages;
+  pilot's LLM calls are sync-wrapped via `asyncio.run()` in `execute()`.
+- **Error handling:** stages return clean `[ERROR]` messages — never raw
+  tracebacks to the user.
+- **Path handling:** never use `Path(x).resolve()` against cwd. Use
+  `cfg.resolve()` / `cfg.path_value()` so paths always resolve relative to
+  `config.yaml`'s directory.
+- **Logging:** use the shared `mpt_autopilot.logger`; never `print()` in stage
+  code.
+- **Comments and docs:** explain why, not what. Link to the rationale or the
+  rule this code enforces — don't restate the code.
 
-Load-bearing, and the uploader's original contract:
+## Gotchas
 
-- `0` — succeeded, or nothing to do
-- `1` — failure
-- `2` — stopped on YouTube's daily upload quota
-
-`pipeline.py` aggregates with failure taking precedence over a quota stop
-(`1 > 2 > 0`), because a quota stop is a normal daily ceiling and a cron wrapper
-needs to tell "retry tomorrow" apart from "something is broken".
-
-## Testing
-
-- Test packages mirror the source: `tests/{common,pilot,batch,enricher,uploader}/`.
-  Every one needs an `__init__.py` — `test_settings.py` and `test_notify.py` exist
-  in more than one directory, and without the packages pytest's rootdir-relative
-  module names collide.
-- `tests/uploader/helpers.py` builds the fake `youtubeuploader` binary. On Windows
-  `_is_executable` requires a `.exe`/`.cmd`/`.bat` extension, so an extensionless
-  stub fails every account-readiness check. Always go through
-  `make_uploader_binary(tmp_path)`.
-- `tests/common/test_config.py` and `test_cli.py` are the regression net for the
-  two things the merge made fragile: section isolation in the loader, and every
-  `--help` working with no config.yaml present.
-
-## Known tech debt
-
-Both `httpx` and `requests` ship. The enricher's LLM client is built on
-`httpx.Client` with its own backoff around `httpx.HTTPStatusError`; the shared
-`notify` uses `requests`. Rewriting either was out of scope for the merge.
-Collapsing onto one client is a worthwhile follow-up — do it as its own change,
-with the enricher's retry tests as the guard.
+- The enricher's `settings` singleton is imported at module scope. Instantiating
+  it eagerly (`Settings()`) makes `mpt --help` require a `config.yaml`. Always
+  lazy — let `execute()` call `configure(config_path)` first.
+- `cli._stage_hooks(name)` imports the stage module inside the function. This is
+  the only sanctioned exception to top-level imports. Don't add new top-level
+  imports of httpx/requests/yaml in `cli.py`.
+- `reasoning_enabled` is tri-state: `None` (absent, send nothing), `True` (send
+  `"low"`), `False` (send `"none"`). `None` and `False` are different — don't
+  conflate them with `get("reasoning_enabled", False)`.
+- SQLite WAL mode creates `-wal` and `-shm` sidecars during uploader runs. The
+  ledger path in `.gitignore` covers them, but moving the ledger file without
+  also migrating WAL residuals resets dedup state.
+- `seen.py` uses a file lock. Two `pytest` processes pointing at the same
+  `seen.txt` will deadlock. Use unique temp paths in tests.
 
 ## Preserved history
 
-The four repositories were imported with `git fast-export` → stream rewrite →
-`git fast-import`, so `git log`, `git blame`, and `git log --follow` on any file
-reach back into its original repository's commits with the original authors and
-dates. Imported commits already touch the final monorepo paths — there is no
-`vendor/` prefix and no rename commit to follow through.
+The four source repositories were imported with `git fast-export` → stream
+rewrite → `git fast-import`. Do not re-import, rewrite, or squash that
+history — `git log`, `git blame`, and `git log --follow` already traverse into
+original commits.
 
-Do not re-import, rewrite, or squash that history. `tools/import_history.py` and
-`tools/rewrite_imports.py` are the one-off tools that did it, kept for the record.
+## Project overview
 
-Tags were not imported: three of the four repositories independently tagged
-`v1.0.0`. Per-tool release history stays in the archived repositories; this one
-starts at `v1.0.0`.
+MPT Autopilot is an end-to-end automation suite for [MoneyPrinterTurbo](https://github.com/harry0703/MoneyPrinterTurbo): one `mpt` command drives the full pipeline from a content idea to an uploaded YouTube Short.
+
+**Pipeline (in order):**
+
+1. **`pilot` (`mpt refill`)** — Calls an LLM to generate video idea objects and appends them to the jobs queue. Also: `mpt init-seen` registers existing `.mp4` files so refill won't repeat them.
+2. **`batch` (`mpt batch`)** — Reads `jobs.yaml` (or `jobs_<lang>.yaml`), submits each enabled job to the MoneyPrinterTurbo API, polls until completion, and copies finished videos + script.json to the exports directory. Handles crash-recovery via an in-progress registry and consecutive-failure aborts.
+3. **`enricher` (`mpt enrich`)** — Reads finished videos (or sidecar `.json` files), calls an LLM to generate platform-appropriate hashtags, and writes them back as a `hashtags` block in the sidecar.
+4. **`uploader` (`mpt upload`)** — Reads the sidecar metadata and uploads the video to YouTube via `youtubeuploader`, with a SQLite dedup ledger.
+
+All four stages are wired together by **`pipeline.py`** (`mpt run`), which iterates per language and per stage, respecting `--only`, `--skip`, `--continue-on-error`, and `--dry-run`.
+
+**Shared building blocks** (top-level under `src/mpt_autopilot/`):
+
+- **`config.py`** — single `config.yaml` loader shared by every stage; handles path resolution relative to the config file, section access, and `.env` loading via `dotenv`.
+- **`notify.py`** — Telegram alert helper; accepts any settings object with `telegram_token` / `telegram_chat_id` / `telegram_prefix`.
+- **`seen.py`** — dedup registry (text file, one filename per line); supports rotation when the file exceeds a configurable size threshold.
+- **`lock.py`** — cross-platform advisory file lock via atomic exclusive file creation.
+- **`logger.py`** — file + stdout/stderr logger with size-based rotation (`RotatingFileHandler`).
+
+**Key config path (`config.yaml`):**
+
+```
+telegram_prefix      # shared default; stages can override
+langs:               # shared language block (code → {label, file_suffix, ...})
+paths:               # shared path block (jobs_dir, seen_dir, exports_dir, videos_dir)
+pilot:               # pilot stage settings (LLM, generation, seen_max_mb)
+batch:               # batch stage settings (API URL, mpt_storage, seen_max_mb, ...)
+enricher:            # enricher stage settings (platform, tags, prompts)
+uploader:            # uploader stage settings (accounts, auth, ledger path)
+pipeline:            # pipeline orchestration (accounts map, ...)
+```
+
+Each stage also has its own `Settings` dataclass that reads its section from the
+shared loader and validates required fields.
+
+## Stage contract
+
+- Stages return clean exit codes (0 = ok, 1 = failure, 2 = quota stop) — never
+  raw tracebacks to the user.
+- `cli.py` must not import httpx/requests/yaml at module scope; only
+  `_stage_hooks()` imports stage modules lazily.
+- The enricher's `settings` singleton must stay lazy: `execute()` calls
+  `configure(config_path)` before anything touches it, otherwise `mpt --help`
+  requires a `config.yaml`.
+- `seen.py` rotation threshold is configurable per stage via
+  `pilot.seen_max_mb` / `batch.seen_max_mb` (default: 64 MB).

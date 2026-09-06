@@ -72,14 +72,48 @@ def find_videos(account: Account) -> list[Path]:
 
 
 def move_to_uploaded(video: Path, sidecar: Path, uploaded_dir: Path) -> None:
+    """
+    Move a finished video (and its sidecar) into uploaded_dir.
+
+    The sidecar is moved FIRST. If the process dies between the two moves the
+    crash-recovery pass finds the video still at the source and finishes the
+    job (the already-moved sidecar is a no-op for it), leaving both files in
+    uploaded_dir. Moving the video first used to leave an orphan sidecar at the
+    source, which recovery skipped — it only looked for videos — and the sidecar
+    sat there forever.
+    """
     uploaded_dir.mkdir(parents=True, exist_ok=True)
-    dst_video = uploaded_dir / video.name
-    dst_video.unlink(missing_ok=True)
-    shutil.move(str(video), str(dst_video))
     if sidecar.exists():
         dst_sidecar = uploaded_dir / sidecar.name
         dst_sidecar.unlink(missing_ok=True)
         shutil.move(str(sidecar), str(dst_sidecar))
+    dst_video = uploaded_dir / video.name
+    dst_video.unlink(missing_ok=True)
+    shutil.move(str(video), str(dst_video))
+
+
+def sweep_orphan_sidecars(videos_dir: Path, uploaded_dir: Path) -> int:
+    """
+    Recover sidecars left at the source by older versions of move_to_uploaded(),
+    which moved the video first and could die before moving the .json next to it.
+    Returns how many were moved.
+
+    A sidecar is only swept when its video is absent from the source AND present
+    in uploaded_dir — otherwise the upload may still be in flight.
+    """
+    if not videos_dir.exists() or not uploaded_dir.exists():
+        return 0
+    moved = 0
+    for sidecar in sorted(videos_dir.glob("*.json")):
+        video = sidecar.with_suffix(".mp4")
+        if video.exists():
+            continue
+        if (uploaded_dir / video.name).exists():
+            dest = uploaded_dir / sidecar.name
+            dest.unlink(missing_ok=True)
+            shutil.move(str(sidecar), str(dest))
+            moved += 1
+    return moved
 
 
 def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | None) -> int:
@@ -130,6 +164,10 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
                     move_to_uploaded(video_path, sidecar_path(video_path), uploaded_dir)
                     mark_moved(conn, account.name, content_hash)
 
+            swept = sweep_orphan_sidecars(account.videos_dir, uploaded_dir)
+            if swept:
+                print(f"[{account.name}] recovered {swept} orphan sidecar(s) from earlier runs")
+
         uploaded = 0
         failed = 0
         stopped_early = False
@@ -148,7 +186,19 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
                 print(f"[{account.name}] skip: {video.name} (already uploaded)")
                 continue
 
-            meta = load_meta(video, settings.defaults, account_name=account.name)
+            try:
+                meta = load_meta(video, settings.defaults, account_name=account.name)
+            except Exception as exc:
+                # A malformed sidecar must not kill the whole account: load_meta
+                # was previously outside any per-video guard, so one bad file
+                # halted every remaining upload and the summary alert below never
+                # fired.
+                failed += 1
+                print(f"[{account.name}] FAILED: {video.name}: bad sidecar: {exc}")
+                notify.alert(f"\u26a0\ufe0f [{account.name}] bad sidecar: {video.name}", settings)
+                if index < last_index:
+                    time.sleep(settings.sleep_between_uploads)
+                continue
 
             if dry_run:
                 print(f"[{account.name}] would upload: {video.name}")

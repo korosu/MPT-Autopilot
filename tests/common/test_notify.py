@@ -33,6 +33,7 @@ def _settings(
         max_consecutive_failures=3,
         cache_cleanup_enabled=True,
         cache_cleanup_interval=6,
+        seen_max_mb=64,
         telegram_token=token,
         telegram_chat_id=chat_id,
         telegram_prefix=prefix,

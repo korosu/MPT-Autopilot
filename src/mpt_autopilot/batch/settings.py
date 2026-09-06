@@ -8,14 +8,18 @@ Settings object used across the batch stage.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from mpt_autopilot import config as shared_config
 from mpt_autopilot.batch import voices
+from mpt_autopilot.config import warn_cleartext
 
 SECTION = "batch"
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -61,6 +65,9 @@ class Settings:
     # Cache cleanup — from config.yaml
     cache_cleanup_enabled: bool
     cache_cleanup_interval: int
+
+    # seen.txt rotation — from config.yaml (optional; defaults to 64 MB)
+    seen_max_mb: int
 
     # Telegram — token/chat_id from .env (optional), prefix from config.yaml
     telegram_token: str
@@ -111,6 +118,7 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
             sec.get("cache_cleanup_enabled", True)
         ),
         cache_cleanup_interval=int(sec.get("cache_cleanup_interval", 6)),
+        seen_max_mb=int(sec.get("seen_max_mb", 64)),
         telegram_token=os.getenv("TELEGRAM_TOKEN", "").strip(),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
         telegram_prefix=cfg.telegram_prefix(SECTION),
@@ -131,3 +139,4 @@ def validate(s: Settings) -> None:
             f"[{s.telegram_prefix}] WARNING: api_url '{s.api_url}' doesn't start with http — "
             "may not work"
         )
+    warn_cleartext(s.api_url, "batch.api_url")

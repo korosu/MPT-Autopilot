@@ -29,6 +29,39 @@ def sidecar_path(video_path: Path) -> Path:
     return video_path.with_suffix(".json")
 
 
+def _clean_sidecar_tags(tags: object) -> list[str]:
+    """
+    Reduce a sidecar "tags" value to a list of usable tag strings.
+
+    The sidecar is JSON the user or the enricher writes by hand, so a non-string
+    entry ({"tags": [123]} or [None]) is a realistic typo. Passing it through
+    would raise AttributeError inside _apply_tags_placement, which sits outside
+    the per-video try/except in run.py — one bad sidecar would silently halt
+    every remaining upload for the account with no Telegram alert.
+
+    Drops non-strings and blank entries instead, and logs what it dropped so a
+    typo is visible in the log rather than invisible.
+    """
+    if not isinstance(tags, list):
+        _logger.warning("sidecar 'tags' is not a list (%r); ignoring it", type(tags).__name__)
+        return []
+
+    cleaned: list[str] = []
+    dropped = 0
+    for tag in tags:
+        if isinstance(tag, str) and tag.strip():
+            cleaned.append(tag.strip())
+        else:
+            dropped += 1
+    if dropped:
+        _logger.warning(
+            "sidecar 'tags' dropped %d unusable entr%s",
+            dropped,
+            "y" if dropped == 1 else "ies",
+        )
+    return cleaned
+
+
 def title_from_filename(video_path: Path, account_name: str = "") -> str:
     """Convert video filename to title, stripping account suffix if present.
 
@@ -146,6 +179,11 @@ def load_meta(video_path: Path, defaults: Defaults, account_name: str = "") -> V
 
     sidecar_tags = raw.get("tags")
     if sidecar_tags and isinstance(sidecar_tags, list) and len(sidecar_tags) > 0:
+        sidecar_tags = _clean_sidecar_tags(sidecar_tags)
+        if not sidecar_tags:
+            sidecar_tags = None
+
+    if sidecar_tags and isinstance(sidecar_tags, list) and len(sidecar_tags) > 0:
         placement = defaults.hashtag_placement
         if placement == "tags":
             tags = _apply_tags_placement(list(defaults.tags), sidecar_tags)
@@ -162,11 +200,42 @@ def load_meta(video_path: Path, defaults: Defaults, account_name: str = "") -> V
         title=title,
         description=description,
         tags=tags,
-        privacy_status=str(raw.get("privacyStatus", defaults.privacy_status)),
-        category_id=str(raw.get("categoryId", defaults.category_id)),
+        privacy_status=_validate_privacy_status(
+            raw.get("privacyStatus", defaults.privacy_status), defaults.privacy_status, sidecar
+        ),
+        category_id=_validate_category_id(
+            raw.get("categoryId", defaults.category_id), defaults.category_id, sidecar
+        ),
         contains_synthetic_media=bool(
             raw.get("containsSyntheticMedia", defaults.contains_synthetic_media)
         ),
+    )
+
+
+# YouTube's three privacy values. Anything else used to be str()-coerced straight
+# into the upload metadata: ["public"] became the literal string "['public']",
+# which YouTube rejected — failing one video that would have uploaded fine.
+_VALID_PRIVACY = {"public", "private", "unlisted"}
+
+
+def _validate_privacy_status(value: object, default: str, sidecar: Path) -> str:
+    text = str(value).strip().lower()
+    if text in _VALID_PRIVACY:
+        return text
+    raise ValueError(
+        f"invalid sidecar 'privacyStatus' in {sidecar}: {value!r}. "
+        f"Expected one of {', '.join(sorted(_VALID_PRIVACY))} "
+        f"(config default is {default!r})"
+    )
+
+
+def _validate_category_id(value: object, default: str, sidecar: Path) -> str:
+    text = str(value).strip()
+    if text.isdigit():
+        return text
+    raise ValueError(
+        f"invalid sidecar 'categoryId' in {sidecar}: {value!r}. Expected a numeric "
+        f"YouTube category id (config default is {default!r})"
     )
 
 

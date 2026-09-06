@@ -110,9 +110,15 @@ def load_settings(
                 )
             accounts[name] = Account(
                 name=name,
-                videos_dir=Path(raw["videos_dir"]).expanduser(),
-                client_secrets=Path(raw["client_secrets"]).expanduser(),
-                token_file=Path(raw["token_file"]).expanduser(),
+                # Resolved against config.yaml's directory (via cfg.resolve), not
+                # cwd. Every other stage resolves its paths that way, and it is
+                # what makes `mpt --config /srv/mpt/config.yaml upload` behave
+                # identically from any working directory. Path(...).expanduser()
+                # alone resolved against cwd, so a run from another directory
+                # silently scanned and uploaded a different videos_dir.
+                videos_dir=cfg.resolve(raw["videos_dir"]),
+                client_secrets=cfg.resolve(raw["client_secrets"]),
+                token_file=cfg.resolve(raw["token_file"]),
                 daily_upload_limit=daily_limit,
             )
         except (KeyError, TypeError) as exc:

@@ -8,14 +8,18 @@ Settings object used across the pilot stage.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from mpt_autopilot import config as shared_config
+from mpt_autopilot.config import warn_cleartext
 
 SECTION = "pilot"
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -44,6 +48,7 @@ class Settings:
     # Generation — from config.yaml
     generate_count: int
     refill_threshold: int
+    seen_max_mb: int
     scan_dirs: list[str]
     langs: dict[str, LangSettings]
 
@@ -100,10 +105,10 @@ def load(
         else:
             theme_list = []
         if tl_raw is not None and not theme_list:
-            print(f"[warn] lang '{code}' theme_list is empty or malformed — ignoring")
+            _logger.warning("lang '%s' theme_list is empty or malformed — ignoring", code)
         langs[code] = LangSettings(
-            label=lr.get("label", code.upper()),
-            file_suffix=lr.get("file_suffix", ""),
+            label=lr["label"],
+            file_suffix=lr["file_suffix"],
             voice_rate_min=float(lr.get("voice_rate_min", 1.05)),
             voice_rate_max=float(lr.get("voice_rate_max", 1.20)),
             voices=lr.get("voices", []),
@@ -134,7 +139,7 @@ def load(
     reasoning_effort = str(gen.get("reasoning_effort", "medium"))
     reasoning_max_tokens = int(gen.get("reasoning_max_tokens", 8192))
 
-    return Settings(
+    s = Settings(
         api_key=_env("LLM_API_KEY"),
         base_url=_env("LLM_BASE_URL").rstrip("/"),
         model=_env("LLM_MODEL"),
@@ -143,6 +148,7 @@ def load(
         telegram_prefix=cfg.telegram_prefix(SECTION),
         generate_count=int(gen.get("count", 21)),
         refill_threshold=int(gen.get("threshold", 10)),
+        seen_max_mb=int(sec.get("seen_max_mb", 64)),
         scan_dirs=scan_dirs,
         langs=langs,
         jobs_dir=jobs_dir,
@@ -151,3 +157,5 @@ def load(
         reasoning_effort=reasoning_effort,
         reasoning_max_tokens=reasoning_max_tokens,
     )
+    warn_cleartext(s.base_url, "LLM_BASE_URL")
+    return s

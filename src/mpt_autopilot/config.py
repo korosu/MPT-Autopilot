@@ -25,11 +25,16 @@ loaders and it is preserved here.
 
 from __future__ import annotations
 
+import logging
+import socket
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yaml
 from dotenv import load_dotenv
+
+_logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_NAME = "config.yaml"
 DEFAULT_ENV_NAME = ".env"
@@ -209,3 +214,46 @@ def load(
 def clear_cache() -> None:
     """Drop cached configs — used by tests and by `mpt run` between languages."""
     _cache.clear()
+
+
+def warn_cleartext(url: str, setting: str) -> None:
+    """
+    Warn once when an endpoint is configured over plain HTTP off-loopback.
+
+    Not a hard error: the documented local development setup points both
+    api_url and LLM_BASE_URL at http://localhost, and forcing TLS would break
+    every local run. But a cleartext URL on a real host puts the payload — and
+    for LLM_BASE_URL, the LLM_API_KEY Authorization header — on the wire
+    unencrypted.
+    """
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname
+        if host is None:
+            return
+        if parsed.scheme != "http" or not host:
+            return
+        if host == "0.0.0.0" or host.startswith("127.") or host == "::1":
+            return
+        if host == "localhost" or host.endswith(".localhost"):
+            return
+        # A host that does not resolve is not a local dev server either, so warn
+        # rather than staying silent: a typo like http://ap.example.com would
+        # otherwise be invisible until the request fails.
+        try:
+            infos = socket.getaddrinfo(host, parsed.port or 80, proto=socket.IPPROTO_TCP)
+        except OSError:
+            infos = None
+        if infos is not None:
+            for _family, _type, _proto, _canon, sockaddr in infos:
+                ip = str(sockaddr[0])
+                if ip == "::1" or ip.startswith("127."):
+                    return
+    except (ValueError, AttributeError):
+        return
+    _logger.warning(
+        "%s is plain HTTP: %s — traffic to it is unencrypted; anyone on the network "
+        "path can read and modify it. Use https:// unless this is localhost.",
+        setting,
+        url,
+    )

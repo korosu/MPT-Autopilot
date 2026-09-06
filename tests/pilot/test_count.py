@@ -52,6 +52,7 @@ def make_settings(
         },
         jobs_dir=None,
         seen_dir=None,
+        seen_max_mb=64,
     )
 
 

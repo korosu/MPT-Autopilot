@@ -100,5 +100,46 @@ def test_write_hashtags_creates_new_file(tmp_path: Path):
     assert data["tags"] == ["#shorts"]
 
 
+def test_write_hashtags_backs_up_a_corrupt_sidecar(tmp_path: Path):
+    """
+    A sidecar that fails to parse used to be silently overwritten, destroying
+    recoverable content: a truncated write of a previous field is still
+    readable to a human, and script.json may hold video_subject / title /
+    description that nothing else records.
+    """
+    json_path = tmp_path / "video.json"
+    original = '{"title": "RECOVER-ME", "description": "partial trunca'
+    json_path.write_text(original)
+
+    hashtags_block = build_hashtags_block(
+        tags_list=["#shorts"], language="English", model="m", source="filename"
+    )
+    write_hashtags(json_path, hashtags_block)
+
+    backup = tmp_path / "video.json.bak"
+    assert backup.exists(), "the unparseable original was overwritten without a backup"
+    assert backup.read_text() == original
+
+    data = json.loads(json_path.read_text())
+    assert data["tags"] == ["#shorts"]
+
+
+def test_write_hashtags_no_backup_for_a_valid_sidecar(tmp_path: Path):
+    """A parseable sidecar is merged in place; no backup file is created."""
+    json_path = tmp_path / "video.json"
+    json_path.write_text(json.dumps({"title": "T", "video_subject": "VS"}))
+
+    hashtags_block = build_hashtags_block(
+        tags_list=["#shorts"], language="English", model="m", source="filename"
+    )
+    write_hashtags(json_path, hashtags_block)
+
+    assert not (tmp_path / "video.json.bak").exists()
+    data = json.loads(json_path.read_text())
+    assert data["title"] == "T"
+    assert data["video_subject"] == "VS"
+    assert data["tags"] == ["#shorts"]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

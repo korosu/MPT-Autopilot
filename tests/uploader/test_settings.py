@@ -161,3 +161,60 @@ def test_ledger_lives_next_to_config(tmp_path):
 
     settings = load_settings(config_path=config_path)
     assert settings.ledger_path.parent == tmp_path
+
+
+def test_accounts_paths_resolve_against_config_not_cwd(tmp_path, monkeypatch):
+    """
+    The documented invariant is "relative paths resolve against config.yaml's
+    directory, never cwd" — so `mpt --config /srv/mpt/config.yaml upload` behaves
+    identically from any working directory. Account paths previously used
+    Path(...).expanduser(), which resolves against cwd instead: a run started
+    from another directory silently scanned and uploaded a different videos_dir.
+    """
+    cfg_dir = tmp_path / "srv" / "cfg"
+    (cfg_dir / "videos").mkdir(parents=True)
+    (cfg_dir / "client_secrets.json").write_text("{}")
+    (cfg_dir / "token.json").write_text("{}")
+    (cfg_dir / "config.yaml").write_text("")
+    (cfg_dir / "accounts.yaml").write_text(
+        "accounts:\n  en:\n"
+        "    videos_dir: ./videos\n"
+        "    client_secrets: client_secrets.json\n"
+        "    token_file: token.json\n"
+    )
+
+    other_cwd = tmp_path / "elsewhere"
+    other_cwd.mkdir()
+    monkeypatch.chdir(other_cwd)
+
+    settings = load_settings(config_path=cfg_dir / "config.yaml")
+
+    account = settings.accounts["en"]
+    assert account.videos_dir == (cfg_dir / "videos").resolve()
+    assert account.client_secrets == (cfg_dir / "client_secrets.json").resolve()
+    assert account.token_file == (cfg_dir / "token.json").resolve()
+    assert not str(account.videos_dir).startswith(str(other_cwd.resolve()))
+
+
+def test_accounts_paths_absolute_and_tilde_still_work(tmp_path, monkeypatch):
+    cfg_dir = tmp_path / "cfg"
+    (cfg_dir / "videos").mkdir(parents=True)
+    (cfg_dir / "client_secrets.json").write_text("{}")
+    (cfg_dir / "token.json").write_text("{}")
+    (cfg_dir / "config.yaml").write_text("")
+    (cfg_dir / "accounts.yaml").write_text(
+        "accounts:\n  en:\n"
+        f"    videos_dir: {cfg_dir / 'videos'}\n"
+        f"    client_secrets: {cfg_dir / 'client_secrets.json'}\n"
+        f"    token_file: {cfg_dir / 'token.json'}\n"
+    )
+
+    settings = load_settings(config_path=cfg_dir / "config.yaml")
+    account = settings.accounts["en"]
+    assert account.videos_dir == (cfg_dir / "videos").resolve()
+    assert account.client_secrets.exists()
+    assert account.token_file.exists()
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-v"]))

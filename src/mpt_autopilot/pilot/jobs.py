@@ -132,13 +132,35 @@ def count_pending_from(cfg: dict[str, Any], seen: set[str]) -> int:
 # ── Writing ───────────────────────────────────────────────────────────────────
 
 
+# Named escapes for the characters that deserve a mnemonic in YAML output.
+# Everything else with ord() < 0x20 (plus DEL, 0x7F) is emitted as \xNN.
+_ESCAPES = {
+    "\\": "\\\\",
+    '"': '\\"',
+    "\n": "\\n",
+    "\r": "\\r",
+    "\t": "\\t",
+}
+
+
 def _scalar(value: Any) -> str:
-    """
+    r"""
     Render a scalar value the way the original jobs files look:
     - strings  → double-quoted  "value"
     - booleans → unquoted lowercase  true / false
     - numbers  → unquoted
     - None     → empty string ""
+
+    Every character YAML 1.1 forbids inside a double-quoted scalar is escaped:
+    backslash, double quote, and all control characters below 0x20 plus DEL.
+    The named ones get mnemonic escapes; the rest become backslash-xNN.
+    Without this the file would be left permanently unparsable — a control
+    character emitted verbatim makes yaml.safe_load() raise ReaderError on the
+    next read.
+
+    Sources worth protecting: the LLM's video_subject (a \u0000 in its JSON
+    becomes a real NUL once parsed), and `mpt refill --topics file.txt`, which
+    passes each line through verbatim.
     """
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -146,19 +168,15 @@ def _scalar(value: Any) -> str:
         return '""'
     if isinstance(value, (int, float)):
         return str(value)
-    # String — double-quote and escape backslashes, double-quotes, and
-    # control characters (a stray literal newline from the LLM's JSON
-    # response must not become a raw newline in the appended block).
-    escaped = (
-        str(value)
-        .replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("\r\n", "\\n")
-        .replace("\n", "\\n")
-        .replace("\r", "\\n")
-        .replace("\t", "\\t")
-    )
-    return f'"{escaped}"'
+    out: list[str] = []
+    for ch in str(value):
+        if ch in _ESCAPES:
+            out.append(_ESCAPES[ch])
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append(f"\\x{ord(ch):02x}")
+        else:
+            out.append(ch)
+    return f'"{"".join(out)}"'
 
 
 def _job_to_yaml(job: dict[str, Any]) -> str:

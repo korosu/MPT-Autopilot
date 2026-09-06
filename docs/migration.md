@@ -19,6 +19,46 @@ its settings live.
 
 ---
 
+## 0. Breaking changes — read this first
+
+Four changes affect existing setups. Everything else is additive or internal.
+
+### `telegram_prefix` default changed
+
+The shared default is now `"mpt-autopilot"` (was `"mpt-batch"` per tool). If you
+run Telegram bots that filter on `"[mpt-batch]"` or `"[hashtag-enricher]"`, your
+alerts will no longer match after migration. Two options:
+
+- **Keep the old prefixes** — set `telegram_prefix` inside each stage's section
+  (e.g. `batch.telegram_prefix: "mpt-batch"`). The stage-level value wins over
+  the shared default.
+- **Adopt the new prefix** — delete any stage-level overrides and let the shared
+  `"mpt-autopilot"` apply everywhere.
+
+### `enricher.directory` → `enricher.videos_dir`
+
+The hashtag-enricher config key `directory` was renamed to `videos_dir`. Old
+configs with `enricher.directory:` will silently fall back to the current
+directory. Rename the key in your `enricher:` section.
+
+### `langs.<code>.file_suffix` is now required
+
+If your old `langs:` entries omitted `file_suffix`, the new code derives it
+automatically as `_` + code (e.g. `es` → `_es`). If your old entries used a
+different convention (e.g. `es` instead of `_es`), add the key explicitly.
+An entry with no `file_suffix` at all will get `_<code>` as its default — which
+matches the previous behaviour for most users.
+
+### `yt-uploader-ledger.sqlite` moved
+
+The dedup ledger now lives next to config.yaml instead of in the working
+directory. **Move your existing ledger there** — if you leave it behind, the
+first run starts from an empty ledger and will try to re-upload videos it has
+already published. The file is the same schema; just rename and move it. See
+[section 4](#4-accountsyaml-and-the-upload-ledger) below.
+
+---
+
 ## 1. Commands
 
 Every old entry point is gone. There is one command, `mpt`, with subcommands:
@@ -114,7 +154,9 @@ paths:
 
 A stage-level key of the same name always wins over `paths:`. If you liked having
 `[mpt-batch]` and `[hashtag-enricher]` as distinct Telegram prefixes, keep
-setting `telegram_prefix` inside each section.
+setting `telegram_prefix` inside each section. Note that the shared default is
+now `"mpt-autopilot"` (was `"mpt-batch"`) — see the [breaking changes](#0-breaking-changes--read-this-first)
+above.
 
 ### Relative paths
 
@@ -186,6 +228,26 @@ re-running of `mpt init-seen` needed.
 Nothing in the merge rewrites them, so you can point the new config at your
 existing jobs directory and keep going mid-queue.
 
+### ⚠️ seen-file location: check your `batch.seen_file`
+
+The merge fixed a bug where `--lang` derived the per-language seen file
+(e.g. `seen_es.txt`) from **config.yaml's directory** instead of the directory
+of the configured `seen_file`. If your old config had:
+
+```yaml
+batch:
+  seen_file: "./jobs/seen.txt"    # in a subdirectory
+```
+
+then the old code created `./seen_es.txt` (next to config.yaml), but the new
+code creates `./jobs/seen_es.txt` (next to `seen.txt`). If you have per-language
+seen files in the "wrong" directory from before the fix, **move them into the
+correct subdirectory** — otherwise `mpt batch --lang es` won't find them and
+will re-render videos it has already produced.
+
+If your `seen_file` was `./seen.txt` (at the same level as config.yaml), nothing
+changes.
+
 ---
 
 ## 6. Versions and tags
@@ -223,6 +285,9 @@ quietly running a version you no longer maintain.
 [ ] uv sync in the new repo
 [ ] cp config.example.yaml config.yaml, move your four configs into its sections
 [ ] reconcile langs: file_suffix if pilot and batch disagreed
+[ ] check batch.seen_file is not in a subdirectory with orphaned seen_<suffix>.txt files
+[ ] rename enricher.directory → enricher.videos_dir (if coming from hashtag-enricher)
+[ ] set telegram_prefix if you had per-stage Telegram filters
 [ ] cp .env.example .env, fill in LLM + Telegram credentials
 [ ] cp accounts.example.yaml accounts.yaml, or move your old one next to config.yaml
 [ ] move yt-uploader-ledger.sqlite next to config.yaml

@@ -212,6 +212,10 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
         return 1
 
     seen_dir = (args.seen_dir or settings.seen_dir or Path(".")).resolve()
+
+    # Configure seen.txt rotation threshold from config.yaml.
+    seen.set_rotation_max_bytes(settings.seen_max_mb * 1024 * 1024)
+
     config_dirs = [Path(d) for d in (settings.scan_dirs or [])]
     cli_dirs = [d.resolve() for d in args.dirs]
     all_dirs = config_dirs + cli_dirs

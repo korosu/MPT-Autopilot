@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import cast
 
 from mpt_autopilot import config as shared_config
+from mpt_autopilot.config import warn_cleartext
 from mpt_autopilot.enricher.postprocess import PLATFORM_HARD_LIMITS, platform_hard_limit
 
 SECTION = "enricher"
@@ -79,6 +80,7 @@ class Settings:
         # ── LLM connection ────────────────────────────────────────────────────
         self.api_key: str = _require_env("LLM_API_KEY")
         self.base_url: str = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+        warn_cleartext(self.base_url, "LLM_BASE_URL")
         self.model: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
 
         # ── Platform ──────────────────────────────────────────────────────────

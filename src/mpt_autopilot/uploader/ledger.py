@@ -11,9 +11,21 @@ from pathlib import Path
 
 
 def open_ledger(path: Path) -> sqlite3.Connection:
-    """Open or create the ledger database, ensuring parent directory exists."""
+    """
+    Open or create the ledger database, ensuring parent directory exists.
+
+    Both `mpt upload` and `mpt run` (which calls the uploader stage) write to
+    this database, and a user can run them at the same time. SQLite's defaults
+    are a rollback journal with a 5-second busy timeout, so two concurrent
+    writers raise an unhandled `sqlite3.OperationalError: database is locked`.
+
+    WAL lets readers and writers proceed in parallel, and the 30s timeout means
+    a busy writer waits for the other run's transaction instead of aborting.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS uploads (

@@ -217,13 +217,25 @@ def parse_json_array(raw_text: str) -> list[dict[str, Any]]:
     try:
         result = json.loads(text)
     except json.JSONDecodeError:
-        start = text.find("[")
+        # Fallback: the model wrapped the array in prose. Take the LAST ']' and
+        # walk backwards over every '[' before it, trying each span. Starting
+        # from the last '[' finds the real array first (it is usually at the end)
+        # and skips prose like "[bracket] style" that the old text.find("[") hit
+        # and then aborted on.
         end = text.rfind("]")
-        if start == -1 or end == -1 or end <= start:
+        result = None
+        if end != -1:
+            for start in reversed([m.start() for m in re.finditer(r"\[", text) if m.start() < end]):
+                try:
+                    result = json.loads(text[start : end + 1])
+                    break
+                except json.JSONDecodeError:
+                    continue
+        if not isinstance(result, list):
             raise ValueError(
-                f"LLM returned invalid JSON (no array found)\nFirst 500 chars:\n{text[:500]}"
+                f"LLM returned invalid JSON (no parseable JSON array found)\n"
+                f"First 500 chars:\n{text[:500]}"
             )
-        result = json.loads(text[start : end + 1])
 
     if not isinstance(result, list):
         raise ValueError(f"Expected a JSON array, got {type(result).__name__}")

@@ -38,9 +38,19 @@ from mpt_autopilot.logger import Logger
 # Reused across all calls to avoid per-call TLS handshakes.
 # Read timeout is configurable via LLM_TIMEOUT (seconds) since local/self-hosted
 # backends (e.g. Ollama on CPU) can be far slower than a hosted API.
-_READ_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "60"))
-_CLIENT_TIMEOUT = httpx.Timeout(_READ_TIMEOUT, connect=10.0)
-_client = httpx.Client(timeout=_CLIENT_TIMEOUT)
+# Created lazily so LLM_TIMEOUT is read AFTER config.load() has called
+# load_dotenv() — reading it at module-import time would silently ignore the
+# .env value because this module is imported before configure() runs.
+_client: httpx.Client | None = None
+
+
+def _get_client() -> httpx.Client:
+    global _client
+    if _client is None:
+        timeout = float(os.getenv("LLM_TIMEOUT", "60"))
+        _client = httpx.Client(timeout=httpx.Timeout(timeout, connect=10.0))
+    return _client
+
 
 # ── Retry settings ────────────────────────────────────────────────────────────
 _MAX_RETRIES = 2
@@ -68,13 +78,23 @@ _log: Logger | None = None
 def _get_log() -> Logger:
     global _log
     if _log is None:
-        _log = Logger(settings.log_file, settings.max_log_size)
+        _log = Logger(settings.log_file, settings.max_log_size, name="mpt_autopilot.enricher")
     return _log
+
+
+def _is_printable(ch: str) -> bool:
+    """
+    str.isprintable() alone is too permissive: it returns True for VT (\x0b),
+    FF (\x0c) and CR (\x0d), which are control characters that must not reach
+    an LLM prompt. Whitespace is kept here (a multi-word topic is legitimate)
+    but normalised by the caller if needed.
+    """
+    return ch.isprintable() and ch not in "\x0b\x0c\x0d"
 
 
 def _sanitise_topic(raw: str) -> str:
     """Truncate and strip non-printable characters from a user-supplied topic."""
-    cleaned = "".join(ch for ch in raw if ch.isprintable())
+    cleaned = "".join(ch for ch in raw if _is_printable(ch))
     return cleaned[:_MAX_TOPIC_LEN]
 
 
@@ -122,7 +142,7 @@ def _chat(prompt: str) -> str:
 
     for attempt in range(_MAX_RETRIES + 1):
         try:
-            response = _client.post(url, headers=headers, json=payload)
+            response = _get_client().post(url, headers=headers, json=payload)
         except (httpx.TimeoutException, httpx.ConnectError) as exc:
             # Network-level failure (read timeout, connect timeout, connection
             # refused/reset) — not an HTTP error response, so it wasn't caught
@@ -203,7 +223,12 @@ def _chat(prompt: str) -> str:
             choice = data["choices"][0]
             message = choice["message"]
         except (KeyError, IndexError) as exc:
-            raise ValueError(f"Unexpected API response structure: {data}") from exc
+            # The response body goes to the LOCAL log only. This message flows
+            # into notify.alert() and could otherwise land in Telegram — the
+            # same rule the comments above and below state.
+            body_preview = json.dumps(data, ensure_ascii=False)[:500].replace("\n", " ")
+            _get_log().error(f"Unexpected API response structure — body: {body_preview}")
+            raise ValueError("Unexpected API response structure from the LLM API") from exc
 
         content = message.get("content")
         if content is None:

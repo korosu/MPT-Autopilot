@@ -9,10 +9,13 @@ If the file does not exist, it is created with only the 'hashtags' key.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+_logger = logging.getLogger(__name__)
 
 
 def build_hashtags_block(
@@ -58,6 +61,24 @@ def write_hashtags(
             with open(json_path, encoding="utf-8") as f:
                 existing = json.load(f)
         except (json.JSONDecodeError, OSError):
+            # The file is unparseable. Overwriting it silently would destroy
+            # recoverable content (a truncated write of a previous field is
+            # still readable to a human, and script.json may have held
+            # video_subject / title / description that nothing else records).
+            # Back it up first so the original is never lost.
+            backup = json_path.with_suffix(json_path.suffix + ".bak")
+            try:
+                if backup.exists():
+                    backup.unlink()
+                json_path.replace(backup)
+            except OSError:
+                pass
+            _logger.warning(
+                "sidecar %s was not valid JSON; original saved to %s and "
+                "replaced with hashtags only",
+                json_path,
+                backup,
+            )
             existing = {}
 
     existing["hashtags"] = hashtags_block
@@ -68,6 +89,10 @@ def write_hashtags(
 
     # Atomic write: serialise to a sibling temp file then rename.
     # os.replace() is atomic on POSIX and Win32 (same filesystem).
+    # mkstemp(dir=...) needs the parent to exist — create it defensively so a
+    # first-ever call on a new sidecar (rare but possible in tests) doesn't
+    # crash with FileNotFoundError mid-atomic-write.
+    json_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_fd, tmp_path = tempfile.mkstemp(dir=json_path.parent, suffix=".tmp")
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:

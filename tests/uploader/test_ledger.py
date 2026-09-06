@@ -121,5 +121,42 @@ def test_ledger_marks_moved_after_success(tmp_path, monkeypatch):
     conn.close()
 
 
+def test_ledger_uses_wal_and_busy_timeout(tmp_path):
+    """
+    Two processes write to this ledger: `mpt run` (via the pipeline) and a manual
+    `mpt upload`. SQLite's defaults are a rollback journal with a 5s timeout, so
+    concurrent writers raise an unhandled `OperationalError: database is locked`.
+    WAL plus a 30s busy timeout is what makes the documented parallel scenarios
+    survive.
+    """
+    db = tmp_path / "ledger.sqlite"
+    conn = open_ledger(db)
+    try:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30_000
+    finally:
+        conn.close()
+
+    # Two independent connections to the same file must both be able to write.
+    a = open_ledger(db)
+    b = open_ledger(db)
+    try:
+        for i in range(25):
+            mark_started(a, "acc", f"h-a-{i}", f"a{i}.mp4")
+            mark_uploaded(a, "acc", f"h-a-{i}")
+            mark_started(b, "acc", f"h-b-{i}", f"b{i}.mp4")
+            mark_uploaded(b, "acc", f"h-b-{i}")
+    finally:
+        a.close()
+        b.close()
+
+    check = open_ledger(db)
+    try:
+        count = check.execute("SELECT count(*) FROM uploads").fetchone()[0]
+        assert count == 50
+    finally:
+        check.close()
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

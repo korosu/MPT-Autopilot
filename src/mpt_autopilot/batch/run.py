@@ -60,6 +60,63 @@ def log(msg: str, settings: Settings, *, to_file: bool = True) -> None:
 # ── File handling ─────────────────────────────────────────────────────────────
 
 
+def _task_dir(task_id: object, settings: Settings) -> Path:
+    """
+    Resolve and containment-check the task directory for a task_id.
+
+    task_id is untrusted: it arrives from the MPT API response, and on the
+    crash-recovery path from in_progress.txt (a file we persist ourselves but
+    that outlives the process that wrote it). Both are interpolated into
+    filesystem paths here and in cleanup_task(), which calls shutil.rmtree().
+    Without this check a task_id of ".." resolves to mpt_storage itself and
+    deletes the entire storage tree.
+
+    Raises ValueError on anything that is not a safe single path segment or
+    that would escape mpt_storage/tasks/.
+    """
+    from mpt_autopilot.batch.api import validate_task_id
+
+    safe = validate_task_id(task_id)
+    tasks_root = settings.mpt_storage / "tasks"
+    task_dir = tasks_root / safe
+    if not task_dir.resolve().is_relative_to(tasks_root.resolve()):
+        raise ValueError(
+            f"refusing to use task_id {safe!r}: it resolves to {task_dir}, "
+            f"which is outside {tasks_root}"
+        )
+    return task_dir
+
+
+def _output_dest(output_file: object, settings: Settings) -> tuple[Path, Path]:
+    """
+    Resolve the destination paths for output_file inside settings.output_dir.
+
+    output_file comes from jobs.yaml, which the user edits by hand (the pilot
+    stage sanitises its own output, but a hand-written or hand-imported entry
+    does not get that treatment). Returns (video, script) paths, both
+    guaranteed to stay inside output_dir.
+
+    Raises ValueError on absolute paths, parent references, or anything that
+    resolves outside output_dir — otherwise shutil.copy2() would overwrite
+    whatever the process can write to, including config.yaml or accounts.yaml.
+    """
+    if not isinstance(output_file, str) or not output_file.strip():
+        raise ValueError(f"output_file must be a non-empty string, got {output_file!r}")
+    if Path(output_file).is_absolute():
+        raise ValueError(f"refusing absolute output_file {output_file!r}")
+    if ".." in Path(output_file).parts:
+        raise ValueError(f"refusing output_file with parent reference: {output_file!r}")
+
+    out_dir = settings.output_dir
+    dest_video = (out_dir / output_file).resolve()
+    if not dest_video.parent == out_dir.resolve():
+        raise ValueError(
+            f"refusing output_file {output_file!r}: it resolves to {dest_video}, "
+            f"which is outside {out_dir}"
+        )
+    return dest_video, dest_video.with_suffix(".json")
+
+
 def copy_result(task_data: dict, output_file: str, settings: Settings) -> str:
     """
     Copy the finished video (and script.json if present) to output_dir.
@@ -67,6 +124,7 @@ def copy_result(task_data: dict, output_file: str, settings: Settings) -> str:
     Returns task_id.
     """
     task_id: str = task_data["task_id"]
+    task_dir = _task_dir(task_id, settings)
     storage = settings.mpt_storage
 
     source_video: Path | None = None
@@ -75,20 +133,25 @@ def copy_result(task_data: dict, output_file: str, settings: Settings) -> str:
         video_path = task_data["videos"][0].lstrip("/")
         if video_path:
             candidate = storage / video_path
-            if candidate.exists() and not candidate.is_dir():
+            # The API-reported path is untrusted input, like task_id; a value
+            # containing a parent reference would read from outside mpt_storage.
+            if candidate.resolve().is_relative_to(storage.resolve()) and candidate.is_file():
                 source_video = candidate
                 api_candidate = candidate
                 log(f"  using API path: {api_candidate}", settings)
 
-    fallback = storage / "tasks" / task_id / "final-1.mp4"
+    fallback = task_dir / "final-1.mp4"
     if source_video is None:
         if fallback.exists():
             source_video = fallback
             log(f"  using fallback path: {fallback}", settings)
+            # Absolute path stays in the local log only — Telegram must not carry
+            # filesystem paths (machine layout) or the raw task_id (attacker
+            # influenced from the MPT API response).
             notify.alert(
                 f"Fallback path used for '{output_file}' (task_id={task_id})\n"
                 f"API-reported video path was missing; used the default task "
-                f"directory instead: {fallback}",
+                f"directory tasks/{task_id}/final-1.mp4 instead.",
                 settings,
             )
         else:
@@ -96,9 +159,8 @@ def copy_result(task_data: dict, output_file: str, settings: Settings) -> str:
                 f"Video not found.\n  API path: {api_candidate}\n  Fallback: {fallback}"
             )
 
-    dest_video = settings.output_dir / output_file
-    dest_script = settings.output_dir / Path(output_file).with_suffix(".json")
-    source_script = storage / "tasks" / task_id / "script.json"
+    dest_video, dest_script = _output_dest(output_file, settings)
+    source_script = task_dir / "script.json"
 
     shutil.copy2(source_video, dest_video)
     log(f"  saved: {dest_video}", settings)
@@ -110,10 +172,11 @@ def copy_result(task_data: dict, output_file: str, settings: Settings) -> str:
         log(f"  note: no script.json found for {task_id}", settings)
 
     # Copy subtitle files if present
-    task_dir = storage / "tasks" / task_id
     for pattern in ["*.srt", "*.ass"]:
         for sub_file in task_dir.glob(pattern):
-            dest_sub = settings.output_dir / sub_file.name
+            dest_sub = (settings.output_dir / sub_file.name).resolve()
+            if not dest_sub.parent == settings.output_dir.resolve():
+                raise ValueError(f"refusing to copy subtitle outside output_dir: {sub_file}")
             shutil.copy2(sub_file, dest_sub)
             log(f"  saved: {dest_sub}", settings)
 
@@ -121,7 +184,8 @@ def copy_result(task_data: dict, output_file: str, settings: Settings) -> str:
 
 
 def cleanup_task(task_id: str, settings: Settings) -> None:
-    task_dir = settings.mpt_storage / "tasks" / task_id
+    """Remove a finished task's directory. Refuses ids that escape mpt_storage."""
+    task_dir = _task_dir(task_id, settings)
     if task_dir.exists():
         shutil.rmtree(task_dir)
         log(f"  removed task dir: {task_id}", settings)
@@ -219,7 +283,19 @@ def run(
     in_progress_path = seen_file.with_name(seen_file.stem + ".in_progress.txt")
 
     # Resume in-progress tasks from a previous interrupted run
-    pending = state.list_all(in_progress_path)
+    try:
+        pending = state.list_all(in_progress_path)
+    except ValueError as exc:
+        # A corrupt line in in_progress.txt would otherwise surface as a bare
+        # traceback. It means a submitted job's task_id is unrecoverable, so
+        # the run must stop — resuming anything else could double-submit.
+        log(f"ERROR: {exc}", settings)
+        notify.alert(
+            f"Batch aborted before start: {in_progress_path.name} is corrupt.\n"
+            f"{exc}\nNo jobs were submitted.",
+            settings,
+        )
+        return
     if pending:
         log(f"{len(pending)} in-progress task(s) found — attempting resume", settings)
         for entry in pending:
@@ -343,16 +419,11 @@ def run(
             )
             return
 
-    settings.output_dir.mkdir(parents=True, exist_ok=True)
-    start_time = time.time()
-    notify.alert(
-        f"Batch started: {jobs_path.name}\n"
-        f"Total jobs: {len(jobs)}  To run: {to_run_count}  "
-        f"Already done: {already_done_count}  Disabled: {disabled_count}",
-        settings,
-    )
-
     # ── Lock cleanup on Ctrl+C / SIGTERM / exceptions ──
+    # Installed before anything that can raise after the marker was created:
+    # an exception between lock creation and the try/finally below (e.g. a
+    # PermissionError from output_dir.mkdir) would otherwise leave the marker
+    # behind until the 30-minute stale timeout.
     _lock_cleaned_up = False
 
     def _cleanup_lock() -> None:
@@ -373,6 +444,15 @@ def run(
         _prev_sigterm = None  # ponytail: Windows has no SIGTERM
 
     try:
+        settings.output_dir.mkdir(parents=True, exist_ok=True)
+        start_time = time.time()
+        notify.alert(
+            f"Batch started: {jobs_path.name}\n"
+            f"Total jobs: {len(jobs)}  To run: {to_run_count}  "
+            f"Already done: {already_done_count}  Disabled: {disabled_count}",
+            settings,
+        )
+
         ok: list[str] = []
         failed: list[str] = []
         skipped: list[str] = []
@@ -667,6 +747,11 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
     except (FileNotFoundError, KeyError, ConfigError) as e:
         print(f"[ERROR] {e}")
         return 1
+
+    # Configure seen.txt rotation threshold from config.yaml.
+    from mpt_autopilot import seen as seen_registry
+
+    seen_registry.set_rotation_max_bytes(settings.seen_max_mb * 1024 * 1024)
 
     cfg_dir = shared_config.resolve_path(config_path).resolve().parent
 

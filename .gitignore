@@ -18,6 +18,9 @@ seen.db
 # Narrower than *.lock on purpose: uv.lock must stay tracked.
 *.txt.lock
 *.yaml.lock
+# the batch stage locks <seen_file>.stem + ".lock" (see batch/run.py), which is
+# "seen.lock" / "seen_en.lock" — not covered by the two patterns above.
+seen*.lock
 
 # generated output
 exports/
@@ -25,8 +28,10 @@ exports_*/
 logs/
 meta/
 
-# uploader ledger
+# uploader ledger. WAL mode also creates -wal and -shm sidecars while it runs.
 *.sqlite
+*.sqlite-wal
+*.sqlite-shm
 
 # python
 __pycache__/
@@ -40,6 +45,11 @@ build/
 .uv-cache/
 .ruff_cache/
 .pytest_cache/
+# pytest drops these into cwd when basetemp can't be created
+pytest-cache-files-*/
+# agent scratch dirs
+.tmptest*/
+tmptest/
 
 # editors / OS
 .idea/
@@ -48,3 +58,7 @@ build/
 # generated video files (can be large)
 *.mp4
 *.log
+
+# AI-agent instructions (local, user-specific)
+CLAUDE.md
+AGENTS.md

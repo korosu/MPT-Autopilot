@@ -29,6 +29,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import math
 import re
 import sys
@@ -45,45 +46,50 @@ from mpt_autopilot.pilot.settings import LangSettings
 from mpt_autopilot.pilot.settings import load as load_settings
 from mpt_autopilot.seen import load_ordered as seen_load_ordered
 
+_log = logging.getLogger(__name__)
+
 # ponytail: calibration for natural gemini TTS speed (~143 words/min).
 # voice_rate does NOT affect duration for gemini voices (see MPT voice.py:1813).
 # On voice change: move to config.yaml langs.<code>.words_per_second.
 WORDS_PER_SECOND = 2.39
 
 
+def _parse_positive_int(token: str, part: str, s: str) -> int:
+    """
+    Parse one duration_range token into a positive int, with a diagnostic that
+    names the failing part and shows the original input.
+    """
+    try:
+        value = int(token)
+    except ValueError:
+        raise ValueError(f"duration_range '{s}': {part} ({token!r}) is not an integer") from None
+    if value <= 0:
+        raise ValueError(f"duration_range '{s}' has non-positive {part} value")
+    return value
+
+
 def parse_duration_range(s: str | None) -> tuple[int, int | None] | None:
-    """Parse duration_range string into (min_seconds, max_seconds_or_none)."""
+    """
+    Parse duration_range string into (min_seconds, max_seconds_or_none).
+
+    Format validation raises its own messages, and they are deliberately not
+    swallowed: the outer except below only catches int() conversion failures.
+    Wrapping the whole block in `except ValueError` used to replace
+    "has min (60) greater than max (30)" with a generic "invalid: expected
+    'MIN-MAX'", so a user could not tell which constraint they had broken.
+    """
     if not s:
         return None
     s = s.strip()
-    # "min+" format (open-ended upper bound)
     if s.endswith("+"):
-        try:
-            lo = int(s[:-1])
-            if lo <= 0:
-                raise ValueError(f"duration_range '{s}' has non-positive min value")
-            return (lo, None)
-        except ValueError:
-            raise ValueError(
-                f"duration_range '{s}' invalid: expected format 'N+' where N is a positive integer"
-            )
-    # "min-max" format
+        return (_parse_positive_int(s[:-1], "min value", s), None)
     if "-" in s:
-        parts = s.split("-", 1)
-        try:
-            lo, hi = int(parts[0]), int(parts[1])
-            if lo <= 0:
-                raise ValueError(f"duration_range '{s}' has non-positive min value")
-            if hi <= 0:
-                raise ValueError(f"duration_range '{s}' has non-positive max value")
-            if lo > hi:
-                raise ValueError(f"duration_range '{s}' has min ({lo}) greater than max ({hi})")
-            return (lo, hi)
-        except ValueError:
-            raise ValueError(
-                f"duration_range '{s}' invalid: expected format 'MIN-MAX' where both "
-                f"are positive integers"
-            )
+        left, right = s.split("-", 1)
+        lo = _parse_positive_int(left, "min value", s)
+        hi = _parse_positive_int(right, "max value", s)
+        if lo > hi:
+            raise ValueError(f"duration_range '{s}' has min ({lo}) greater than max ({hi})")
+        return (lo, hi)
     raise ValueError(f"duration_range '{s}' invalid: expected 'MIN-MAX' or 'MIN+' format")
 
 
@@ -350,12 +356,12 @@ def _deduplicate(
     result = []
     for job in raw_jobs:
         if not isinstance(job, dict):
-            print(f"  [skip] malformed job (not an object): {job!r}")
+            _log.warning("malformed job (not an object): %r", job)
             continue
 
         output_file = job.get("output_file", "")
         if not output_file:
-            print(f"  [skip] job missing output_file: {job.get('name', '?')}")
+            _log.warning("job missing output_file: %r", job.get("name", "?"))
             continue
 
         try:
@@ -371,13 +377,13 @@ def _deduplicate(
                 min_subject_chars=min_subject_chars,
             )
         except Exception as e:
-            print(f"  [skip] malformed job {job.get('name', '?')!r}: {e}")
+            _log.warning("malformed job %r: %s", job.get("name", "?"), e)
             continue
 
         output_file = clean["output_file"]  # already lowercased by _normalise
 
         if output_file in known:
-            print(f"  [skip duplicate] {output_file}")
+            _log.info("skip duplicate: %s", output_file)
             continue
 
         if not clean.get("name") or not isinstance(clean.get("name"), str):
