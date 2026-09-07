@@ -620,10 +620,6 @@ def run(
             except ValueError as e:
                 json_parse_attempts += 1
                 if json_parse_attempts >= 2:
-                    notify_alert(
-                        f"[{lang}] FAILED: LLM invalid JSON after 2 retries",
-                        settings,
-                    )
                     raise
                 print(f"  [retry] LLM returned invalid JSON ({e}), retrying...")
                 time.sleep(1)

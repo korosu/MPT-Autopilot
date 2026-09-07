@@ -21,7 +21,7 @@ import traceback
 from pathlib import Path
 
 from mpt_autopilot.config import ConfigError
-from mpt_autopilot.enricher.llm import detect_and_generate, generate_hashtags
+from mpt_autopilot.enricher.llm import close_client, detect_and_generate, generate_hashtags
 from mpt_autopilot.enricher.reader import resolve_meta
 from mpt_autopilot.enricher.settings import configure, settings, validate_tag_budget
 from mpt_autopilot.enricher.writer import build_hashtags_block, write_hashtags
@@ -314,14 +314,17 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
     # ── Process ───────────────────────────────────────────────────────────────
     counts: dict[str, int] = {"ok": 0, "skipped": 0, "error": 0}
 
-    for mp4_path in mp4_files:
-        result = process_file(
-            mp4_path,
-            lang_override=lang_override,
-            force=force,
-            platform_override=platform_override,
-        )
-        counts[result] += 1
+    try:
+        for mp4_path in mp4_files:
+            result = process_file(
+                mp4_path,
+                lang_override=lang_override,
+                force=force,
+                platform_override=platform_override,
+            )
+            counts[result] += 1
+    finally:
+        close_client()
 
     # ── Summary ───────────────────────────────────────────────────────────────
     log.info("=" * 55)

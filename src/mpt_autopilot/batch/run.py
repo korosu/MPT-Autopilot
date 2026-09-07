@@ -275,7 +275,7 @@ def run_job(
 
 def run(
     jobs_path: Path, settings: Settings, *, dry_run: bool, seen_override: Path | None = None
-) -> None:
+) -> int:
     with open(jobs_path, encoding="utf-8") as f:
         jobs_cfg = yaml.safe_load(f) or {}
 
@@ -299,7 +299,7 @@ def run(
             f"{exc}\nNo jobs were submitted.",
             settings,
         )
-        return
+        return 1
     if pending:
         log(f"{len(pending)} in-progress task(s) found — attempting resume", settings)
         for entry in pending:
@@ -329,6 +329,10 @@ def run(
                     settings,
                 )
                 state.remove(in_progress_path, output_file)
+                try:
+                    cleanup_task(task_id, settings)
+                except Exception:
+                    pass
 
     # Warn if defaults section is missing critical fields
     if not defaults:
@@ -382,7 +386,7 @@ def run(
                 print(f"  run       {name}")
             except KeyError as exc:
                 print(f"  error     {name} - {exc}")
-        return
+        return 0
 
     # ── Pre-flight checks ───────────────────────────────────────────────────
     if not health_check(settings):
@@ -392,7 +396,7 @@ def run(
             "No jobs were submitted.",
             settings,
         )
-        return
+        return 1
 
     lock_path = seen_file.with_name(seen_file.stem + ".lock")
     _lock_timeout = 1800  # ponytail: 30 min stale lock timeout
@@ -414,14 +418,14 @@ def run(
                     f"If not, delete it and re-run.",
                     settings,
                 )
-                return
+                return 1
         except OSError:
             log(
                 f"ERROR: Lock file exists at {lock_path} and cannot be read. "
                 f"Delete manually if stale.",
                 settings,
             )
-            return
+            return 1
 
     # ── Lock cleanup on Ctrl+C / SIGTERM / exceptions ──
     # Installed before anything that can raise after the marker was created:
@@ -519,7 +523,7 @@ def run(
         if _prev_sigterm is not None:
             signal.signal(signal.SIGTERM, _prev_sigterm)
 
-    _print_summary(ok, failed, skipped, settings, started_at=start_time)
+    return _print_summary(ok, failed, skipped, settings, started_at=start_time)
 
 
 def _format_duration(seconds: float) -> str:
@@ -540,7 +544,7 @@ def _print_summary(
     settings: Settings,
     *,
     started_at: float,
-) -> None:
+) -> int:
     duration = _format_duration(time.time() - started_at)
 
     log("=" * 50, settings)
@@ -563,6 +567,8 @@ def _print_summary(
     if failed:
         lines.append("Failed jobs: " + ", ".join(failed))
     notify.alert("\n".join(lines), settings)
+
+    return 1 if failed else 0
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -829,8 +835,7 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
         print(f"        Copy jobs.example.yaml to {jobs_path} and add your video topics.")
         return 1
 
-    run(jobs_path, settings, dry_run=args.dry_run, seen_override=seen_override)
-    return 0
+    return run(jobs_path, settings, dry_run=args.dry_run, seen_override=seen_override)
 
 
 def main() -> None:

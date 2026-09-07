@@ -19,6 +19,7 @@ import json
 import re
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -47,6 +48,31 @@ _REQUEST_TIMEOUT = 480  # seconds
 
 def _token_budget(count: int) -> int:
     return max(_MIN_TOKENS, count * _TOKENS_PER_JOB + _TOKENS_OVERHEAD)
+
+
+def _check_https(url: str) -> None:
+    """
+    Runtime defense-in-depth: warn if the LLM endpoint is plain HTTP
+    and not a loopback/local address. warn_cleartext() already does this
+    at config-load time, but this catches a config reload or env override
+    that puts a remote host on cleartext.
+    """
+    parsed = urlparse(url)
+    host = parsed.hostname
+    if not host or parsed.scheme != "http":
+        return
+    if host in ("localhost", "127.0.0.1", "::1") or host.startswith("127."):
+        return
+    if host.endswith(".localhost"):
+        return
+    import logging
+
+    logging.getLogger(__name__).warning(
+        "LLM endpoint uses plain HTTP (not HTTPS): %s — "
+        "API key and prompts travel unencrypted. Use https:// unless "
+        "this is localhost.",
+        url,
+    )
 
 
 def call_llm(system: str, user: str, settings: Settings, count: int) -> str:
@@ -116,6 +142,7 @@ def _post_with_retry(url: str, payload: dict, headers: dict) -> httpx.Response:
 
 
 def _call_anthropic(system: str, user: str, s: Settings, max_tokens: int) -> str:
+    _check_https(_anthropic_base(s.base_url))
     url = f"{_anthropic_base(s.base_url)}/v1/messages"
     headers = {
         "x-api-key": s.api_key,
@@ -143,6 +170,7 @@ def _call_anthropic(system: str, user: str, s: Settings, max_tokens: int) -> str
 
 
 def _call_openai_compat(system: str, user: str, s: Settings, max_tokens: int) -> str:
+    _check_https(s.base_url)
     url = f"{s.base_url}/chat/completions"
     headers = {
         "Authorization": f"Bearer {s.api_key}",

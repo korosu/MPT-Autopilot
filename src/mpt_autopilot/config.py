@@ -155,6 +155,22 @@ class Config:
             out[str(code)] = merged
         return out
 
+    def suffix_dir(self, base: Path, lang_code: str) -> Path:
+        """
+        Return the language-suffixed directory for a base path.
+
+        For a language with file_suffix "_es" and base Path("exports"):
+            → Path("exports_es")
+        For the default (empty suffix): returns base unchanged.
+
+        This is the single source of truth for suffix-based directory
+        derivation, used by pipeline and batch so they can never drift apart.
+        """
+        suffix = str(self.langs()[lang_code]["file_suffix"])
+        if not suffix:
+            return base
+        return base.parent / f"{base.name}{suffix}"
+
 
 # ── loading ───────────────────────────────────────────────────────────────────
 

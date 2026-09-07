@@ -14,6 +14,7 @@ import logging
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Any
 
 
 class Logger:
@@ -61,14 +62,17 @@ class Logger:
         err_h.setLevel(logging.ERROR)
         self._logger.addHandler(err_h)
 
-    def info(self, msg: str) -> None:
-        self._logger.info(msg)
+    def info(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        self._logger.info(msg, *args, **kwargs)
 
-    def warn(self, msg: str) -> None:
-        self._logger.warning(msg)
+    def warn(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        self._logger.warning(msg, *args, **kwargs)
 
-    def error(self, msg: str) -> None:
-        self._logger.error(msg)
+    def warning(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        self._logger.warning(msg, *args, **kwargs)
+
+    def error(self, msg: str, *args: Any, **kwargs: Any) -> None:
+        self._logger.error(msg, *args, **kwargs)
 
 
 class _BelowError(logging.Filter):

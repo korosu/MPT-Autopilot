@@ -85,7 +85,8 @@ def _apply_tags_placement(existing_tags: list[str], sidecar_tags: list[str]) -> 
 
     - Strips leading '#' from each sidecar tag (idempotent).
     - Merges with existing tags (existing first), case-insensitive dedup.
-    - Trims to 500-char total budget (YouTube limit).
+    - Trims to 500-char total budget including commas (YouTube Data API
+      joins tags with commas, so the actual payload must leave room for them).
     """
     stripped = [t[1:] if t.startswith("#") else t for t in sidecar_tags]
     result = list(existing_tags)
@@ -94,13 +95,15 @@ def _apply_tags_placement(existing_tags: list[str], sidecar_tags: list[str]) -> 
         if t.lower() not in seen:
             result.append(t)
             seen.add(t.lower())
-    # Trim to 500-char budget
-    trimmed = []
+    # Trim to 500-char budget including commas (YouTube joins tags with ',')
+    trimmed: list[str] = []
     total_len = 0
-    for t in result:
-        if total_len + len(t) <= 500:
+    for i, t in enumerate(result):
+        # Account for the comma separator after each tag except the last
+        tag_cost = len(t) + (0 if i == 0 else 1)
+        if total_len + tag_cost <= 500:
             trimmed.append(t)
-            total_len += len(t)
+            total_len += tag_cost
         else:
             break
     return trimmed

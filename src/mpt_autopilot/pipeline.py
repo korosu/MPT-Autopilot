@@ -181,15 +181,12 @@ def account_for(cfg: shared_config.Config, lang: str) -> str:
 def exports_dir_for(cfg: shared_config.Config, lang: str) -> Path:
     """
     Where `batch` writes this language's videos, and therefore where `enrich`
-    reads them. Mirrors batch's own suffix derivation.
+    reads them. Delegates to Config.suffix_dir() for a single source of truth.
     """
     batch_sec = cfg.section("batch")
-    base = batch_sec.get("output_dir") or (cfg.paths().get("exports_dir") or "./exports")
-    resolved = cfg.resolve(str(base))
-    suffix = str(cfg.langs()[lang]["file_suffix"])
-    if not suffix:
-        return resolved
-    return resolved.parent / f"{resolved.name}{suffix}"
+    base_str = batch_sec.get("output_dir") or (cfg.paths().get("exports_dir") or "./exports")
+    base = cfg.resolve(str(base_str))
+    return cfg.suffix_dir(base, lang)
 
 
 # ── Stage invocations ─────────────────────────────────────────────────────────

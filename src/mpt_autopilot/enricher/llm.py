@@ -23,6 +23,7 @@ import json
 import os
 import re
 import time
+from urllib.parse import urlparse
 
 import httpx
 
@@ -50,6 +51,15 @@ def _get_client() -> httpx.Client:
         timeout = float(os.getenv("LLM_TIMEOUT", "60"))
         _client = httpx.Client(timeout=httpx.Timeout(timeout, connect=10.0))
     return _client
+
+
+def close_client() -> None:
+    """Close the shared httpx.Client. Called at end of a pipeline run to
+    release connection pool resources cleanly."""
+    global _client
+    if _client is not None:
+        _client.close()
+        _client = None
 
 
 # ── Retry settings ────────────────────────────────────────────────────────────
@@ -98,6 +108,28 @@ def _sanitise_topic(raw: str) -> str:
     return cleaned[:_MAX_TOPIC_LEN]
 
 
+def _check_https(url: str) -> None:
+    """
+    Runtime defense-in-depth: warn if an LLM endpoint uses plain HTTP
+    with a non-loopback address. Complements the config-load-time
+    warn_cleartext() by catching runtime overrides or env substitutions.
+    """
+    parsed = urlparse(url)
+    host = parsed.hostname
+    if not host or parsed.scheme != "http":
+        return
+    if host == "localhost" or host.endswith(".localhost"):
+        return
+    if host == "0.0.0.0" or host.startswith("127.") or host == "::1":
+        return
+    _get_log().warning(
+        "LLM endpoint uses plain HTTP (not HTTPS): %s — "
+        "API key and prompts travel unencrypted. Use https:// unless "
+        "this is localhost.",
+        url,
+    )
+
+
 # ── Core HTTP helper ──────────────────────────────────────────────────────────
 
 
@@ -114,6 +146,7 @@ def _chat(prompt: str) -> str:
         these happen when the request reaches the transport layer but no
         response comes back in time, e.g. a slow/overloaded LLM backend.
     """
+    _check_https(settings.base_url)
     url = f"{settings.base_url}/chat/completions"
     headers = {
         "Authorization": f"Bearer {settings.api_key}",

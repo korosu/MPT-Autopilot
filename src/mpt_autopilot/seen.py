@@ -137,31 +137,76 @@ def contains(path: Path, output_file: str) -> bool:
 # ── Rotation ───────────────────────────────────────────────────────────────────
 
 
+def _do_rotate(entries: list[str]) -> list[str] | None:
+    """
+    Compute which entries to keep to fit within the rotation limit.
+    Returns kept entries, or None if no rotation needed.
+    Pure computation — no file I/O.
+    """
+    if len(entries) <= 1:
+        return None
+    total_size = sum(len(e) + 1 for e in entries)
+    if total_size <= _rotation_max_bytes:
+        return None
+    # Trim oldest entries until the remaining ones fit
+    for n in range(len(entries), 0, -1):
+        candidate = entries[-n:]
+        approx_size = sum(len(e) + 1 for e in candidate)
+        if approx_size <= _rotation_max_bytes:
+            return candidate
+    return None
+
+
+def _perform_rotation(path: Path, entries: list[str]) -> None:
+    """
+    Atomically write rotated entries to disk. Caller must hold file_lock(path).
+
+    Used by add()/add_many() which already hold the lock — avoids
+    re-entrant deadlock that would occur if they called rotate() directly.
+    """
+    kept = _do_rotate(entries)
+    if kept is None or len(kept) == len(entries):
+        return
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix="." + path.name + ".")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(kept) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def rotate(path: Path) -> None:
     """
     If the file exceeds `_rotation_max_bytes`, trim the oldest entries until it
-    fits. The lock is held for the entire read-modify-write so a concurrent
-    writer never observes a half-written file. The in-memory cache is updated to
-    match the new on-disk content.
+    fits. The lock is held for the entire read-trim-write so a concurrent
+    writer never observes a half-written file, and any entries appended
+    between this call and the read are included in the decision.
+    The in-memory cache is updated to match the new on-disk content.
 
     A no-op when the file is under the limit, has no entries, or does not exist.
     """
     if not path.exists() or path.stat().st_size <= _rotation_max_bytes:
         return
-    entries = _read_entries(path)
-    if len(entries) <= 1:
-        return
-    kept: list[str] | None = None
-    for n in range(1, len(entries) + 1):
-        candidate = entries[-n:]
-        # Estimate on-disk size: newline-separated entries + trailing newline
-        approx_size = sum(len(e) + 1 for e in candidate)
-        if approx_size <= _rotation_max_bytes:
-            kept = candidate
-            break
-    if kept is None or len(kept) == len(entries):
-        return
     with file_lock(path):
+        entries = _read_entries(path)
+        if len(entries) <= 1:
+            return
+        kept: list[str] | None = None
+        for n in range(1, len(entries) + 1):
+            candidate = entries[-n:]
+            approx_size = sum(len(e) + 1 for e in candidate)
+            if approx_size <= _rotation_max_bytes:
+                kept = candidate
+                break
+        if kept is None or len(kept) == len(entries):
+            return
         fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -184,6 +229,23 @@ def rotate(path: Path) -> None:
         path.stat().st_size,
         _rotation_max_bytes // (1024 * 1024),
     )
+
+
+def _write_entries(path: Path, entries: list[str]) -> None:
+    """Atomically write entries to path. Caller must hold file_lock(path)."""
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix="." + path.name + ".")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(entries) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # ── Writing ────────────────────────────────────────────────────────────────────
@@ -228,7 +290,7 @@ def add_many(path: Path, output_files: list[str]) -> None:
             if name not in entries:
                 entries.append(name)
         _cache[key] = (*_fingerprint(path), entries)
-        rotate(path)
+        _perform_rotation(path, entries)
 
 
 def list_all(path: Path) -> list[str]:
