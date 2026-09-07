@@ -186,7 +186,6 @@ Optional Telegram alerts report each run's outcome — set `TELEGRAM_TOKEN` and
 | [docs/enricher.md](docs/enricher.md) | hashtag generation, prompts, platform limits, `mpt enrich` |
 | [docs/uploader.md](docs/uploader.md) | accounts, sidecars, the ledger, `mpt upload` |
 | [docs/pipeline.md](docs/pipeline.md) | `mpt run` — stage selection, failure handling, scheduling |
-| [docs/migration.md](docs/migration.md) | moving from the four separate tools |
 
 ## Development
 
