@@ -45,6 +45,7 @@ def make_settings(**overrides: Any) -> Settings:
         langs={},
         jobs_dir=None,
         seen_dir=None,
+        seen_max_mb=64,
     )
     base.update(overrides)
     return Settings(**base)

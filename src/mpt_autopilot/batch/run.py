@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import signal
 import sys
@@ -102,7 +103,10 @@ def _output_dest(output_file: object, settings: Settings) -> tuple[Path, Path]:
     """
     if not isinstance(output_file, str) or not output_file.strip():
         raise ValueError(f"output_file must be a non-empty string, got {output_file!r}")
-    if Path(output_file).is_absolute():
+    # Normalise backslashes so path-traversal checks work cross-platform
+    # (a Windows-style "..\\.." should be caught even when running on Linux).
+    output_file = output_file.replace("\\", "/")
+    if Path(output_file).is_absolute() or re.match(r"^[A-Za-z]:/", output_file):
         raise ValueError(f"refusing absolute output_file {output_file!r}")
     if ".." in Path(output_file).parts:
         raise ValueError(f"refusing output_file with parent reference: {output_file!r}")

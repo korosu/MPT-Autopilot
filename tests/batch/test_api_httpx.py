@@ -84,11 +84,12 @@ def test_submit_job_raises_runtime_error_on_http_status_error():
 
 
 def test_submit_job_raises_key_error_on_bad_json():
-    """A KeyError from parsing the response should NOT be masked as HTTPError.
+    """A KeyError from parsing the response is wrapped as RuntimeError with context.
 
-    This is the regression test for the original `except Exception` bug:
-    `r.json()["data"]["task_id"]` raising KeyError would be caught by
-    `except Exception` and swallowed. Now it propagates as-is.
+    The original `except Exception` bug swallowed KeyError silently. Now it is
+    caught explicitly and re-raised as RuntimeError (with the original KeyError
+    chained via `from exc`), so the caller gets a clear message instead of a
+    bare key name.
     """
     from mpt_autopilot.batch.api import submit_job
 
@@ -98,7 +99,7 @@ def test_submit_job_raises_key_error_on_bad_json():
     mock_response.json.return_value = {"no_data_key": True}
     with patch("mpt_autopilot.batch.api.httpx.post") as mock_post:
         mock_post.return_value = mock_response
-        with pytest.raises(KeyError, match="data"):
+        with pytest.raises(RuntimeError, match="no task_id"):
             submit_job({"test": "data"}, settings)
 
 

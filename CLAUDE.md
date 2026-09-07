@@ -74,16 +74,17 @@ in `pyproject.toml` exactly once:
 
 ## Quality gates (mandatory on every code submission)
 
-After any change to tracked project files, run **all three** commands and
+After any change to tracked project files, run **all four** commands and
 confirm each exits 0 before submitting:
 
 ```bash
 uv run ruff check
 uv run ruff format
+uv run pytest
 uv run pyright
 ```
 
-All three must pass. Fix every issue before considering the work done.
+All four must pass. Fix every issue before considering the work done.
 
 ## Conventions
 
