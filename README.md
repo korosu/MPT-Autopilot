@@ -56,9 +56,6 @@ cp jobs.example.yaml jobs.yaml
 cp accounts.example.yaml accounts.yaml     # only for the upload stage
 ```
 
-Then edit `config.yaml` (paths, languages, stage settings) and `.env` (API keys).
-Both copies are gitignored, so `git pull` will never overwrite them.
-
 Check the wiring before anything runs for real:
 
 ```bash
