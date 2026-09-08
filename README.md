@@ -55,7 +55,7 @@ uv sync
 
 cp config.example.yaml config.yaml
 cp .env.example .env
-cp jobs.example.yaml jobs.yaml
+cp jobs/jobs.example.yaml jobs.yaml
 cp accounts.example.yaml accounts.yaml     # only for the upload stage
 ```
 

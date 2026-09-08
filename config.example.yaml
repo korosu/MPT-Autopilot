@@ -6,7 +6,7 @@
 #     cp config.example.yaml config.yaml
 #     cp .env.example .env                # secrets go in .env, never here
 #     cp accounts.example.yaml accounts.yaml
-#     cp jobs.example.yaml jobs.yaml
+#     cp jobs/jobs.example.yaml jobs.yaml
 #
 # config.yaml, .env, and accounts.yaml are gitignored, so `git pull` will never
 # overwrite your settings.
@@ -155,8 +155,9 @@ pilot:
 # Renders pending jobs through the MoneyPrinterTurbo API.
 # =============================================================================
 batch:
-  # MoneyPrinterTurbo API endpoint (required).
-  api_url: "http://127.0.0.1:8080"
+  # MoneyPrinterTurbo API endpoint (required). `0.0.0.0` means "all interfaces"
+  # — replace it with the real IP or hostname when MPT runs on a different host.
+  api_url: "http://0.0.0.0:8080"
 
   # MoneyPrinterTurbo's own directories (required). These are paths on the
   # machine running MoneyPrinterTurbo, as it sees them.

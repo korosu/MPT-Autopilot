@@ -47,7 +47,7 @@ cd mpt-autopilot
 uv sync
 cp .env.example .env
 cp config.example.yaml config.yaml
-cp jobs.example.yaml jobs.yaml
+cp jobs/jobs.example.yaml jobs.yaml
 ```
 
 Telegram alerts are optional — open `.env` and leave both keys empty to disable them, or fill in:
@@ -230,7 +230,7 @@ that one job:
     retry_delay_seconds: 300
 ```
 
-[`jobs.example.yaml`](../jobs.example.yaml) lists every field (script/subject, video assembly, subtitles, background music, rendering) with the values MoneyPrinterTurbo itself defaults to, so you have one place to see everything that's tunable.
+[`jobs/jobs.example.yaml`](../jobs/jobs.example.yaml) lists every field (script/subject, video assembly, subtitles, background music, rendering) with the values MoneyPrinterTurbo itself defaults to, so you have one place to see everything that's tunable.
 
 ---
 

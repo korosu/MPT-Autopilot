@@ -832,7 +832,7 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
 
     if not jobs_path.exists():
         print(f"[ERROR] Jobs file not found: {jobs_path}")
-        print(f"        Copy jobs.example.yaml to {jobs_path} and add your video topics.")
+        print(f"        Copy jobs/jobs.example.yaml to {jobs_path.name} and add your video topics.")
         return 1
 
     return run(jobs_path, settings, dry_run=args.dry_run, seen_override=seen_override)

@@ -1,4 +1,4 @@
-# Copy this file to jobs.yaml (or jobs_en.yaml, jobs_es.yaml, etc.) and edit.
+# Copy this file to jobs.yaml and edit.
 # jobs.yaml is gitignored — your video topics stay private.
 #
 # `mpt refill` appends generated jobs here; `mpt batch` renders the pending ones.

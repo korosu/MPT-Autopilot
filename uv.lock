@@ -103,7 +103,7 @@ wheels = [
 
 [[package]]
 name = "mpt-autopilot"
-version = "1.0.3"
+version = "1.0.4"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },

@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -231,11 +231,34 @@ def _call_openai_compat(system: str, user: str, s: Settings, max_tokens: int) ->
     return content
 
 
+def _strip_trailing_artifact(value: str) -> str:
+    """Remove a stray ')' and a trailing autocomplete ',' appended by the model."""
+    value = value.rstrip()
+    if value.endswith(",)") or value.endswith("])"):
+        value = value[:-1].rstrip()
+    elif value.endswith(","):
+        value = value[:-1].rstrip()
+    return value
+
+
+def _normalise_json_item(item: object) -> Any:
+    """Recursively strip trailing artefacts from leaf strings in a parsed JSON value."""
+    if isinstance(item, str):
+        return _strip_trailing_artifact(item)
+    if isinstance(item, dict):
+        return {k: _normalise_json_item(v) for k, v in item.items()}
+    if isinstance(item, list):
+        return [_normalise_json_item(v) for v in item]
+    return item
+
+
 def parse_json_array(raw_text: str) -> list[dict[str, Any]]:
     """
     Parse the LLM response as a JSON array.
-    Strips markdown fences if the model added them despite instructions.
-    Falls back to extracting the outermost [ ... ] if wrapped in prose.
+
+    Strips markdown fences and trailing autocomplete artefacts (a stray ``)``
+    or a trailing ``,`` after the closing bracket) that some providers emit
+    when the model restarts its own completion.
     """
     text = raw_text.strip()
     text = re.sub(r"^```json\s*", "", text)
@@ -245,27 +268,15 @@ def parse_json_array(raw_text: str) -> list[dict[str, Any]]:
     try:
         result = json.loads(text)
     except json.JSONDecodeError:
-        # Fallback: the model wrapped the array in prose. Take the LAST ']' and
-        # walk backwards over every '[' before it, trying each span. Starting
-        # from the last '[' finds the real array first (it is usually at the end)
-        # and skips prose like "[bracket] style" that the old text.find("[") hit
-        # and then aborted on.
-        end = text.rfind("]")
-        result = None
-        if end != -1:
-            for start in reversed([m.start() for m in re.finditer(r"\[", text) if m.start() < end]):
-                try:
-                    result = json.loads(text[start : end + 1])
-                    break
-                except json.JSONDecodeError:
-                    continue
-        if not isinstance(result, list):
-            raise ValueError(
-                f"LLM returned invalid JSON (no parseable JSON array found)\n"
-                f"First 500 chars:\n{text[:500]}"
-            )
+        raise ValueError(
+            f"LLM returned invalid JSON (could not parse JSON array)\n"
+            f"First 500 chars:\n{text[:500]}"
+        )
 
     if not isinstance(result, list):
-        raise ValueError(f"Expected a JSON array, got {type(result).__name__}")
+        raise ValueError(
+            f"LLM returned invalid JSON (expected array, got {type(result).__name__})\n"
+            f"First 500 chars:\n{text[:500]}"
+        )
 
-    return result
+    return cast("list[dict[str, Any]]", [_normalise_json_item(item) for item in result])
