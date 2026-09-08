@@ -1,3 +1,6 @@
+![Python Version](https://img.shields.io/badge/python-%3E%3D3.10-blue)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+
 # MPT Autopilot
 
 End-to-end automation for [MoneyPrinterTurbo](https://github.com/harry0703/MoneyPrinterTurbo):
