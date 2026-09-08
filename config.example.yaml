@@ -155,9 +155,11 @@ pilot:
 # Renders pending jobs through the MoneyPrinterTurbo API.
 # =============================================================================
 batch:
-  # MoneyPrinterTurbo API endpoint (required). `0.0.0.0` means "all interfaces"
-  # — replace it with the real IP or hostname when MPT runs on a different host.
-  api_url: "http://0.0.0.0:8080"
+  # MoneyPrinterTurbo API endpoint (required). Replace with the actual host
+  # running MPT — this is where `mpt batch` sends rendering jobs and polls
+  # for results. Common values: "http://127.0.0.1:8080" (same machine),
+  # "http://<server-ip>:8080" (remote server).
+  api_url: "http://127.0.0.1:8080"
 
   # MoneyPrinterTurbo's own directories (required). These are paths on the
   # machine running MoneyPrinterTurbo, as it sees them.
