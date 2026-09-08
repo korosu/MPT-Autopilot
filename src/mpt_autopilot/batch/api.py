@@ -61,16 +61,24 @@ def health_check(settings: Settings) -> bool:
     """
     Quick GET to verify the MPT API is reachable and answering sanely.
 
-    A 200 is not enough: /api/v1/tasks is not a health endpoint, so a 200 with
-    an error-shaped body (an outage surfaced as data, a gateway error page)
-    would be treated as healthy and the batch would then fail job by job. The
-    body must look like the expected {"data": [...]} task list.
+    A 200 is not enough: /api/v1/tasks is not a health endpoint, so a 200
+    with an error-shaped body (an outage surfaced as data, a gateway error
+    page) would be treated as healthy and the batch would then fail job by
+    job. The body must include either a list at ``data`` or a task-list
+    object at ``data.tasks``.
     """
     try:
         r = httpx.get(f"{settings.api_url}/api/v1/tasks", timeout=10)
         r.raise_for_status()
         body = r.json()
-        return isinstance(body, dict) and isinstance(body.get("data"), list)
+        data = body.get("data")
+        # MPT wraps the list in {"data": {"tasks": [...], "total": N, ...}}.
+        # Accept either shape so health_check doesn't reject a valid response.
+        if isinstance(data, list):
+            return True
+        if isinstance(data, dict) and isinstance(data.get("tasks"), list):
+            return True
+        return False
     except (httpx.HTTPError, ValueError):
         return False
 
