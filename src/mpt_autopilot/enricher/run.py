@@ -22,7 +22,11 @@ from pathlib import Path
 
 from mpt_autopilot._http_utils import close_shared_client
 from mpt_autopilot.config import ConfigError
-from mpt_autopilot.enricher.llm import detect_and_generate, generate_hashtags
+from mpt_autopilot.enricher.llm import (
+    batch_generate_hashtags,
+    detect_and_generate,
+    generate_hashtags,
+)
 from mpt_autopilot.enricher.reader import resolve_meta
 from mpt_autopilot.enricher.settings import configure, settings, validate_tag_budget
 from mpt_autopilot.enricher.writer import build_hashtags_block, write_hashtags
@@ -191,6 +195,22 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         help="Re-generate hashtags even if they already exist in the json file",
     )
     parser.add_argument(
+        "--batch-size",
+        metavar="N",
+        type=int,
+        default=None,
+        help=(
+            "Number of videos to send to the LLM in a single request (1–100, "
+            "default: enricher.batch_size from config.yaml, or 5). "
+            "Use --no-batch to disable batching entirely."
+        ),
+    )
+    parser.add_argument(
+        "--no-batch",
+        action="store_true",
+        help="Disable batching — process each video with a separate LLM call",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help=(
@@ -290,10 +310,12 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
             return 1
 
     if dry_run:
+        batch_size = _resolve_batch_size(args)
         log.info(
             f"=== enrich --dry-run: {len(mp4_files)} file(s) | "
             f"platform={effective_platform} | "
-            f"tags={settings.min_tags}–{settings.max_tags} ==="
+            f"tags={settings.min_tags}–{settings.max_tags} | "
+            f"batch_size={batch_size} ==="
         )
         for mp4_path in mp4_files:
             meta = resolve_meta(mp4_path, lang_override=lang_override)
@@ -302,13 +324,17 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
         log.info("Dry run — no LLM calls, no files written.")
         return 0
 
+    batch_size = _resolve_batch_size(args)
+    total_batches = (len(mp4_files) + batch_size - 1) // batch_size
     log.info(
         f"=== enrich: {len(mp4_files)} file(s) | "
         f"platform={effective_platform} | "
-        f"tags={settings.min_tags}–{settings.max_tags} ==="
+        f"tags={settings.min_tags}–{settings.max_tags} | "
+        f"batch_size={batch_size} ({total_batches} batch(es)) ==="
     )
     alert(
-        f"Started: {len(mp4_files)} file(s) | platform={effective_platform}",
+        f"Started: {len(mp4_files)} file(s) | platform={effective_platform} | "
+        f"batch_size={batch_size}",
         settings,
     )
 
@@ -316,14 +342,45 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
     counts: dict[str, int] = {"ok": 0, "skipped": 0, "error": 0}
 
     try:
-        for mp4_path in mp4_files:
-            result = process_file(
-                mp4_path,
-                lang_override=lang_override,
-                force=force,
-                platform_override=platform_override,
-            )
-            counts[result] += 1
+        for batch_idx, start in enumerate(range(0, len(mp4_files), batch_size)):
+            chunk = mp4_files[start : start + batch_size]
+            if batch_size == 1 or len(chunk) == 1:
+                for mp4_path in chunk:
+                    result = process_file(
+                        mp4_path,
+                        lang_override=lang_override,
+                        force=force,
+                        platform_override=platform_override,
+                    )
+                    counts[result] += 1
+                continue
+
+            # Build topics list for the batch
+            topics: list[tuple[str, str]] = []
+            for mp4_path in chunk:
+                meta = resolve_meta(mp4_path, lang_override=lang_override)
+                topics.append((mp4_path.name, meta.topic))
+
+            try:
+                batch_results = batch_generate_hashtags(topics, effective_platform)
+                # Write results
+                for mp4_path, result in zip(chunk, batch_results):
+                    written = _write_batch_result(mp4_path, result, platform_override, force)
+                    counts[written] += 1
+                log.info(f"batch {batch_idx + 1}/{total_batches} ({len(chunk)} videos) — ok")
+            except Exception as batch_exc:
+                log.warn(
+                    f"batch {batch_idx + 1}/{total_batches} failed ({batch_exc}), "
+                    f"falling back to per-file processing"
+                )
+                for mp4_path in chunk:
+                    result = process_file(
+                        mp4_path,
+                        lang_override=lang_override,
+                        force=force,
+                        platform_override=platform_override,
+                    )
+                    counts[result] += 1
     finally:
         close_shared_client()
 
@@ -343,6 +400,73 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
         )
         return 2
     return 1 if counts["error"] > 0 else 0
+
+
+def _resolve_batch_size(args) -> int:
+    """Determine effective batch_size from CLI args or settings singleton."""
+    if args.no_batch:
+        return 1
+    cli_override: int | None = getattr(args, "batch_size", None)
+    if cli_override is not None:
+        return max(1, min(cli_override, 100))
+    return max(1, min(getattr(settings, "batch_size", 5), 100))
+
+
+def _write_batch_result(
+    mp4_path: Path,
+    result: dict,
+    platform_override: str | None,
+    force: bool,
+) -> str:
+    """
+    Write a single batch result to the sidecar file.
+
+    Returns one of: "ok" | "skipped" | "error".
+    """
+    from mpt_autopilot.enricher.writer import build_hashtags_block, write_hashtags
+
+    log = _get_log()
+    filename = mp4_path.name
+
+    try:
+        meta = resolve_meta(mp4_path, lang_override=None)
+    except Exception as exc:
+        log.error(f"error resolving {filename}: {exc}")
+        return "error"
+
+    if not force and meta.json_path.exists():
+        try:
+            with open(meta.json_path, encoding="utf-8") as f:
+                existing = json.load(f)
+            if "hashtags" in existing:
+                return "skipped"
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    language = result.get("language", "English")
+    tags = result.get("tags", [])
+    platform = platform_override or settings.platform
+
+    if not tags:
+        log.warn(f"LLM returned empty tags for {filename}, using fallback")
+        tags = list(settings.always_include)
+        if not tags:
+            log.warn("No always_include configured — writing empty tags")
+
+    block = build_hashtags_block(
+        tags_list=tags,
+        language=language,
+        model=settings.model,
+        source=meta.source,
+        platform=platform,
+    )
+    write_hashtags(meta.json_path, block)
+
+    log.info(
+        f"ok: {filename} → {' '.join(tags)} "
+        f"({len(tags)} tags, lang={language}, platform={platform})"
+    )
+    return "ok"
 
 
 def _dry_run_state(json_path: Path) -> str:

@@ -2,9 +2,10 @@
 llm.py — all communication with the LLM API.
 
 Public functions:
-  detect_language(text)                     → str    e.g. "English"
-  generate_hashtags(topic, lang, platform)   → list[str]    e.g. ["#ostrichfacts", ...]
-  detect_and_generate(topic, platform)       → tuple[str, list[str]]  (language, tags)
+  detect_language(text)                         → str    e.g. "English"
+  generate_hashtags(topic, lang, platform)      → list[str]    e.g. ["#ostrichfacts", ...]
+  detect_and_generate(topic, platform)          → tuple[str, list[str]]  (language, tags)
+  batch_generate_hashtags(topics, platform)     → list[dict]  per-video results in one call
 
 `platform` is optional on generate_hashtags()/detect_and_generate(): it defaults
 to settings.platform (config.yaml), but callers pass it explicitly whenever
@@ -248,7 +249,99 @@ def detect_and_generate(topic: str, platform: str | None = None) -> tuple[str, l
             return language, tags
 
 
+def batch_generate_hashtags(
+    topics: list[tuple[str, str]],
+    platform: str,
+) -> list[dict]:
+    """
+    Generate hashtags for multiple videos in a single LLM call.
+
+    Args:
+        topics:   List of (filename, topic_text) pairs.
+        platform: Target platform name.
+
+    Returns:
+        List of dicts with keys: filename, language, tags.
+        Each input entry must have exactly one result.
+
+    Raises:
+        ValueError: if the LLM response is structurally invalid.
+    """
+    if not topics:
+        return []
+
+    excluded = _build_excluded_string()
+    video_lines = "\n".join(
+        f"{i + 1}. {_quote_fn(fn)} — topic: {_sanitise_topic(topic)}"
+        for i, (fn, topic) in enumerate(topics)
+    )
+
+    prompt = (
+        f"Generate hashtags for {len(topics)} videos. For each video, detect the "
+        f"language and produce 3–{settings.max_tags} platform-appropriate tags "
+        f"(max {settings.max_tag_length} chars each). "
+        f"Do NOT use any of these banned tags: {excluded}.\n\n"
+        f"VIDEOS:\n{video_lines}\n\n"
+        f"Respond as JSON ONLY: "
+        f'{{"results": [{{"filename": "...", "language": "...", "tags": ["#tag"]}}]}}'
+    )
+
+    raw = _chat(prompt)
+    return _parse_batch_response(raw, len(topics))
+
+
+def _quote_fn(fn: str) -> str:
+    """Wrap filename in quotes for the batch prompt."""
+    return f'"{fn}"'
+
+
 # ── Internal helpers ──────────────────────────────────────────────────────────
+
+
+def _parse_batch_response(raw: str, expected_count: int) -> list[dict]:
+    """
+    Parse the LLM batch response and validate structure.
+
+    Returns a list of {"filename": str, "language": str, "tags": list[str]}.
+    Raises ValueError if the response is structurally invalid.
+    """
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        text = "\n".join(line for line in lines if not line.startswith("```")).strip()
+
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"Batch LLM returned non-JSON response: {exc}") from exc
+
+    if not isinstance(parsed, dict):
+        raise ValueError(f"Batch LLM returned {type(parsed).__name__} instead of a JSON object")
+
+    results = parsed.get("results")
+    if not isinstance(results, list):
+        raise ValueError(f"Batch LLM response has no 'results' list (got {type(results).__name__})")
+
+    if len(results) != expected_count:
+        raise ValueError(f"Batch LLM returned {len(results)} results, expected {expected_count}")
+
+    cleaned: list[dict] = []
+    for entry in results:
+        if not isinstance(entry, dict):
+            raise ValueError(f"Batch entry is {type(entry).__name__}, expected object")
+        filename = entry.get("filename")
+        language = entry.get("language", "English")
+        raw_tags = entry.get("tags", [])
+        if not isinstance(filename, str) or not filename:
+            raise ValueError("Batch entry missing or empty 'filename'")
+        if not isinstance(language, str):
+            language = "English"
+        if not isinstance(raw_tags, list):
+            raw_tags = []
+        tags = _clean_tag_list(raw_tags)
+        cleaned.append({"filename": filename, "language": language, "tags": tags})
+
+    return cleaned
 
 
 def _build_excluded_string() -> str:

@@ -192,6 +192,22 @@ class Settings:
         # Where `mpt enrich` looks when no path argument is given.
         self.directory: Path | None = shared.path_value(SECTION, "videos_dir")
 
+        # ── Batch enrichment ────────────────────────────────────────────────────
+        # Maximum videos sent to the LLM in a single request. 1 disables batching
+        # (per-file calls, same as before). Higher values reduce API calls but
+        # require a model with a large enough context window.
+        self.batch_size: int = int(cfg.get("batch_size", 5))
+        if self.batch_size < 1:
+            raise ValueError(
+                f"config.yaml: enricher.batch_size ({self.batch_size}) must be at least 1."
+            )
+        if self.batch_size > 100:
+            raise ValueError(
+                f"config.yaml: enricher.batch_size ({self.batch_size}) exceeds the "
+                "maximum of 100. Increase the limit only if your model's context "
+                "window can handle it."
+            )
+
         # ── Logging ───────────────────────────────────────────────────────────
         log_dir = shared.path_value(SECTION, "log_dir", "./logs")
         assert log_dir is not None  # a default was supplied

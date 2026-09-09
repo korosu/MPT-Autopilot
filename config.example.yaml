@@ -308,6 +308,12 @@ enricher:
   always_include:
     - "#shorts"
 
+  # Maximum videos sent to the LLM in a single request (batch enrichment).
+  # 1 = fallback to per-file processing (no batching).
+  # Higher values reduce API calls but require a model with a large enough
+  # context window. The CLI flags --batch-size and --no-batch override this.
+  batch_size: 5
+
   log_dir: "./logs"
   log_max_mb: 5
 
