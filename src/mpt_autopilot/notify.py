@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import logging
 from typing import Protocol, runtime_checkable
+from urllib.parse import quote as _url_quote
 
-import httpx
+from mpt_autopilot._http_utils import get_shared_client
 
 _logger = logging.getLogger(__name__)
 
@@ -37,14 +38,17 @@ def _redact(text: object, token: str) -> str:
     """
     Remove the bot token from any loggable string.
 
-    httpx exceptions carry the request URL, and Telegram requires the token in
-    the URL *path* (there is no body form). A passive proxy does not see it —
-    the path is inside the TLS tunnel after CONNECT — but a redaction is cheap
-    insurance against an MITM proxy or a log aggregator that records URLs.
+    Covers both plain and URL-encoded variants (e.g. a token with ':' becomes
+    '%3A' inside a URL path). A passive proxy does not see the path — it is
+    inside the TLS tunnel after CONNECT — but redaction is cheap insurance
+    against an MITM proxy or a log aggregator that records URLs.
     """
     out = str(text)
     if token:
         out = out.replace(token, "[token]")
+        encoded_token = _url_quote(token, safe="")
+        if encoded_token != token:
+            out = out.replace(encoded_token, "[token]")
     return out
 
 
@@ -54,7 +58,7 @@ def alert(msg: str, settings: TelegramSettings) -> None:
     text = f"[{settings.telegram_prefix}] {msg}" if settings.telegram_prefix else msg
     url = f"https://api.telegram.org/bot{settings.telegram_token}/sendMessage"
     try:
-        r = httpx.post(
+        r = get_shared_client().post(
             url,
             json={"chat_id": settings.telegram_chat_id, "text": text},
             timeout=10,

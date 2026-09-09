@@ -134,6 +134,22 @@ def contains(path: Path, output_file: str) -> bool:
     return output_file in load(path)
 
 
+def _contains_cached(path: Path, output_file: str) -> bool:
+    """
+    Return True if output_file is in the in-memory cache for path.
+
+    Returns False when the cache is empty or stale, so the caller falls back
+    to a full load() — this keeps add() and add_many() idempotent even when
+    another process has written to the file.
+    """
+    key = _key(path)
+    cached = _cache.get(key)
+    if cached is None:
+        return False
+    _fp, _size, entries = cached
+    return output_file in entries
+
+
 # ── Rotation ───────────────────────────────────────────────────────────────────
 
 
@@ -253,6 +269,8 @@ def _write_entries(path: Path, entries: list[str]) -> None:
 
 def add(path: Path, output_file: str) -> None:
     """Append one entry. Idempotent."""
+    if _contains_cached(path, output_file):
+        return
     if output_file in load(path):
         return
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -275,8 +293,13 @@ def add_many(path: Path, output_files: list[str]) -> None:
     """Append several entries in one write. Idempotent."""
     if not output_files:
         return
+    # Fast path: filter out entries already in the in-memory cache.
+    cached_new = [n for n in output_files if not _contains_cached(path, n)]
+    if not cached_new:
+        return
+    # Cold cache or some entries not cached: full load for the remainder.
     existing = load(path)
-    new = [name for name in output_files if name not in existing]
+    new = [n for n in cached_new if n not in existing]
     if not new:
         return
     path.parent.mkdir(parents=True, exist_ok=True)

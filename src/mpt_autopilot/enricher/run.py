@@ -20,8 +20,9 @@ import sys
 import traceback
 from pathlib import Path
 
+from mpt_autopilot._http_utils import close_shared_client
 from mpt_autopilot.config import ConfigError
-from mpt_autopilot.enricher.llm import close_client, detect_and_generate, generate_hashtags
+from mpt_autopilot.enricher.llm import detect_and_generate, generate_hashtags
 from mpt_autopilot.enricher.reader import resolve_meta
 from mpt_autopilot.enricher.settings import configure, settings, validate_tag_budget
 from mpt_autopilot.enricher.writer import build_hashtags_block, write_hashtags
@@ -324,7 +325,7 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
             )
             counts[result] += 1
     finally:
-        close_client()
+        close_shared_client()
 
     # ── Summary ───────────────────────────────────────────────────────────────
     log.info("=" * 55)
@@ -336,6 +337,11 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
         settings,
     )
 
+    if counts["ok"] and counts["error"]:
+        log.info(
+            f"[enrich: partial — {counts['ok']} ok, {counts['error']} error, continuing to upload]",
+        )
+        return 2
     return 1 if counts["error"] > 0 else 0
 
 

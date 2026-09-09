@@ -569,6 +569,12 @@ def _print_summary(
         lines.append("Failed jobs: " + ", ".join(failed))
     notify.alert("\n".join(lines), settings)
 
+    if ok and failed:
+        log(
+            f"[batch: partial — {len(ok)} ok, {len(failed)} failed, continuing to enrich/upload]",
+            settings,
+        )
+        return 2
     return 1 if failed else 0
 
 

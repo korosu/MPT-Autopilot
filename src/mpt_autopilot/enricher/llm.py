@@ -5,10 +5,6 @@ Public functions:
   detect_language(text)                     → str    e.g. "English"
   generate_hashtags(topic, lang, platform)   → list[str]    e.g. ["#ostrichfacts", ...]
   detect_and_generate(topic, platform)       → tuple[str, list[str]]  (language, tags)
-                                              Single-call variant — preferred when the
-                                              language isn't already known. If the caller
-                                              already knows the language, call
-                                              generate_hashtags() directly instead.
 
 `platform` is optional on generate_hashtags()/detect_and_generate(): it defaults
 to settings.platform (config.yaml), but callers pass it explicitly whenever
@@ -20,13 +16,10 @@ the {platform} prompt placeholder and the platform hard-limit actually track
 from __future__ import annotations
 
 import json
-import os
 import re
-import time
 from urllib.parse import urlparse
 
-import httpx
-
+from mpt_autopilot._http_utils import get_shared_client, retrying_request
 from mpt_autopilot.enricher.postprocess import (
     check_platform_limit,
     platform_hard_limit,
@@ -35,34 +28,9 @@ from mpt_autopilot.enricher.postprocess import (
 from mpt_autopilot.enricher.settings import settings
 from mpt_autopilot.logger import Logger
 
-# ── Shared persistent client ──────────────────────────────────────────────────
-# Reused across all calls to avoid per-call TLS handshakes.
-# Read timeout is configurable via LLM_TIMEOUT (seconds) since local/self-hosted
-# backends (e.g. Ollama on CPU) can be far slower than a hosted API.
-# Created lazily so LLM_TIMEOUT is read AFTER config.load() has called
-# load_dotenv() — reading it at module-import time would silently ignore the
-# .env value because this module is imported before configure() runs.
-_client: httpx.Client | None = None
-
-
-def _get_client() -> httpx.Client:
-    global _client
-    if _client is None:
-        timeout = float(os.getenv("LLM_TIMEOUT", "60"))
-        _client = httpx.Client(timeout=httpx.Timeout(timeout, connect=10.0))
-    return _client
-
-
-def close_client() -> None:
-    """Close the shared httpx.Client. Called at end of a pipeline run to
-    release connection pool resources cleanly."""
-    global _client
-    if _client is not None:
-        _client.close()
-        _client = None
-
-
-# ── Retry settings ────────────────────────────────────────────────────────────
+# Retry settings — kept here because callers still reference _MAX_RETRIES
+# for logging/degradation decisions. The actual retry loop lives in
+# retrying_request() in _http_utils.py.
 _MAX_RETRIES = 2
 _RETRY_BASE_DELAY = 10.0
 _RETRY_MAX_DELAY = 20.0
@@ -135,16 +103,14 @@ def _check_https(url: str) -> None:
 
 def _chat(prompt: str) -> str:
     """
-    Send a single-turn chat request. Returns the raw text content.
+    Send a single-turn chat request via the shared HTTP client.
 
     Retries automatically (exponential backoff, up to _MAX_RETRIES) on:
       - 429 Too Many Requests — respects the Retry-After header when sent.
       - Transient status codes (404/500/502/503/504, see _TRANSIENT_STATUS_CODES)
         — some gateways return these intermittently under load for a request
         that otherwise succeeds.
-      - Network-level failures (read/connect timeouts, connection errors) —
-        these happen when the request reaches the transport layer but no
-        response comes back in time, e.g. a slow/overloaded LLM backend.
+      - Network-level failures (read/connect timeouts, connection errors).
     """
     _check_https(settings.base_url)
     url = f"{settings.base_url}/chat/completions"
@@ -161,133 +127,42 @@ def _chat(prompt: str) -> str:
     if settings.supports_temperature:
         payload["temperature"] = 0.3
 
-    # Opt-in only: chat_template_kwargs is a vLLM/SGLang/NVIDIA-NIM extension,
-    # not part of the official OpenAI API, so it's added only when the user has
-    # explicitly configured reasoning_enabled — see settings.py for the tri-state
-    # (absent/false/true) rationale.
     if settings.reasoning_enabled is True:
         payload["max_tokens"] = settings.reasoning_max_tokens
         payload["chat_template_kwargs"] = {"reasoning_effort": settings.reasoning_effort}
     elif settings.reasoning_enabled is False:
         payload["chat_template_kwargs"] = {"reasoning_effort": "none"}
 
-    last_error: Exception | None = None
-
-    for attempt in range(_MAX_RETRIES + 1):
-        try:
-            response = _get_client().post(url, headers=headers, json=payload)
-        except (httpx.TimeoutException, httpx.ConnectError) as exc:
-            # Network-level failure (read timeout, connect timeout, connection
-            # refused/reset) — not an HTTP error response, so it wasn't caught
-            # by the 429 branch below. Retry with the same backoff schedule.
-            last_error = exc
-            if attempt == _MAX_RETRIES:
-                break
-            delay = min(_RETRY_BASE_DELAY * (2**attempt), _RETRY_MAX_DELAY)
-            _get_log().warn(
-                f"{exc.__class__.__name__} — retrying in {delay:.0f}s "
-                f"(attempt {attempt + 1}/{_MAX_RETRIES})"
-            )
-            time.sleep(delay)
-            continue
-
-        if response.status_code == 429:
-            if attempt == _MAX_RETRIES:
-                last_error = httpx.HTTPStatusError(
-                    f"429 Too Many Requests — giving up after {_MAX_RETRIES} retries",
-                    request=response.request,
-                    response=response,
-                )
-                break
-
-            retry_after = response.headers.get("Retry-After")
-            if retry_after and retry_after.isdigit():
-                delay = min(float(retry_after), _RETRY_MAX_DELAY)
-            else:
-                delay = min(_RETRY_BASE_DELAY * (2**attempt), _RETRY_MAX_DELAY)
-
-            _get_log().warn(
-                f"429 rate-limited — waiting {delay:.0f}s before retry {attempt + 1}/{_MAX_RETRIES}"
-            )
-            time.sleep(delay)
-            continue
-
-        # Some gateways (observed on NVIDIA's integrate.api.nvidia.com endpoint)
-        # return a transient, empty-body 404/5xx under load even though the
-        # same URL/model succeeds on other calls in the same run — an
-        # infra-level blip, not a real "wrong path". Retry those like 429.
-        if response.status_code in _TRANSIENT_STATUS_CODES:
-            if attempt == _MAX_RETRIES:
-                body_preview = response.text[:500].replace("\n", " ")
-                _get_log().error(
-                    f"HTTP {response.status_code} from {url} (final attempt) — body: {body_preview}"
-                )
-                last_error = httpx.HTTPStatusError(
-                    f"{response.status_code} {response.reason_phrase} — "
-                    f"gave up after {_MAX_RETRIES} retries",
-                    request=response.request,
-                    response=response,
-                )
-                break
-
-            delay = min(_RETRY_BASE_DELAY * (2**attempt), _RETRY_MAX_DELAY)
-            _get_log().warn(
-                f"transient HTTP {response.status_code} from {url} — "
-                f"retrying in {delay:.0f}s (attempt {attempt + 1}/{_MAX_RETRIES})"
-            )
-            time.sleep(delay)
-            continue
-
-        if not response.is_success:
-            # Log the response body to the LOCAL log file only, for diagnosis —
-            # never include it in the raised exception, since that message
-            # flows into notify.alert() and could end up in Telegram.
-            body_preview = response.text[:500].replace("\n", " ")
-            _get_log().error(f"HTTP {response.status_code} from {url} — body: {body_preview}")
-            raise httpx.HTTPStatusError(
-                f"{response.status_code} {response.reason_phrase}",
-                request=response.request,
-                response=response,
-            )
-
-        data = response.json()
-
-        try:
-            choice = data["choices"][0]
-            message = choice["message"]
-        except (KeyError, IndexError) as exc:
-            # The response body goes to the LOCAL log only. This message flows
-            # into notify.alert() and could otherwise land in Telegram — the
-            # same rule the comments above and below state.
-            body_preview = json.dumps(data, ensure_ascii=False)[:500].replace("\n", " ")
-            _get_log().error(f"Unexpected API response structure — body: {body_preview}")
-            raise ValueError("Unexpected API response structure from the LLM API") from exc
-
-        content = message.get("content")
-        if content is None:
-            # Reasoning models (chat_template_kwargs / reasoning_enabled: true)
-            # can burn the whole max_tokens budget on hidden thinking and stop
-            # at finish_reason "length" before ever writing a visible answer —
-            # content comes back null, not an empty string. Log the reasoning
-            # preview to the LOCAL log only (never into the raised exception —
-            # that message flows into notify.alert() and could end up in
-            # Telegram), and raise a specific, actionable error instead of a
-            # bare AttributeError from calling .strip() on None.
-            finish_reason = choice.get("finish_reason")
-            reasoning_preview = (message.get("reasoning_content") or "")[:500].replace("\n", " ")
-            _get_log().error(
-                f"Empty content (finish_reason={finish_reason}) — "
-                f"reasoning_content preview: {reasoning_preview}"
-            )
-            raise ValueError(
-                f"Model returned empty content (finish_reason={finish_reason}). "
-                f"If reasoning_enabled: true, try raising reasoning_max_tokens or "
-                f"lowering reasoning_effort in config.yaml."
-            )
-
-        return content.strip()
-
-    raise last_error  # type: ignore[misc]
+    response = retrying_request(
+        get_shared_client(),
+        "POST",
+        url,
+        json=payload,
+        headers=headers,
+        max_retries=_MAX_RETRIES,
+        backoff_base=_RETRY_BASE_DELAY,
+        backoff_max=_RETRY_MAX_DELAY,
+        transient_status=_TRANSIENT_STATUS_CODES,
+        respect_retry_after=True,
+        log=lambda msg, *a: _get_log().warn(msg, *a),
+    )
+    data = response.json()
+    content = data["choices"][0]["message"].get("content") or ""
+    if not content:
+        finish_reason = data["choices"][0].get("finish_reason")
+        reasoning_preview = (data["choices"][0]["message"].get("reasoning_content") or "")[
+            :500
+        ].replace("\n", " ")
+        _get_log().error(
+            f"Empty content (finish_reason={finish_reason}) — "
+            f"reasoning_content preview: {reasoning_preview}"
+        )
+        raise ValueError(
+            f"Model returned empty content (finish_reason={finish_reason}). "
+            f"If reasoning_enabled: true, try raising reasoning_max_tokens or "
+            f"lowering reasoning_effort in config.yaml."
+        )
+    return content.strip()
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -298,15 +173,11 @@ def detect_language(text: str) -> str:
     Ask the LLM what language the given text is in.
     Returns a language name string, e.g. "English", "Spanish".
     Falls back to "English" on any error.
-
-    Note: prefer detect_and_generate() when you also need tags — it saves one
-    API round-trip by detecting language and generating tags in a single call.
     """
     safe_text = _sanitise_topic(text)
     prompt = settings.prompt_detect_language.format(text=safe_text)
     try:
         result = _chat(prompt)
-        # Keep only the first word/line to guard against verbose LLM answers.
         language = result.splitlines()[0].strip().rstrip(".")
         return language if language else "English"
     except Exception:
@@ -314,27 +185,9 @@ def detect_language(text: str) -> str:
 
 
 def generate_hashtags(topic: str, language: str, platform: str | None = None) -> list[str]:
-    """
-    Ask the LLM to generate hashtags for the given topic in the given language.
-
-    Args:
-        topic:     The video topic/subject string.
-        language:  Target language name, e.g. "English".
-        platform:  Overrides settings.platform for this call (e.g. --platform).
-                   Affects both the {platform} prompt placeholder and the
-                   hard limit used to truncate/validate the result. Defaults
-                   to settings.platform when omitted.
-
-    Returns a list of hashtag strings starting with '#'.
-    On parse failure returns a minimal fallback list so the caller never crashes.
-
-    Note: prefer detect_and_generate() when language detection is also needed —
-    it saves one API round-trip.
-    """
+    """Ask the LLM to generate hashtags for the given topic."""
     safe_topic = _sanitise_topic(topic)
     effective_platform = platform or settings.platform
-
-    # Tell the LLM which tags to skip so it never generates them.
     excluded = _build_excluded_string()
 
     prompt = settings.prompt_generate.format(
@@ -353,31 +206,13 @@ def generate_hashtags(topic: str, language: str, platform: str | None = None) ->
 
 def detect_and_generate(topic: str, platform: str | None = None) -> tuple[str, list[str]]:
     """
-    Detect the language of the topic AND generate hashtags in a SINGLE API call.
-
-    This is the preferred function when language is not known in advance — it
-    saves one LLM round-trip compared to calling detect_language() separately.
-
-    Note: if the language is already known (e.g. via --lang or script.json's
-    video_language), the caller should call generate_hashtags() directly
-    instead — this function is only for the auto-detect path.
-
-    Args:
-        topic:     The video topic/subject string.
-        platform:  Overrides settings.platform for this call (e.g. --platform).
-                   Affects both the {platform} prompt placeholder and the
-                   hard limit used to truncate/validate the result. Defaults
-                   to settings.platform when omitted.
-
-    Returns:
-        (language: str, tags: list[str])
+    Detect the language AND generate hashtags in a SINGLE API call.
+    Preferred when language is not known in advance.
     """
     safe_topic = _sanitise_topic(topic)
     effective_platform = platform or settings.platform
     excluded = _build_excluded_string()
 
-    # Combined detect+generate prompt — fully defined in config.yaml as
-    # prompt_detect_and_generate, the same way prompt_generate is.
     combined_prompt = settings.prompt_detect_and_generate.format(
         video_subject=safe_topic,
         platform=effective_platform,
@@ -394,10 +229,6 @@ def detect_and_generate(topic: str, platform: str | None = None) -> tuple[str, l
         return language, tags
     except Exception as exc:
         _get_log().warn(f"detect_and_generate() combined call failed ({exc}), retrying once...")
-        # Re-prompt with a stronger instruction before silently falling back
-        # to two-call mode — some providers return parseable-but-wrong output
-        # on the first attempt that succeeds on a retry with the same prompt,
-        # and the fallback would hit the same error twice for free.
         try:
             retry_prompt = (
                 combined_prompt.rstrip() + " (IMPORTANT: respond with ONLY a JSON object "
@@ -412,7 +243,6 @@ def detect_and_generate(topic: str, platform: str | None = None) -> tuple[str, l
                 f"detect_and_generate() retry also failed ({retry_exc}), "
                 "falling back to two-call mode"
             )
-            # Graceful fallback: two separate calls
             language = detect_language(safe_topic)
             tags = generate_hashtags(safe_topic, language, platform=effective_platform)
             return language, tags
@@ -438,28 +268,15 @@ def _finalize_tags(tags: list[str], platform: str | None = None) -> list[str]:
     Apply post-processing filters and merge always_include tags.
 
     Steps:
-    1. validate_and_filter — length, banned, dedup, hard_limit (with room
-       reserved for always_include, see content_tag_limit below)
-    2. Strip any always_include tags the LLM added anyway
-    3. Prepend always_include in order
-
-    Args:
-        tags:      Raw parsed tag list from the LLM response.
-        platform:  Overrides settings.platform for the hard_limit used here
-                    (e.g. when called from a --platform-overridden run).
-                    Defaults to settings.platform when omitted.
+      1. validate_and_filter — length, banned, dedup, hard_limit (with room
+         reserved for always_include)
+      2. Strip any always_include tags the LLM added anyway
+      3. Prepend always_include in order
     """
     effective_platform = platform or settings.platform
     effective_hard_limit = platform_hard_limit(effective_platform)
-
-    # Reserve room for always_include, which is merged in on top of the LLM's
-    # content tags below (step 3) — otherwise an LLM that ignores max_tags and
-    # returns more content tags than instructed could push the merged total
-    # past the platform limit, even though settings.py's validate_tag_budget()
-    # already guarantees max_tags + always_include fits it on the happy path.
     content_tag_limit = max(effective_hard_limit - len(settings.always_include), 0)
 
-    # 1. Validate and filter
     filtered = validate_and_filter(
         tags,
         max_tag_length=settings.max_tag_length,
@@ -467,14 +284,11 @@ def _finalize_tags(tags: list[str], platform: str | None = None) -> list[str]:
         hard_limit=content_tag_limit,
     )
 
-    # 2. Strip always_include duplicates (LLM may have added them despite instructions)
     excluded_lower = {t.lower() for t in settings.always_include}
     filtered = [t for t in filtered if t.lower() not in excluded_lower]
 
-    # 3. Merge: always_include first, then LLM-generated content tags
     merged = _merge_always_include(filtered, settings.always_include)
 
-    # 4. Final platform limit check (warn but don't crash)
     is_safe, warning = check_platform_limit(len(merged), effective_platform)
     if not is_safe:
         _get_log().warn(warning)
@@ -489,30 +303,22 @@ def _parse_tags(raw: str) -> list[str]:
     Handles (in priority order):
       1. Clean JSON array:    ["#shorts", "#history"]
       2. Markdown fences:     ```json\\n["#shorts"]\\n```
-      3. JSON object:         {"tags": ["#shorts", "#history"]} (combined prompt fallback)
+      3. JSON object:         {"tags": ["#shorts", "#history"]}
       4. Regex fallback:      extract #word tokens from free-form text
       5. Last resort:         return []
-
-    Post-processing:
-      - Forced to lowercase (canonical form on all platforms)
-      - Diacritics/accents are preserved (they matter: #recuperacion ≠ #recuperación)
     """
     text = raw.strip()
 
-    # Strip markdown code fences if present
     if text.startswith("```"):
         lines = text.splitlines()
         text = "\n".join(line for line in lines if not line.startswith("```")).strip()
 
-    # Try JSON parse
     try:
         parsed = json.loads(text)
 
-        # Case A: plain JSON array  ["#tag1", "#tag2"]
         if isinstance(parsed, list):
             return _clean_tag_list(parsed)
 
-        # Case B: JSON object {"tags": [...]} or {"language": "...", "tags": [...]}
         if isinstance(parsed, dict):
             tag_list = parsed.get("tags", [])
             if isinstance(tag_list, list):
@@ -521,10 +327,6 @@ def _parse_tags(raw: str) -> list[str]:
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Regex fallback — works for:
-    #   - Numbered lists:  1. #tag
-    #   - Prose output:    "Use #tag and #other"
-    #   - Any Unicode script (Unicode flag ensures \w matches all letters)
     candidates = re.findall(r"#\w+", raw, re.UNICODE)
     if candidates:
         return [c.lower() for c in candidates if len(c) > 2]
@@ -537,13 +339,9 @@ def _parse_combined_response(raw: str) -> tuple[str, list[str]]:
     Parse the combined detect+generate JSON response.
 
     Expected format: {"language": "English", "tags": ["#tag1", "#tag2"]}
-
-    Returns:
-        (language, tags) — with fallback to "English" on error.
     """
     text = raw.strip()
 
-    # Strip markdown fences
     if text.startswith("```"):
         lines = text.splitlines()
         text = "\n".join(line for line in lines if not line.startswith("```")).strip()
@@ -559,7 +357,6 @@ def _parse_combined_response(raw: str) -> tuple[str, list[str]]:
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Fallback: try to extract language and tags separately from raw text
     lang_match = re.search(r'"language"\s*:\s*"([^"]+)"', raw, re.IGNORECASE)
     language = lang_match.group(1).strip() if lang_match else "English"
     tags = _parse_tags(raw)
@@ -576,16 +373,13 @@ def _clean_tag_list(items: list) -> list[str]:
         if not tag.startswith("#"):
             tag = "#" + tag
         tag = tag.replace(" ", "").lower()
-        if len(tag) > 2:  # '#' + at least 2 characters
+        if len(tag) > 2:
             result.append(tag)
     return result
 
 
 def _merge_always_include(tags: list[str], always: list[str]) -> list[str]:
-    """
-    Prepend always_include tags in order, without duplicates.
-    Case-insensitive dedup.
-    """
+    """Prepend always_include tags in order, without duplicates."""
     seen: set[str] = set()
     result: list[str] = []
 

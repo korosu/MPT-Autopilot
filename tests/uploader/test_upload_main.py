@@ -138,9 +138,12 @@ def test_run_does_not_notify_in_dry_run(tmp_path, monkeypatch):
     settings.accounts = accounts
 
     notify_calls: list[str] = []
-    monkeypatch.setattr(
-        "mpt_autopilot.notify.httpx.post", lambda *a, **kw: notify_calls.append("called")
-    )
+
+    class _FakeClient:
+        def post(self, *a, **kw):
+            notify_calls.append("called")
+
+    monkeypatch.setattr("mpt_autopilot.notify.get_shared_client", lambda: _FakeClient())
 
     run(settings, list(accounts.values())[0], dry_run=True, limit=None)
 

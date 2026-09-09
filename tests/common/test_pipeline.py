@@ -237,6 +237,33 @@ def test_failure_dominates_quota_stop(tmp_path, monkeypatch):
     assert code == EXIT_FAILURES
 
 
+def test_partial_batch_continues_to_enrich_and_upload(tmp_path, monkeypatch):
+    """batch returning 2 (partial success) must not stop the pipeline."""
+    calls: list[tuple[str, str]] = []
+    _fake_stages(monkeypatch, {"batch": EXIT_QUOTA_STOP}, calls)
+    (tmp_path / "exports").mkdir()
+    (tmp_path / "exports_es").mkdir()
+
+    code = pipeline.execute(_args(langs=["en"]), _config(tmp_path))
+
+    assert code == EXIT_QUOTA_STOP
+    assert ("en", "enrich") in calls
+    assert ("en", "upload") in calls
+
+
+def test_partial_then_partial_continues_to_upload(tmp_path, monkeypatch):
+    """partial batch + partial enricher still lets upload run."""
+    calls: list[tuple[str, str]] = []
+    _fake_stages(monkeypatch, {"batch": EXIT_QUOTA_STOP, "enrich": EXIT_QUOTA_STOP}, calls)
+    (tmp_path / "exports").mkdir()
+
+    code = pipeline.execute(_args(langs=["en"]), _config(tmp_path))
+
+    assert code == EXIT_QUOTA_STOP
+    assert ("en", "enrich") in calls
+    assert ("en", "upload") in calls
+
+
 def test_dry_run_skips_refill(tmp_path, monkeypatch, capsys):
     calls: list[tuple[str, str]] = []
     _fake_stages(monkeypatch, {}, calls)

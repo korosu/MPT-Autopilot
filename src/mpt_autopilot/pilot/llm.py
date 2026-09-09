@@ -17,11 +17,11 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from typing import Any, cast
 
 import httpx
 
+from mpt_autopilot._http_utils import get_shared_client, retrying_request
 from mpt_autopilot.config import warn_cleartext
 from mpt_autopilot.pilot.settings import Settings
 
@@ -44,6 +44,10 @@ _RETRY_BACKOFF_BASE = 2.0  # seconds; doubles each attempt
 # inkling) spend a long time on a hidden reasoning draft before writing the
 # visible answer, so a big --count can legitimately take minutes.
 _REQUEST_TIMEOUT = 480  # seconds
+
+# Status codes treated as transient infra blips — same set the previous
+# _post_with_retry used (429 + 5xx).
+_TRANSIENT_STATUS = frozenset({429, 500, 502, 503, 504})
 
 
 def _token_budget(count: int) -> int:
@@ -80,40 +84,30 @@ def _anthropic_base(base_url: str) -> str:
     return url
 
 
-def _post_with_retry(url: str, payload: dict, headers: dict) -> httpx.Response:
+def _post_with_retry(
+    url: str,
+    payload: dict,
+    headers: dict,
+    *,
+    timeout: int = _REQUEST_TIMEOUT,
+) -> httpx.Response:
     """
-    POST with a small retry/backoff for transient failures: connection
-    errors, timeouts, 429 (rate limit), and 5xx responses. Anything else
-    (4xx client errors) is returned as-is for raise_for_status() to handle.
+    POST with retry/backoff for transient failures, delegated to the shared
+    retrying_request() helper. Preserves the previous retry semantics
+    (429 + 5xx, configurable backoff).
     """
-    last_exc: Exception | None = None
-    resp: httpx.Response | None = None
-    for attempt in range(_MAX_RETRIES + 1):
-        try:
-            resp = httpx.post(url, json=payload, headers=headers, timeout=_REQUEST_TIMEOUT)
-        except (httpx.ConnectError, httpx.TimeoutException) as e:
-            last_exc = e
-            resp = None
-        else:
-            if resp.status_code == 429 or resp.status_code >= 500:
-                last_exc = httpx.HTTPStatusError(
-                    f"{resp.status_code} {resp.reason_phrase}", request=resp.request, response=resp
-                )
-            else:
-                return resp
-
-        if attempt < _MAX_RETRIES:
-            wait = _RETRY_BACKOFF_BASE * (2**attempt)
-            print(
-                f"  [retry] LLM request failed ({last_exc}); "
-                f"retrying in {wait:.0f}s ({attempt + 1}/{_MAX_RETRIES})..."
-            )
-            time.sleep(wait)
-
-    if resp is not None:
-        return resp
-    # only reached if every attempt raised a connection/timeout error
-    raise last_exc or RuntimeError("LLM request failed with unknown error")
+    return retrying_request(
+        get_shared_client(),
+        "POST",
+        url,
+        json=payload,
+        headers=headers,
+        max_retries=_MAX_RETRIES,
+        backoff_base=_RETRY_BACKOFF_BASE,
+        transient_status=_TRANSIENT_STATUS,
+        timeout=timeout,
+        log=lambda msg, *a: print(f"  [retry] {msg % a if a else msg}"),
+    )
 
 
 def _call_anthropic(system: str, user: str, s: Settings, max_tokens: int) -> str:

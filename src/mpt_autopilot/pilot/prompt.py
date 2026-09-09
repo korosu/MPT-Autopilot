@@ -13,11 +13,7 @@ from mpt_autopilot.pilot.settings import LangSettings
 
 VIDEO_SUBJECT_MAX_CHARS = 500
 
-# How many recent seen entries to include in the prompt.
-# Uses insertion order (most recently generated = last in file).
-# Capped at 100 to keep the LLM context lean: at ~50 bytes per entry this
-# stays under 5 KB of dedup context per call.
-_MAX_SEEN_IN_PROMPT = 100
+_MAX_SEEN_IN_PROMPT = 200
 _THEME_MAX_SUBJECT_CHARS = 80  # For short titles in theme mode
 
 

@@ -331,12 +331,15 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
 
             results.append(StageResult(lang, stage, code))
 
-            if code != EXIT_OK and not args.continue_on_error:
+            if code == EXIT_FAILURES and not args.continue_on_error:
                 print(
                     f"[run] {lang} → {stage} returned {code} — stopping this language "
                     f"(use --continue-on-error to keep going)"
                 )
                 break
+
+            if code == EXIT_QUOTA_STOP:
+                print(f"[run] {lang} → {stage} partially succeeded — continuing to next stage")
 
     print(f"\n{'=' * 60}\n[run] summary\n{'=' * 60}")
     labels = {EXIT_OK: "ok", EXIT_FAILURES: "failed", EXIT_QUOTA_STOP: "quota-stop"}
