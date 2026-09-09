@@ -27,9 +27,7 @@ start failing and the real collision bug will appear.
 from __future__ import annotations
 
 import os
-import shutil
 import time
-from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -39,16 +37,11 @@ from mpt_autopilot import seen
 
 
 @pytest.fixture()
-def ws_tmp_path() -> Generator[Path, None, None]:
-    """A workspace-local per-test directory (does not touch %TEMP%)."""
-    root = Path(__file__).parent / ".tmp"
-    root.mkdir(parents=True, exist_ok=True)
-    p = root / f"test-{os.getpid()}-{time.monotonic_ns()}"
+def ws_tmp_path(tmp_path: Path) -> Path:
+    """A pytest-managed per-test directory (auto-cleaned via basetemp)."""
+    p = tmp_path / f"test-{os.getpid()}-{time.monotonic_ns()}"
     p.mkdir()
-    try:
-        yield p
-    finally:
-        shutil.rmtree(p, ignore_errors=True)
+    return p
 
 
 @pytest.fixture(autouse=True)

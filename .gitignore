@@ -51,6 +51,10 @@ pytest-cache-files-*/
 # agent scratch dirs
 .tmptest*/
 tmptest/
+.tmp-py
+.pytest-sandbox-work
+.pytest-sandbox
+.pytest-tmp
 
 # editors / OS
 .idea/
@@ -63,3 +67,4 @@ tmptest/
 # AI-agent instructions (local, user-specific)
 CLAUDE.md
 AGENTS.md
+skills

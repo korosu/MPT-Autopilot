@@ -1,6 +1,6 @@
 [project]
 name = "mpt-autopilot"
-version = "1.0.6"
+version = "1.0.7"
 description = "End-to-end automation for MoneyPrinterTurbo: idea generation, batch rendering, hashtag enrichment, and YouTube upload behind one `mpt` command"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -28,9 +28,7 @@ packages = ["src/mpt_autopilot"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Use a workspace-local temp directory so pytest tmp_path / TemporaryDirectory
-# work inside sandboxed environments that block the system Temp folder.
-basetemp = ".pytest-basetemp"
+addopts = "--basetemp=.tmp-py"
 
 [tool.ruff]
 line-length = 100

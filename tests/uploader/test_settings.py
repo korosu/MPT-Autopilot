@@ -1,4 +1,3 @@
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -99,25 +98,30 @@ def test_validate_account_ready_missing_client_secrets(tmp_path):
     assert "client_secrets" in problem
 
 
-def test_daily_upload_limit_must_be_positive(tmp_path):
-    with (
-        tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as accounts_file,
-        tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as config_file,
-    ):
-        accounts_file.write(
-            "accounts:\n  en:\n"
-            "    videos_dir: /tmp/v\n"
-            "    client_secrets: /tmp/s.json\n"
-            "    token_file: /tmp/t\n"
-            "    daily_upload_limit: 0\n"
-        )
-        config_file.write("")
+def test_daily_upload_limit_must_be_positive():
+    """daily_upload_limit: 0 must be rejected."""
+    _WORK = Path(__file__).parent
+    accounts_file = _WORK / "test_positive_accounts.yaml"
+    config_file = _WORK / "test_positive_config.yaml"
+    accounts_file.write_text(
+        "accounts:\n  en:\n"
+        "    videos_dir: /tmp/v\n"
+        "    client_secrets: /tmp/s.json\n"
+        "    token_file: /tmp/t\n"
+        "    daily_upload_limit: 0\n",
+        encoding="utf-8",
+    )
+    config_file.write_text("", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="daily_upload_limit must be positive"):
-        load_settings(
-            config_path=Path(config_file.name),
-            accounts_path=Path(accounts_file.name),
-        )
+    try:
+        with pytest.raises(ValueError, match="daily_upload_limit must be positive"):
+            load_settings(
+                config_path=config_file,
+                accounts_path=accounts_file,
+            )
+    finally:
+        accounts_file.unlink(missing_ok=True)
+        config_file.unlink(missing_ok=True)
 
 
 def test_contains_synthetic_media_defaults_true_when_unset(tmp_path):
