@@ -1,6 +1,6 @@
 [project]
 name = "mpt-autopilot"
-version = "1.0.4"
+version = "1.0.5"
 description = "End-to-end automation for MoneyPrinterTurbo: idea generation, batch rendering, hashtag enrichment, and YouTube upload behind one `mpt` command"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -53,10 +53,3 @@ venv = ".venv"
 
 [project.optional-dependencies]
 dev = ["ruff>=0.15.20", "pytest>=8.0", "pyright>=1.1"]
-
-[dependency-groups]
-dev = [
-    "ruff>=0.15.20",
-    "pytest>=8.0",
-    "pyright>=1.1",
-]

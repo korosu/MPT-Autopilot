@@ -24,6 +24,7 @@ import shutil
 import signal
 import sys
 import time
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -348,9 +349,9 @@ def run(
             settings,
         )
 
-    # ponytail: O(n²) for n=~100, fine
+    # ponytail: O(n) via Counter instead of O(n²) count-per-element
     output_files = [j.get("output_file", "") for j in jobs if j.get("enabled", True)]
-    dupes = sorted({f for f in output_files if output_files.count(f) > 1})
+    dupes = sorted({f for f, c in Counter(output_files).items() if c > 1})
     if dupes:
         log(
             f"WARNING: duplicate output_file values in jobs.yaml: {', '.join(dupes)} — "

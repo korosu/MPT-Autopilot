@@ -322,7 +322,10 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
                     code = _run_enrich(lang, config_path, args, videos_dir)
                 else:
                     code = _run_upload(lang, config_path, args, account_for(cfg, lang))
-            except Exception as exc:  # a stage crash must not kill the other languages
+            except (ConfigError, FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+                # A stage-reported failure must not kill the other languages, but
+                # programming errors (AssertionError, TypeError, …) should still
+                # surface instead of being silently swallowed here.
                 print(f"[run] {lang} → {stage} crashed: {exc}")
                 code = EXIT_FAILURES
 

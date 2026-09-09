@@ -75,6 +75,18 @@ class Settings:
     telegram_prefix: str
 
 
+SECTION = "batch"
+
+# Accept both YAML true and 1 as truthy for cache_cleanup_enabled (YAML
+# booleans are native but some configs use 1/0).
+_CACHE_CLEANUP_TRUE_VALUES = frozenset({True, 1})
+
+
+def _is_cache_cleanup_enabled(value: object) -> bool:
+    """Return True when cache_cleanup_enabled is configured as a truthy value."""
+    return value in _CACHE_CLEANUP_TRUE_VALUES
+
+
 def load(config_path: Path | None = None, env_path: Path | None = None) -> Settings:
     cfg = shared_config.load(config_path, env_path)
     sec = cfg.section(SECTION)
@@ -114,9 +126,7 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
         max_retries=int(sec.get("max_retries", 3)),
         retry_delay_seconds=int(sec.get("retry_delay_seconds", 180)),
         max_consecutive_failures=int(sec.get("max_consecutive_failures", 3)),
-        cache_cleanup_enabled=(lambda v: v is True or v == 1)(
-            sec.get("cache_cleanup_enabled", True)
-        ),
+        cache_cleanup_enabled=_is_cache_cleanup_enabled(sec.get("cache_cleanup_enabled", True)),
         cache_cleanup_interval=int(sec.get("cache_cleanup_interval", 6)),
         seen_max_mb=int(sec.get("seen_max_mb", 64)),
         telegram_token=os.getenv("TELEGRAM_TOKEN", "").strip(),

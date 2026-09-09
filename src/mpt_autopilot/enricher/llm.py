@@ -393,11 +393,29 @@ def detect_and_generate(topic: str, platform: str | None = None) -> tuple[str, l
         tags = _finalize_tags(tags, platform=effective_platform)
         return language, tags
     except Exception as exc:
-        _get_log().warn(f"detect_and_generate() failed ({exc}), falling back to two-call mode")
-        # Graceful fallback: two separate calls
-        language = detect_language(safe_topic)
-        tags = generate_hashtags(safe_topic, language, platform=effective_platform)
-        return language, tags
+        _get_log().warn(f"detect_and_generate() combined call failed ({exc}), retrying once...")
+        # Re-prompt with a stronger instruction before silently falling back
+        # to two-call mode — some providers return parseable-but-wrong output
+        # on the first attempt that succeeds on a retry with the same prompt,
+        # and the fallback would hit the same error twice for free.
+        try:
+            retry_prompt = (
+                combined_prompt.rstrip() + " (IMPORTANT: respond with ONLY a JSON object "
+                "containing exactly 'language' and 'tags' keys — no extra text.)"
+            )
+            raw = _chat(retry_prompt)
+            language, tags = _parse_combined_response(raw)
+            tags = _finalize_tags(tags, platform=effective_platform)
+            return language, tags
+        except Exception as retry_exc:
+            _get_log().warn(
+                f"detect_and_generate() retry also failed ({retry_exc}), "
+                "falling back to two-call mode"
+            )
+            # Graceful fallback: two separate calls
+            language = detect_language(safe_topic)
+            tags = generate_hashtags(safe_topic, language, platform=effective_platform)
+            return language, tags
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
