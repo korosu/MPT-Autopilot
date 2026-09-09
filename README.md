@@ -32,7 +32,6 @@ chain as you want.
 > [mpt-batch](https://github.com/korosu/mpt-batch),
 > [hashtag-enricher](https://github.com/korosu/hashtag-enricher), and
 > [yt-shorts-uploader](https://github.com/korosu/yt-shorts-uploader).
-> [**docs/migration.md**](docs/migration.md) has the full mapping and a checklist.
 
 ## Requirements
 
