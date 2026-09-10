@@ -125,7 +125,8 @@ def _output_dest(output_file: object, settings: Settings) -> tuple[Path, Path]:
 def copy_result(task_data: dict, output_file: str, settings: Settings) -> str:
     """
     Copy the finished video (and script.json if present) to output_dir.
-    Tries the API-reported path first, falls back to the standard task dir.
+    Tries the API-reported path first (videos, then combined_videos for
+    concatenated tasks), then falls back to the standard task dir.
     Returns task_id.
     """
     task_id: str = task_data["task_id"]
@@ -134,6 +135,8 @@ def copy_result(task_data: dict, output_file: str, settings: Settings) -> str:
 
     source_video: Path | None = None
     api_candidate: Path | None = None
+
+    # 1. Try the API-reported "videos" list (single-clip tasks).
     if task_data.get("videos"):
         video_path = task_data["videos"][0].lstrip("/")
         if video_path:
@@ -145,6 +148,17 @@ def copy_result(task_data: dict, output_file: str, settings: Settings) -> str:
                 api_candidate = candidate
                 log(f"  using API path: {api_candidate}", settings)
 
+    # 2. Fall back to "combined_videos" (multi-clip concatenated tasks).
+    if source_video is None and task_data.get("combined_videos"):
+        cv_path = task_data["combined_videos"][0].lstrip("/")
+        if cv_path:
+            candidate = storage / cv_path
+            if candidate.resolve().is_relative_to(storage.resolve()) and candidate.is_file():
+                source_video = candidate
+                api_candidate = candidate
+                log(f"  using combined_videos API path: {api_candidate}", settings)
+
+    # 3. Final fallback: the well-known task-dir output.
     fallback = task_dir / "final-1.mp4"
     if source_video is None:
         if fallback.exists():

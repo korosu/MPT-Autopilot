@@ -34,6 +34,11 @@ def _prompt_defaults(lang_cfg: LangSettings) -> dict:
         "paragraph_number": defaults.get("paragraph_number", 2),
         "concat_mode": defaults.get("video_concat_mode", "random"),
         "bgm_type": defaults.get("bgm_type", "random"),
+        # New upstream fields (MPT v1.3.6 VideoParams)
+        "fit_mode": defaults.get("video_fit_mode", "cover"),
+        "transition_mode": defaults.get("video_transition_mode", "None"),
+        "display_mode": defaults.get("subtitle_display_mode", "sentence"),
+        "animation": defaults.get("subtitle_animation", "none"),
     }
 
 
@@ -59,9 +64,16 @@ def build(
         "video_concat_mode": d["concat_mode"],
         "voice_rate": 1.15,
         "voice_name": lang_cfg.voices[0] if lang_cfg.voices else "gemini:puck",
+        "video_script": "",
         "bgm_type": d["bgm_type"],
         "bgm_volume": d["bgm_volume"],
         "paragraph_number": d["paragraph_number"],
+        "video_fit_mode": d["fit_mode"],
+        "video_transition_mode": d["transition_mode"],
+        "subtitle_display_mode": d["display_mode"],
+        "subtitle_animation": d["animation"],
+        "video_clip_speed": 1.0,
+        "subtitle_background_enabled": False,
     }
 
     system = (
@@ -96,6 +108,13 @@ output_file must end with "{d["suffix"]}.mp4" (e.g. "fact_water_memory{d["suffix
 - bgm_volume: {d["bgm_volume"]}.
 - bgm_type: "{d["bgm_type"]}".
 - video_concat_mode: "{d["concat_mode"]}".
+- video_fit_mode: "{d["fit_mode"]}" ("cover" crops to fill; "contain" adds black bars).
+- video_transition_mode: "{d["transition_mode"]}".
+- subtitle_display_mode: "{d["display_mode"]}" ("sentence" or "word_by_word").
+- subtitle_animation: "{d["animation"]}" ("none" or "pop_spring").
+- video_clip_speed: 1.0 (use 0.8–1.2 for slow/fast motion).
+- subtitle_background_enabled: false (set true for rounded subtitle background).
+- video_script: when appropriate, insert [pause:Xs] tags (0.1-10s) between sentences for natural silences. Use 1-3 per script. Example: [pause:1.5s].
 - enabled: true.
 
 Example of ONE object (do not copy it — generate fresh, original content):
@@ -127,9 +146,16 @@ def build_themes(
         "video_concat_mode": d["concat_mode"],
         "voice_rate": 1.15,
         "voice_name": lang_cfg.voices[0] if lang_cfg.voices else "gemini:puck",
+        "video_script": "",
         "bgm_type": d["bgm_type"],
         "bgm_volume": d["bgm_volume"],
         "paragraph_number": d["paragraph_number"],
+        "video_fit_mode": d["fit_mode"],
+        "video_transition_mode": d["transition_mode"],
+        "subtitle_display_mode": d["display_mode"],
+        "subtitle_animation": d["animation"],
+        "video_clip_speed": 1.0,
+        "subtitle_background_enabled": False,
     }
 
     system = (
@@ -163,6 +189,13 @@ Rules:
 - bgm_volume: {d["bgm_volume"]}.
 - bgm_type: "{d["bgm_type"]}".
 - video_concat_mode: "{d["concat_mode"]}".
+- video_fit_mode: "{d["fit_mode"]}" ("cover" crops to fill; "contain" adds black bars).
+- video_transition_mode: "{d["transition_mode"]}".
+- subtitle_display_mode: "{d["display_mode"]}" ("sentence" or "word_by_word").
+- subtitle_animation: "{d["animation"]}" ("none" or "pop_spring").
+- video_clip_speed: 1.0 (use 0.8–1.2 for slow/fast motion).
+- subtitle_background_enabled: false (set true for rounded subtitle background).
+- video_script: when appropriate, insert [pause:Xs] tags (0.1-10s) between sentences for natural silences. Use 1-3 per script. Example: [pause:1.5s].
 - enabled: true.
 
 Example of ONE object (do not copy it — generate fresh titles on the listed themes):

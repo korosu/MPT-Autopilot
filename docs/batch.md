@@ -455,6 +455,36 @@ been copied out, independently of this setting.
 
 ---
 
+## AI-generated video sources
+
+MoneyPrinterTurbo v1.3.6 supports several AI-generated and paid stock footage
+sources in addition to Pexels. Set `video_source` in your `defaults:` or
+per-job to use them:
+
+| Value | Description |
+|-------|-------------|
+| `pexels` | Free stock footage (default) |
+| `pixabay` | Free stock footage |
+| `coverr` | Free stock footage |
+| `wavespeed` | AI text-to-video (billed per request) |
+| `volcengine_seedance` | Volcano Engine Ark async video generation (billed per clip) |
+| `ofox` | OFox multi-model video API — Seedance, Wan, etc. (billed per clip) |
+| `metaso_minimax` | Metaso proxy for MiniMax H3 V2 async video (billed per clip, requires explicit charge confirmation in WebUI) |
+| `loomloom` | LoomLoom Market SkillBot paid source (requires API key and per-generation WebUI confirmation) |
+| `openai_image` | OpenAI-compatible /images/generations for image-per-keyword clips |
+| `local` | Use `video_materials` list with pre-uploaded files |
+
+Most AI sources require their own API keys in MPT's `config.toml`. See
+[MoneyPrinterTurbo's documentation](https://github.com/harry0703/MoneyPrinterTurbo)
+for setup instructions.
+
+**LoomLoom** is a paid Shengsuan Cloud source. When `video_source: "loomloom"` is
+set, MPT automatically handles the SkillBot execution, confirmation prompts, and
+asset delivery. MPT-Autopilot passes the parameter through without modification —
+no special handling is needed on the autopilot side.
+
+---
+
 ## Background music
 
 MoneyPrinterTurbo can mix background music into videos. Set `batch.mpt_songs_dir` to

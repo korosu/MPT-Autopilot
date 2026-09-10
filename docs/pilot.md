@@ -20,10 +20,11 @@ tool). It reads the `pilot:` section of the shared `config.yaml` and the shared
 
 - **Queue-aware** — only generates new ideas when your pending count drops below a configurable threshold
 - **Deduplication built-in** — tracks every generated video in `seen.txt`, never repeats a topic
-- **Provider-agnostic** — works with OpenAI, Groq, Together, Mistral, Ollama, Anthropic — just set `LLM_BASE_URL`
+- **Provider-agnostic** — any OpenAI-compatible API works: OpenAI, Groq, Together, Mistral, Ollama, DeepSeek, Qwen, OpenRouter, LiteLLM, vLLM, SGLang, NVIDIA NIM and others. Anthropic is supported too (auto-detected). Just set `LLM_BASE_URL` + `LLM_MODEL`
 - **Multi-language** — generates English, Spanish, or any language you define in the shared `langs:` block
 - **Topics mode** — import topics verbatim (no LLM) with `--topic` or `--topics`
 - **Theme mode** — constrain LLM to specific themes (e.g., "job", "animal") via a language's `theme_list`
+- **Pause tags** — the generated `video_script` can include `[pause: Xs]` tags (0.1–10s) that MoneyPrinterTurbo renders as natural silences. The pilot asks the LLM to insert 1–3 pauses per script automatically
 
 ---
 
@@ -87,6 +88,28 @@ pilot and batch can no longer disagree about what `_es` means.
 - Python 3.10+
 - [uv](https://github.com/astral-sh/uv) — recommended runner (see below)
 - An API key for any OpenAI-compatible LLM provider (or Anthropic)
+
+### LLM providers
+
+The pilot uses the standard `/chat/completions` endpoint, so any
+OpenAI-compatible provider works. Set `LLM_API_KEY`, `LLM_BASE_URL`,
+and `LLM_MODEL` in your `.env` file.
+
+| Provider | Base URL | Notes |
+|----------|----------|-------|
+| OpenAI | `https://api.openai.com/v1` | Default |
+| Groq | `https://api.groq.com/openai/v1` | Fast inference |
+| Together | `https://api.together.xyz/v1` | Open-weight models |
+| Mistral | `https://api.mistral.ai/v1` | European provider |
+| Ollama | `http://localhost:11434/v1` | Local models |
+| DeepSeek | `https://api.deepseek.com` | Chinese provider |
+| OpenRouter | `https://openrouter.ai/api/v1` | 200+ models via one key |
+| NVIDIA NIM | `https://integrate.api.nvidia.com/v1` | Reasoning models supported |
+| Anthropic | `https://api.anthropic.com` | Auto-detected; uses native API |
+
+Any provider not listed works if it exposes a `/chat/completions` endpoint.
+For reasoning models (e.g. o1, DeepSeek-R1, Claude extended thinking), set
+`reasoning_enabled: true` in the `pilot:` section of `config.yaml`.
 
 ---
 

@@ -1,0 +1,24 @@
+# MPT-Autopilot + MoneyPrinterTurbo docker-compose
+services:
+  mpt:
+    build: .
+    container_name: mpt-autopilot
+    environment:
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.openai.com/v1}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./jobs:/app/jobs
+      - ./exports:/app/exports
+      - mpt-storage:/MoneyPrinterTurbo/storage
+      - mpt-logs:/app/logs
+    depends_on:
+      moneyprinterturbo:
+        condition: service_healthy
+
+volumes:
+  mpt-storage:
+  mpt-logs:

@@ -28,6 +28,9 @@ exports_*/
 logs/
 meta/
 
+# development scratch files
+.sandbox/
+
 # uploader ledger. WAL mode also creates -wal and -shm sidecars while it runs.
 *.sqlite
 *.sqlite-wal

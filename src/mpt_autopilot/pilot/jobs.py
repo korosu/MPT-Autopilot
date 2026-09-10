@@ -32,18 +32,55 @@ from mpt_autopilot.lock import file_lock
 
 # Canonical key order for serialised job entries — matches hand-written style.
 _KEY_ORDER = [
+    # Identity
     "name",
     "enabled",
     "output_file",
+    # Script
     "video_subject",
-    "video_clip_duration",
+    "video_script",
+    "video_script_prompt",
+    "custom_system_prompt",
+    "video_language",
+    "paragraph_number",
+    # Video assembly
+    "video_aspect",
+    "video_fit_mode",
     "video_concat_mode",
+    "video_transition_mode",
+    "video_clip_duration",
+    "video_clip_speed",
+    "video_source",
+    "video_materials",
+    "custom_audio_file",
+    # Voice
     "voice_rate",
     "voice_name",
+    "tts_server",
+    # Audio / BGM
     "bgm_type",
+    "bgm_file",
     "bgm_volume",
-    "paragraph_number",
-    "video_script_prompt",
+    "video_music_prompt",
+    "sonilo_bgm_prompt",
+    # Subtitles
+    "subtitle_enabled",
+    "subtitle_position",
+    "subtitle_display_mode",
+    "subtitle_animation",
+    "custom_position",
+    "subtitle_background_enabled",
+    "subtitle_background_color",
+    "rounded_subtitle_background",
+    # Style
+    "font_name",
+    "font_size",
+    "text_fore_color",
+    "text_background_color",
+    "stroke_color",
+    "stroke_width",
+    # Rendering
+    "n_threads",
 ]
 
 # ── Reading ───────────────────────────────────────────────────────────────────

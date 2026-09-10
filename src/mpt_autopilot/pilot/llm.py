@@ -2,15 +2,15 @@
 pilot/llm.py
 
 Single LLM client that works with any OpenAI-compatible provider
-AND Anthropic natively — detected automatically by LLM_BASE_URL.
+AND Anthropic natively (auto-detected by base_url).
 
-Supported out of the box:
-  OpenAI     → https://api.openai.com/v1
-  Groq       → https://api.groq.com/openai/v1
-  Together   → https://api.together.xyz/v1
-  Mistral    → https://api.mistral.ai/v1
-  Ollama     → http://localhost:11434/v1
-  Anthropic  → https://api.anthropic.com   (auto-detected)
+Any service exposing a /chat/completions endpoint works out of the box:
+OpenAI, Groq, Together, Mistral, Ollama, DeepSeek, Qwen, OpenRouter,
+LiteLLM, vLLM, SGLang, NVIDIA NIM, and others. Set LLM_BASE_URL +
+LLM_MODEL in .env and it just works.
+
+Anthropic is detected automatically when the base_url contains
+"anthropic.com" and routed to /v1/messages instead.
 """
 
 from __future__ import annotations

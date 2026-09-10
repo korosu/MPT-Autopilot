@@ -32,11 +32,16 @@ defaults:
 
   # ── Video assembly ───────────────────────────────────────────────────────
   video_aspect: "9:16"
+  video_fit_mode: "cover"           # "cover" (crop) or "contain" (pillarbox)
   video_concat_mode: "random"
   video_transition_mode: "None"
   video_clip_duration: 4
+  video_clip_speed: 1.0             # speed multiplier (1.0 = normal)
   video_count: 1
   video_source: "pexels"
+  # Other supported sources: "pixabay", "coverr", "wavespeed" (AI text-to-video),
+  # "volcengine_seedance", "ofox" (multi-model video API), "metaso_minimax",
+  # "loomloom", "openai_image", "local"
   video_materials:
     - provider: "pexels"
       url: ""
@@ -47,12 +52,19 @@ defaults:
   bgm_type: "random"
   bgm_file: ""
   bgm_volume: 0.2
+  video_music_prompt: ""          # AI-generated music prompt (Sonilo, ElevenLabs Music)
+  sonilo_bgm_prompt: ""           # Legacy; use video_music_prompt instead
 
   # ── Subtitles ────────────────────────────────────────────────────────────
   subtitle_enabled: true
   subtitle_position: "bottom"
+  subtitle_display_mode: "sentence"    # "sentence" or "word_by_word"
+  subtitle_animation: "none"           # "none" or "pop_spring"
   custom_position: 50
   font_name: "STHeitiMedium.ttc"
+  subtitle_background_enabled: false   # replaces text_background_color for new MPT
+  subtitle_background_color: "#000000" # used when subtitle_background_enabled is true
+  rounded_subtitle_background: false
   font_size: 60
   text_fore_color: "#FFFFFF"
   text_background_color: true

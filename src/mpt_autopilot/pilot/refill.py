@@ -152,14 +152,34 @@ def build_duration_instruction(words: tuple[int, int | None] | None) -> str:
 _VALID_CONCAT_MODES = {"random", "sequential"}
 _VALID_BGM_TYPES = {"random", "custom", "none"}
 
+# Upstream VideoFitMode, VideoTransitionMode, SubtitleDisplayMode, SubtitleAnimation
+# and subtitle-background fields — mirrors MoneyPrinterTurbo app/models/schema.py.
+_VALID_FIT_MODES = {"cover", "contain"}
+_VALID_TRANSITION_MODES = {
+    "None",
+    "Shuffle",
+    "FadeIn",
+    "FadeOut",
+    "SlideIn",
+    "SlideOut",
+    "ZoomIn",
+    "ZoomOut",
+}
+_VALID_DISPLAY_MODES = {"sentence", "word_by_word"}
+_VALID_ANIMATIONS = {"none", "pop_spring"}
+
 
 def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
     """
     Check the fields the LLM was asked to fill in (voice_name, voice_rate,
-    video_clip_duration, bgm_volume, paragraph_number, video_concat_mode,
-    bgm_type) against config.yaml. Anything missing, the wrong type, or out
-    of range is replaced with a safe configured default instead of being
-    written into the jobs yaml as-is.
+    video_script, video_clip_duration, video_concat_mode, bgm_type,
+    bgm_volume, video_fit_mode, video_transition_mode, subtitle_display_mode,
+    subtitle_animation, rounded_subtitle_background, subtitle_background_enabled,
+    subtitle_background_color, video_clip_speed, video_music_prompt,
+    sonilo_bgm_prompt, custom_system_prompt, video_materials) against
+    config.yaml and MPT schema constraints. Anything missing, the wrong type,
+    out of range, or exceeding MPT length limits is replaced with a safe
+    configured default instead of being written into the jobs yaml as-is.
 
     Always injects an always-on hook instruction into video_script_prompt.
     If duration_range is configured, also adds word-count guidance and may
@@ -199,6 +219,72 @@ def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
     # bgm_type: must be a known MPT value
     if out.get("bgm_type") not in _VALID_BGM_TYPES:
         out["bgm_type"] = defaults.get("bgm_type", "random")
+
+    # video_script: optional pre-written script — pass through as-is.
+    # The pilot doesn't generate it, but a hand-edited or API-imported job
+    # may already contain one; don't clobber it with the hook prompt.
+    # Defensive check: drop obviously broken values (non-string or > 8k chars).
+    vs_raw = out.get("video_script")
+    if not isinstance(vs_raw, str) or len(vs_raw) > 8000:
+        out["video_script"] = defaults.get("video_script", "")
+
+    # --- New upstream fields (MPT v1.3.6 VideoParams additions) ---
+    # video_fit_mode: how non-matching-aspect clips fill the canvas
+    if out.get("video_fit_mode") not in _VALID_FIT_MODES:
+        out["video_fit_mode"] = defaults.get("video_fit_mode", "cover")
+
+    # video_transition_mode: clip-to-clip transition effect
+    t_mode = out.get("video_transition_mode")
+    if t_mode not in _VALID_TRANSITION_MODES:
+        out["video_transition_mode"] = defaults.get("video_transition_mode", "None")
+
+    # subtitle_display_mode: per-sentence or per-word subtitles
+    if out.get("subtitle_display_mode") not in _VALID_DISPLAY_MODES:
+        out["subtitle_display_mode"] = defaults.get("subtitle_display_mode", "sentence")
+
+    # subtitle_animation: subtitle pop-in animation
+    if out.get("subtitle_animation") not in _VALID_ANIMATIONS:
+        out["subtitle_animation"] = defaults.get("subtitle_animation", "none")
+
+    # rounded_subtitle_background: rounded corners on subtitle bg
+    out["rounded_subtitle_background"] = bool(out.get("rounded_subtitle_background", False))
+
+    # Subtitle background split (replaces text_background_color=true with two fields)
+    out["subtitle_background_enabled"] = bool(out.get("subtitle_background_enabled", False))
+    out["subtitle_background_color"] = str(out.get("subtitle_background_color", "#000000"))
+
+    # video_clip_speed: playback speed multiplier
+    speed = out.get("video_clip_speed")
+    if not isinstance(speed, (int, float)) or isinstance(speed, bool) or speed <= 0:
+        out["video_clip_speed"] = defaults.get("video_clip_speed", 1.0)
+
+    # video_music_prompt / sonilo_bgm_prompt: AI-generated music prompts
+    # (pass-through, no range validation — prompt text is freeform)
+    out.setdefault("video_music_prompt", defaults.get("video_music_prompt", ""))
+    out.setdefault("sonilo_bgm_prompt", defaults.get("sonilo_bgm_prompt", ""))
+
+    # custom_system_prompt: max 8000 chars (MPT schema constraint)
+    csp = out.get("custom_system_prompt", "")
+    if not isinstance(csp, str) or len(csp) > 8000:
+        out["custom_system_prompt"] = defaults.get("custom_system_prompt", "")
+
+    # video_materials: must be a list of dicts with provider/url/duration
+    mats = out.get("video_materials")
+    if mats is not None:
+        if not isinstance(mats, list):
+            out["video_materials"] = defaults.get("video_materials", [])
+        else:
+            cleaned = []
+            for item in mats:
+                if isinstance(item, dict) and item.get("provider"):
+                    cleaned.append(
+                        {
+                            "provider": str(item["provider"]),
+                            "url": str(item.get("url") or ""),
+                            "duration": max(0, int((item.get("duration") or 0) or 0)),
+                        }
+                    )
+            out["video_materials"] = cleaned or defaults.get("video_materials", [])
 
     # ponytail: always-on hook + optional duration-range guidance
     dur = defaults.get("duration_range")

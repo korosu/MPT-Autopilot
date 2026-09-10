@@ -12,6 +12,8 @@ MoneyPrinterTurbo (app/services/voice.py) dispatches purely on the shape of
     - "gemini:..."           -> Gemini TTS   (needs a Gemini API key)
     - "mimo:..."             -> Xiaomi MiMo TTS
     - "elevenlabs:..."       -> ElevenLabs
+    - "chatterbox:..."       -> Chatterbox (self-hosted, OpenAI-compatible)
+    - "kokoro:..."           -> Kokoro TTS  (self-hosted, OpenAI-compatible)
     - anything else          -> Edge TTS / "Azure TTS V1" (free, e.g. "es-ES-ElviraNeural")
 
 `tts_server` is kept here for readability and to mirror the WebUI's field,
