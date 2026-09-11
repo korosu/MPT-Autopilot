@@ -10,6 +10,7 @@ learns one interface:
     mpt enrich     — generate hashtags for rendered videos
     mpt upload     — upload rendered videos to YouTube
     mpt run        — the whole pipeline, in order
+    mpt validate   — pre-flight configuration checks
 
 `--config` lives at the root (`mpt --config /srv/mpt/config.yaml batch`) and is
 also accepted after the subcommand, so muscle memory from the four separate
@@ -67,6 +68,10 @@ def _stage_hooks(name: str) -> StageHooks:
         from mpt_autopilot import pipeline
 
         return StageHooks(pipeline.add_arguments, pipeline.execute, pipeline.EPILOG)
+    if name == "validate":
+        from mpt_autopilot import validate
+
+        return StageHooks(validate.add_arguments, validate.execute, validate.EPILOG)
     raise ValueError(f"unknown stage '{name}'")
 
 
@@ -77,6 +82,7 @@ STAGES: tuple[tuple[str, str], ...] = (
     ("enrich", "generate hashtags for rendered videos with an LLM"),
     ("upload", "upload rendered videos to YouTube"),
     ("run", "run the whole pipeline: refill → batch → enrich → upload"),
+    ("validate", "pre-flight configuration checks"),
 )
 
 EPILOG = """
