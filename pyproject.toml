@@ -1,6 +1,6 @@
 [project]
 name = "mpt-autopilot"
-version = "1.1.2"
+version = "1.2.0"
 description = "End-to-end automation for MoneyPrinterTurbo: idea generation, batch rendering, hashtag enrichment, and YouTube upload behind one `mpt` command"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -9,6 +9,7 @@ dependencies = [
     "httpx>=0.27",
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
+    "tomli>=2.0",
 ]
 
 [project.scripts]

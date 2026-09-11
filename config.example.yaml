@@ -1,7 +1,7 @@
 # =============================================================================
 # MPT Autopilot — config.example.yaml
 #
-# ONE config file for all four stages. Copy it and edit:
+# ONE config file for all stages. Copy it and edit:
 #
 #     cp config.example.yaml config.yaml
 #     cp .env.example .env                # secrets go in .env, never here
@@ -44,69 +44,14 @@ paths:
   jobs_dir: "./jobs"        # jobs.yaml / jobs_es.yaml live here
   seen_dir: "./jobs"        # seen.txt / seen_es.txt (defaults to jobs_dir)
   exports_dir: "./exports"  # rendered videos (batch writes, enrich reads)
+  videos_dir: "./videos"    # finished videos waiting for upload (uploader reads)
 
-# ── Language profiles ────────────────────────────────────────────────────────
-#
-# ONE shared block, because every stage needs the same answer to "what does the
-# _es suffix mean?". Before the merge each tool had its own copy and a typo in
-# one of them silently produced videos nothing downstream could find.
-#
-# file_suffix drives every derived name:
-#     ""    → jobs.yaml,    seen.txt,    exports/
-#     "_es" → jobs_es.yaml, seen_es.txt, exports_es/
-#
-# Only `pilot` reads voices / job_defaults / theme_list; `batch`, `enrich`, and
-# `run` only need file_suffix. Delete a language you don't produce.
-langs:
-  en:
-    label: English
-    file_suffix: ""          # no suffix → bare filenames
-    voice_rate_min: 1.05
-    voice_rate_max: 1.20
-    voices:
-      - gemini:aoede
-      - gemini:charon
-      - gemini:fenrir
-      - gemini:kore
-      - gemini:leda
-      - gemini:orus
-      - gemini:puck
-      - gemini:zephyr
-
-    # Optional theme mode for `mpt refill`: when non-empty, generated topics are
-    # constrained to these themes. Omit for free-topic generation.
-    # theme_list:
-    #   - job
-    #   - animal
-    #   - computer
-
-    # Written verbatim into every generated job entry.
-    job_defaults:
-      video_clip_duration: 3
-      video_concat_mode: random
-      bgm_type: random
-      bgm_volume: 0.15
-      paragraph_number: 2
-      # Target narration length, e.g. "30-60" or "120+" (seconds). Omit for no
-      # limit. Converted to word bounds and injected into the script prompt;
-      # paragraph_number is nudged up if needed, never down.
-      # duration_range: "30-60"
-
-  es:
-    label: Spanish
-    file_suffix: "_es"       # → jobs_es.yaml, seen_es.txt, exports_es/
-    voice_rate_min: 1.05
-    voice_rate_max: 1.15
-    voices:
-      - gemini:aoede
-      - gemini:kore
-      - gemini:puck
-    job_defaults:
-      video_clip_duration: 4
-      video_concat_mode: random
-      bgm_type: random
-      bgm_volume: 0.15
-      paragraph_number: 2
+# ``mpt:`` is for optional integration with MoneyPrinterTurbo itself.
+# Point ``config_path`` at your MPT install's TOML file so MPT-Autopilot
+# can reuse the settings you already entered in the WebUI.  The upload-post
+# block below reads credentials from there, so you do NOT enter them here.
+mpt:
+  config_path: ""  # path to MoneyPrinterTurbo's config.toml (optional)
 
 
 # =============================================================================
@@ -201,6 +146,21 @@ batch:
   # end). Set cache_cleanup_enabled: false to never touch it.
   cache_cleanup_enabled: true
   cache_cleanup_interval: 6
+
+  # ── Upload via upload-post.com ──────────────────────────────────────────
+  #
+  # After a video finishes rendering, optionally submit it to
+  # [upload-post.com](https://docs.upload-post.com) for cross-posting to
+  # YouTube / TikTok / Instagram.  The credentials are read from your
+  # existing MoneyPrinterTurbo config.toml (set `mpt.config_path` below),
+  # so you do NOT enter them again here.  Omit the keys entirely to fall
+  # back to MPT's config, or set them here to override per-run.
+  upload_post:
+    enabled: false
+    # api_key: ""           # override — leave empty to read from MPT config.toml
+    # username: ""          # override — leave empty to read from MPT config.toml
+    # platforms: ["youtube", "tiktok"]  # override — leave empty to read from MPT
+    # youtube_privacy_status: "public"  # public | unlisted | private
 
   # ── Voice presets ────────────────────────────────────────────────────────
   #

@@ -103,12 +103,13 @@ wheels = [
 
 [[package]]
 name = "mpt-autopilot"
-version = "1.0.8"
+version = "1.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
+    { name = "tomli" },
 ]
 
 [package.optional-dependencies]
@@ -126,6 +127,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.20" },
+    { name = "tomli", specifier = ">=2.0" },
 ]
 provides-extras = ["dev"]
 

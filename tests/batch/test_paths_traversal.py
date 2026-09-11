@@ -153,11 +153,12 @@ def test_output_file_traversal_writes_nothing(storage_tree, finished_task) -> No
 
 
 def test_legitimate_output_file_still_copies(storage_tree, finished_task) -> None:
-    task_id = batch_run.copy_result(
+    copy_task_id, dest_video = batch_run.copy_result(
         {"task_id": "T9", "videos": []}, "good_video.mp4", storage_tree.settings
     )
     assert (storage_tree.exports / "good_video.mp4").read_bytes() == b"VIDEO"
-    assert task_id == "T9"
+    assert copy_task_id == "T9"
+    assert dest_video == storage_tree.exports / "good_video.mp4"
 
 
 def test_empty_output_file_is_refused(storage_tree, finished_task) -> None:

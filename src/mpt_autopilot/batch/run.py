@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -36,7 +37,13 @@ from mpt_autopilot.batch import bgm, state, voices
 from mpt_autopilot.batch.api import health_check, submit_job, wait_for_task
 from mpt_autopilot.batch.settings import Settings
 from mpt_autopilot.batch.settings import load as load_settings
+from mpt_autopilot.batch.upload_post import (
+    UploadPostError,
+    UploadPostUnavailable,
+    upload_video,
+)
 from mpt_autopilot.config import ConfigError
+from mpt_autopilot.uploader.metadata import title_from_filename
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -122,12 +129,10 @@ def _output_dest(output_file: object, settings: Settings) -> tuple[Path, Path]:
     return dest_video, dest_video.with_suffix(".json")
 
 
-def copy_result(task_data: dict, output_file: str, settings: Settings) -> str:
+def copy_result(task_data: dict, output_file: str, settings: Settings) -> tuple[str, Path]:
     """
     Copy the finished video (and script.json if present) to output_dir.
-    Tries the API-reported path first (videos, then combined_videos for
-    concatenated tasks), then falls back to the standard task dir.
-    Returns task_id.
+    Returns (task_id, dest_video_path).
     """
     task_id: str = task_data["task_id"]
     task_dir = _task_dir(task_id, settings)
@@ -199,7 +204,7 @@ def copy_result(task_data: dict, output_file: str, settings: Settings) -> str:
             shutil.copy2(sub_file, dest_sub)
             log(f"  saved: {dest_sub}", settings)
 
-    return task_id
+    return task_id, dest_video
 
 
 def cleanup_task(task_id: str, settings: Settings) -> None:
@@ -265,9 +270,37 @@ def run_job(
             state.add(in_progress_path, job["output_file"], task_id, attempt)
             log(f"task_id: {task_id}", settings)
             task_data = wait_for_task(task_id, settings, lambda m: log(m, settings))
-            copy_result(task_data, job["output_file"], settings)
-            cleanup_task(task_id, settings)
+            copy_task_id, dest_video = copy_result(task_data, job["output_file"], settings)
+            cleanup_task(copy_task_id, settings)
             state.remove(in_progress_path, job["output_file"])
+
+            # ── upload-post (optional) ────────────────────────────────────────
+            if settings.upload_post_enabled:
+                try:
+                    sidecar = dest_video.with_suffix(".json")
+                    meta_title = dest_video.stem
+                    meta_desc = ""
+                    meta_tags: list[str] = []
+                    if sidecar.exists():
+                        raw = json.loads(sidecar.read_text(encoding="utf-8"))
+                        meta_title = raw.get("title", dest_video.stem)
+                        meta_desc = raw.get("description", "")
+                        meta_tags = raw.get("tags", [])
+                    else:
+                        meta_title = title_from_filename(dest_video)
+                    upload_video(
+                        video_path=dest_video,
+                        meta_title=meta_title,
+                        meta_description=meta_desc,
+                        meta_tags=meta_tags,
+                        settings=settings,
+                        privacy_status=settings.upload_post_youtube_privacy_status,
+                        platforms=settings.upload_post_platforms,
+                        log=lambda m: log(m, settings),
+                    )
+                except (UploadPostUnavailable, UploadPostError) as exc:
+                    log(f"upload-post failed for {job['name']}: {exc}", settings)
+
             log(f"done: {job['name']}", settings)
             return True
 
@@ -651,6 +684,18 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--upload-post",
+        nargs="?",
+        const=True,
+        default=None,
+        metavar="BOOL",
+        help=(
+            "Override batch.upload_post.enabled for this run (true|false). "
+            "Use --upload-post without a value to force-enable, even if "
+            "config.yaml disables it."
+        ),
+    )
+    parser.add_argument(
         "--seen",
         type=Path,
         default=None,
@@ -783,6 +828,11 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
     from mpt_autopilot import seen as seen_registry
 
     seen_registry.set_rotation_max_bytes(settings.seen_max_mb * 1024 * 1024)
+
+    # ── CLI overrides ────────────────────────────────────────────────────
+    if getattr(args, "upload_post", None) is not None:
+        val = str(args.upload_post).lower()
+        settings.upload_post_enabled = val in ("true", "1", "yes", "on")
 
     cfg_dir = shared_config.resolve_path(config_path).resolve().parent
 

@@ -41,7 +41,7 @@ DEFAULT_ENV_NAME = ".env"
 
 # Sections a stage may ask for. Kept explicit so a typo raises instead of
 # silently handing back an empty dict.
-SECTIONS = ("pilot", "batch", "enricher", "uploader", "pipeline")
+SECTIONS = ("pilot", "batch", "enricher", "uploader", "pipeline", "mpt")
 
 _SHARED_PREFIX_DEFAULT = "mpt-autopilot"
 
