@@ -207,8 +207,7 @@ src/mpt_autopilot/
 ```
 
 The four stage packages never import each other — everything shared goes through
-the top-level modules. [CLAUDE.md](CLAUDE.md) documents the stage contract and the
-config invariants worth knowing before changing a settings module.
+the top-level modules.
 
 Commit history from all four original repositories is preserved, so `git blame`
 and `git log --follow` reach back into each file's original project:
