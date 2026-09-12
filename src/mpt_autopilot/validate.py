@@ -89,14 +89,9 @@ def _check_file_access(cfg: shared_config.Config) -> list[CheckResult]:
     except (ConfigError, ValueError):
         batch_sec = {}
 
-    # Resolve seen file
-    seen_val = batch_sec.get("seen_file")
-    if seen_val is not None:
-        seen_base = cfg.resolve(str(seen_val))
-    else:
-        seen_dir_str = batch_sec.get("seen_dir") or cfg.paths().get("seen_dir") or "./jobs"
-        seen_dir = cfg.resolve(str(seen_dir_str))
-        seen_base = seen_dir / "seen.txt"
+    seen_dir_str = cfg.paths().get("seen_dir") or "./jobs"
+    seen_dir = cfg.resolve(str(seen_dir_str))
+    seen_base = seen_dir / "seen.txt"
 
     seen_checked: set[Path] = set()
 

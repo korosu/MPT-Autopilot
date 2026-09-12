@@ -373,19 +373,9 @@ def _check_file_access(cfg: shared_config.Config) -> list[tuple[str, str, bool]]
     issues: list[tuple[str, str, bool]] = []
     langs = cfg.langs()
 
-    try:
-        batch_sec = cfg.section("batch")
-    except (ConfigError, ValueError):
-        batch_sec = {}
-
-    # Resolve seen file
-    seen_val = batch_sec.get("seen_file")
-    if seen_val is not None:
-        seen_base = cfg.resolve(str(seen_val))
-    else:
-        seen_dir_str = batch_sec.get("seen_dir") or cfg.paths().get("seen_dir") or "./jobs"
-        seen_dir = cfg.resolve(str(seen_dir_str))
-        seen_base = seen_dir / "seen.txt"
+    seen_dir_str = cfg.paths().get("seen_dir") or "./jobs"
+    seen_dir = cfg.resolve(str(seen_dir_str))
+    seen_base = seen_dir / "seen.txt"
 
     # Check base seen file
     _check_readable(seen_base, "seen", issues)
@@ -398,6 +388,11 @@ def _check_file_access(cfg: shared_config.Config) -> list[tuple[str, str, bool]]
         _check_readable(lang_seen, "seen", issues, lang_code)
 
     # Jobs files
+    try:
+        batch_sec = cfg.section("batch")
+    except (ConfigError, ValueError):
+        batch_sec = {}
+
     jobs_dir_str = batch_sec.get("jobs_dir") or cfg.paths().get("jobs_dir") or "./jobs"
     jobs_dir = cfg.resolve(str(jobs_dir_str))
 

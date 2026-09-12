@@ -321,15 +321,30 @@ def run_job(
 # ── Core logic ────────────────────────────────────────────────────────────────
 
 
+def _seen_base_for_settings(settings: Settings, config_path: Path | None) -> Path:
+    cfg = shared_config.load(config_path)
+    base = cfg.path_value("batch", "seen_dir") or cfg.path_value("paths", "seen_dir") or Path(".")
+    return cfg.resolve(str(base))
+
+
+def _seen_path_for_settings(settings: Settings, config_path: Path | None, lang_suffix: str = "") -> Path:
+    return seen.resolve(_seen_base_for_settings(settings, config_path), lang_suffix)
+
+
 def run(
-    jobs_path: Path, settings: Settings, *, dry_run: bool, seen_override: Path | None = None
+    jobs_path: Path,
+    settings: Settings,
+    *,
+    dry_run: bool,
+    config_path: Path | None = None,
+    seen_override: Path | None = None,
 ) -> int:
     with open(jobs_path, encoding="utf-8") as f:
         jobs_cfg = yaml.safe_load(f) or {}
 
     defaults: dict = jobs_cfg.get("defaults", {})
     jobs: list[dict] = jobs_cfg.get("jobs", [])
-    seen_file = seen_override or settings.seen_file
+    seen_file = seen_override or _seen_path_for_settings(settings, config_path)
     already_seen = seen.load(seen_file)
     voice_pool = settings.voice_pool
     in_progress_path = seen_file.with_name(seen_file.stem + ".in_progress.txt")
@@ -701,8 +716,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help=(
-            "Override batch.seen_file from config.yaml (e.g. --seen seen_es.txt for "
-            "multi-language setups driven by `mpt refill`)."
+            "Override the seen registry path for this run "
+            "(e.g. --seen seen_es.txt for a one-off language-specific check)."
         ),
     )
     parser.add_argument(
@@ -860,14 +875,7 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
     # Resolve --seen default when --lang is set and --seen not explicitly passed
     seen_arg: Path | None = args.seen
     if seen_arg is None and lang_suffix:
-        # Derive from the configured seen_file: seen.txt → seen_es.txt, keeping
-        # its own directory. Deriving from cfg_dir instead would silently point
-        # at a different registry whenever seen_file lives in a subdirectory
-        # (e.g. batch.seen_file: ./jobs/seen.txt), and every video would be
-        # re-rendered.
-        seen_arg = settings.seen_file.with_name(
-            f"{settings.seen_file.stem}{lang_suffix}{settings.seen_file.suffix}"
-        )
+        seen_arg = _seen_path_for_settings(settings, config_path, lang_suffix)
 
     # Apply lang suffix to output_dir
     if lang_suffix:
@@ -875,13 +883,13 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
             settings.output_dir.parent / f"{settings.output_dir.name}{lang_suffix}"
         )
 
-    # Resolve --seen path relative to config.yaml's location (same as seen_file)
+    # Resolve --seen path relative to config.yaml's location
     seen_override: Path | None = None
     if seen_arg is not None:
         seen_override = seen_arg if seen_arg.is_absolute() else cfg_dir / seen_arg
 
     if args.status:
-        seen_path = seen_override or settings.seen_file
+        seen_path = seen_override or _seen_path_for_settings(settings, config_path, lang_suffix)
         entries = seen.list_all(seen_path)
         print(f"\nSeen registry: {seen_path}")
         print(f"Total entries: {len(entries)}\n")

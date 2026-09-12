@@ -33,7 +33,6 @@ class Settings:
 
     # Output — from config.yaml
     output_dir: Path
-    seen_file: Path
 
     # Per-language overrides — from the shared `langs:` block (optional)
     # {code: {"file_suffix": "_es", ...}} — empty dict when absent
@@ -174,7 +173,6 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
         mpt_storage=_resolve(str(cfg.require(SECTION, "mpt_storage"))),
         mpt_songs_dir=_resolve(str(cfg.require(SECTION, "mpt_songs_dir"))),
         output_dir=_resolve(str(sec["output_dir"])) if sec.get("output_dir") else exports_default,
-        seen_file=_resolve(str(sec.get("seen_file", "./seen.txt"))),
         langs=langs,
         jobs_dir=jobs_dir,
         jobs=jobs,

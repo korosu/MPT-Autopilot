@@ -42,7 +42,7 @@ telegram_prefix: "mpt-autopilot"
 # wins over these. Leave any of them out to fall back to per-stage defaults.
 paths:
   jobs_dir: "./jobs"        # jobs.yaml / jobs_es.yaml live here
-  seen_dir: "./jobs"        # seen.txt / seen_es.txt (defaults to jobs_dir)
+  seen_dir: "./jobs"        # seen.txt / seen_es.txt; shared primary setting for all stages
   exports_dir: "./exports"  # rendered videos (batch writes, enrich reads)
   videos_dir: "./videos"    # finished videos waiting for upload (uploader reads)
 
@@ -189,10 +189,10 @@ batch:
   # Defaults to paths.exports_dir.
   # output_dir: "./exports"
 
-  # Dedup registry: one output_file name per line, append-only. A video is
-  # recorded only after it is fully copied, so a crash never loses or
-  # duplicates progress. --lang derives seen_es.txt from this name.
-  seen_file: "./seen.txt"
+  # Dedup registry location comes from the shared `paths.seen_dir` (or
+  # `pilot.seen_dir` if you only need an override for pilot). `--lang` derives
+  # `seen_es.txt` from that directory automatically.
+  # seen_file: "./seen.txt"
 
   # Direct jobs file path (optional). When set it wins over --lang suffixes and
   # jobs_dir. Usually you want the langs: mechanism instead.

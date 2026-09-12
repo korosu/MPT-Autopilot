@@ -19,7 +19,6 @@ def _settings(
         mpt_storage=Path("/tmp/storage"),
         mpt_songs_dir=Path("/tmp/resource/songs"),
         output_dir=Path("/tmp/output"),
-        seen_file=Path("/tmp/seen.txt"),
         langs={},
         jobs_dir=None,
         jobs=None,

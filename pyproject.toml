@@ -1,6 +1,6 @@
 [project]
 name = "mpt-autopilot"
-version = "1.3.0"
+version = "1.4.0"
 description = "End-to-end automation for MoneyPrinterTurbo: idea generation, batch rendering, hashtag enrichment, and YouTube upload behind one `mpt` command"
 readme = "README.md"
 license = { file = "LICENSE" }
