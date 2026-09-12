@@ -39,7 +39,10 @@ def test_unknown_stage_hook_raises():
         cli._stage_hooks("nope")
 
 
-@pytest.mark.parametrize("stage", ["refill", "init-seen", "batch", "enrich", "upload", "run", "validate"])
+@pytest.mark.parametrize(
+    "stage",
+    ["refill", "init-seen", "batch", "enrich", "upload", "run", "validate"],
+)
 def test_stage_help_shows_the_stage_examples(stage, tmp_path, monkeypatch, capsys):
     """Each stage's EPILOG has to reach `mpt <stage> --help`, not just its standalone parser."""
     monkeypatch.chdir(tmp_path)
@@ -58,7 +61,10 @@ def test_root_help_needs_no_config(tmp_path, monkeypatch, capsys):
     assert "mpt" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("stage", ["refill", "init-seen", "batch", "enrich", "upload", "run", "validate"])
+@pytest.mark.parametrize(
+    "stage",
+    ["refill", "init-seen", "batch", "enrich", "upload", "run", "validate"],
+)
 def test_stage_help_needs_no_config(stage, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit) as exc:

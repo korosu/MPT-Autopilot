@@ -13,11 +13,28 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 from mpt_autopilot import config as shared_config
 from mpt_autopilot.config import ConfigError
+
+# ── Data types ───────────────────────────────────────────────────────────────
+
+
+class CheckResult:
+    """Result of one validation check."""
+
+    __slots__ = ("check", "detail", "status")
+
+    def __init__(self, check: str, detail: str, status: str) -> None:
+        self.check = check  # e.g. "seen", "jobs", "path-consistency"
+        self.detail = detail  # human-readable description with path
+        self.status = status  # "ok", "warn", "error"
+
+
+# ── Public API ───────────────────────────────────────────────────────────────
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -35,14 +52,36 @@ Exit codes: 0 = ok (warnings allowed), 1 = hard error found
 """
 
 
-def _check_file_access(cfg: shared_config.Config) -> list[tuple[str, str, bool]]:
-    """
-    Verify that every seen.txt and jobs file (per language) is readable.
+def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
+    """Run validation from already-parsed arguments."""
+    if config_path is None:
+        config_path = getattr(args, "config", None)
 
-    These are soft warnings — files may legitimately not exist yet in a fresh
-    setup, but the user should know about them.
-    """
-    issues: list[tuple[str, str, bool]] = []
+    try:
+        cfg = shared_config.load(config_path)
+    except (ConfigError, FileNotFoundError) as exc:
+        print(f"[ERROR] {exc}")
+        return 1
+
+    results = _run_checks(cfg)
+    _print_results(results)
+    return 1 if any(r.status == "error" for r in results) else 0
+
+
+# ── Checks ───────────────────────────────────────────────────────────────────
+
+
+def _run_checks(cfg: shared_config.Config) -> list[CheckResult]:
+    """Run all validation checks and return results."""
+    results: list[CheckResult] = []
+    results.extend(_check_file_access(cfg))
+    results.extend(_check_path_consistency(cfg))
+    return results
+
+
+def _check_file_access(cfg: shared_config.Config) -> list[CheckResult]:
+    """Verify that every seen.txt and jobs file (per language) is readable."""
+    results: list[CheckResult] = []
     langs = cfg.langs()
 
     try:
@@ -59,40 +98,52 @@ def _check_file_access(cfg: shared_config.Config) -> list[tuple[str, str, bool]]
         seen_dir = cfg.resolve(str(seen_dir_str))
         seen_base = seen_dir / "seen.txt"
 
+    seen_checked: set[Path] = set()
+
     # Check base seen file
-    _check_readable(seen_base, "seen", issues)
+    result = _check_readable(seen_base, "seen")
+    results.append(result)
+    seen_checked.add(seen_base)
 
     # Per-language seen files
     for lang_code in langs:
         file_suffix = langs[lang_code].get("file_suffix", "")
         slug = file_suffix.lstrip("_")
         lang_seen = seen_base.parent / f"seen_{slug}.txt" if slug else seen_base
-        _check_readable(lang_seen, "seen", issues, lang_code)
+        if lang_seen in seen_checked:
+            continue
+        seen_checked.add(lang_seen)
+        label = f"seen ({lang_code})" if slug else "seen"
+        results.append(_check_readable(lang_seen, label))
 
     # Jobs files
     jobs_dir_str = batch_sec.get("jobs_dir") or cfg.paths().get("jobs_dir") or "./jobs"
     jobs_dir = cfg.resolve(str(jobs_dir_str))
 
+    jobs_checked: set[Path] = set()
+
     # Direct jobs path if configured
     cfg_jobs = batch_sec.get("jobs")
     if cfg_jobs:
         direct_jobs = cfg.resolve(str(cfg_jobs))
-        _check_readable(direct_jobs, "jobs", issues)
+        results.append(_check_readable(direct_jobs, "jobs"))
+        jobs_checked.add(direct_jobs)
 
     for lang_code in langs:
         file_suffix = langs[lang_code].get("file_suffix", "")
         jobs_file = jobs_dir / f"jobs{file_suffix}.yaml"
-        _check_readable(jobs_file, "jobs", issues, lang_code)
+        if jobs_file in jobs_checked:
+            continue
+        jobs_checked.add(jobs_file)
+        label = f"jobs ({lang_code})" if file_suffix else "jobs"
+        results.append(_check_readable(jobs_file, label))
 
-    return issues
+    return results
 
 
-def _check_path_consistency(cfg: shared_config.Config) -> list[tuple[str, str, bool]]:
-    """
-    Verify that batch.output_dir (with language suffix) matches the directory
-    enricher scans for video files (enricher.videos_dir).
-    """
-    issues: list[tuple[str, str, bool]] = []
+def _check_path_consistency(cfg: shared_config.Config) -> list[CheckResult]:
+    """Verify that batch.output_dir matches enricher.videos_dir."""
+    results: list[CheckResult] = []
 
     try:
         batch_sec = cfg.section("batch")
@@ -111,9 +162,14 @@ def _check_path_consistency(cfg: shared_config.Config) -> list[tuple[str, str, b
 
     enrich_videos_raw = enricher_sec.get("videos_dir")
     if enrich_videos_raw is None:
-        # No explicit enricher.videos_dir — pipeline passes exports_dir_for()
-        # explicitly, so the paths will match at runtime. No issue.
-        return issues
+        results.append(
+            CheckResult(
+                "enricher.videos_dir",
+                f"not set; pipeline passes {exports_base} explicitly [OK]",
+                "ok",
+            )
+        )
+        return results
 
     enrich_dir = cfg.resolve(str(enrich_videos_raw))
     langs = cfg.langs()
@@ -126,81 +182,62 @@ def _check_path_consistency(cfg: shared_config.Config) -> list[tuple[str, str, b
             else exports_base
         )
         if enrich_dir == expected_dir:
-            continue
-        issues.append(
-            (
-                "path-consistency",
-                f"{lang_code}: enricher.videos_dir={enrich_dir} does not match "
-                f"batch output dir {expected_dir} (exports_dir{file_suffix or '(no suffix)'}) — "
-                f"enrich may scan the wrong directory",
-                True,  # hard error
+            results.append(
+                CheckResult(
+                    f"enricher.videos_dir ({lang_code})",
+                    f"{enrich_dir} matches batch {expected_dir.name} [OK]",
+                    "ok",
+                )
             )
-        )
+        else:
+            results.append(
+                CheckResult(
+                    f"enricher.videos_dir ({lang_code})",
+                    f"{enrich_dir} does not match batch {expected_dir} [ERROR]",
+                    "error",
+                )
+            )
 
-    return issues
+    return results
 
 
-def _check_readable(
-    path: Path,
-    file_type: str,
-    issues: list[tuple[str, str, bool]],
-    lang: str = "",
-) -> None:
-    """Append a soft warning if path is missing or not readable."""
-    import os
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
-    label = f"{lang}: " if lang else ""
+
+def _check_readable(path: Path, label: str) -> CheckResult:
+    """Return a CheckResult for a file path."""
     if not path.exists():
-        issues.append((file_type, f"{label}{file_type} file not found: {path}", False))
-    elif not os.access(path, os.R_OK):
-        issues.append(
-            (file_type, f"{label}{file_type} file exists but not readable: {path}", False)
+        return CheckResult(
+            label,
+            f"{path} — file not found",
+            "warn",
         )
+    if not os.access(path, os.R_OK):
+        return CheckResult(
+            label,
+            f"{path} — exists but not readable",
+            "warn",
+        )
+    return CheckResult(label, str(path), "ok")
 
 
-def _print_issues(issues: list[tuple[str, str, bool]]) -> int:
-    """Print all collected issues and return number of hard errors."""
-    if not issues:
-        print("[validate] All checks passed.")
-        return 0
+def _print_results(results: list[CheckResult]) -> None:
+    """Print all check results in a consolidated block."""
+    if not results:
+        print("[validate] No checks to run.")
+        return
 
-    hard = [i for i in issues if i[2]]
-    soft = [i for i in issues if not i[2]]
+    print(f"\n{'-' * 60}")
+    print(f"[validate] {len(results)} check(s):")
 
-    if hard:
-        print(f"\n{'-' * 60}")
-        print(f"[validate] {len(hard)} error(s):")
-        for stage, msg, _ in hard:
-            print(f"  [ERROR] [{stage}] {msg}")
-        print(f"{'-' * 60}")
+    for r in results:
+        tag = {"ok": "[OK]", "warn": "[WARN]", "error": "[ERROR]"}.get(r.status, r.status)
+        print(f"  {tag} [{r.check}] {r.detail}")
 
-    if soft:
-        print(f"\n{'-' * 60}")
-        print(f"[validate] {len(soft)} warning(s):")
-        for stage, msg, _ in soft:
-            print(f"  [WARN]  [{stage}] {msg}")
-        print(f"{'-' * 60}")
-
-    return len(hard)
+    print(f"{'-' * 60}")
 
 
-def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
-    """Run validation from already-parsed arguments."""
-    if config_path is None:
-        config_path = getattr(args, "config", None)
-
-    try:
-        cfg = shared_config.load(config_path)
-    except (ConfigError, FileNotFoundError) as exc:
-        print(f"[ERROR] {exc}")
-        return 1
-
-    issues: list[tuple[str, str, bool]] = []
-    issues.extend(_check_file_access(cfg))
-    issues.extend(_check_path_consistency(cfg))
-
-    error_count = _print_issues(issues)
-    return 1 if error_count > 0 else 0
+# ── Entry point ──────────────────────────────────────────────────────────────
 
 
 def build_parser() -> argparse.ArgumentParser:
