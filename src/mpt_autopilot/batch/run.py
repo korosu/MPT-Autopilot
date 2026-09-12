@@ -327,7 +327,11 @@ def _seen_base_for_settings(settings: Settings, config_path: Path | None) -> Pat
     return cfg.resolve(str(base))
 
 
-def _seen_path_for_settings(settings: Settings, config_path: Path | None, lang_suffix: str = "") -> Path:
+def _seen_path_for_settings(
+    settings: Settings,
+    config_path: Path | None,
+    lang_suffix: str = "",
+) -> Path:
     return seen.resolve(_seen_base_for_settings(settings, config_path), lang_suffix)
 
 
