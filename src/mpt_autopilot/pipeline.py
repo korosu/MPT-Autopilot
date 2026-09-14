@@ -237,6 +237,10 @@ def _run_enrich(
         platform=None,
         force=False,
         dry_run=args.dry_run,
+        # _resolve_batch_size() reads these; the standalone `mpt enrich` parser
+        # defines them, so a hand-built Namespace must too (AttributeError otherwise).
+        batch_size=None,  # None → fall back to enricher.batch_size from config.yaml
+        no_batch=False,
     )
     return enricher_run.execute(stage_args, config_path)
 

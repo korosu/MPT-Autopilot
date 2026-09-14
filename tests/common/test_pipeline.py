@@ -175,6 +175,40 @@ def test_enrich_is_skipped_when_the_exports_dir_is_absent(tmp_path, monkeypatch)
     assert calls == []  # nothing ran, and it was not treated as a failure
 
 
+def test_enrich_stage_args_carry_every_field_enricher_reads(tmp_path):
+    """Regression: mpt run → enrich used to crash with AttributeError on no_batch.
+
+    pipeline._run_enrich builds a Namespace by hand; it must expose every field
+    enricher.execute() (and its helpers) reads, not just the ones the CLI parser
+    happens to define. No settings/config fixture needed — _run_enrich never
+    touches the enricher singleton itself.
+    """
+    from mpt_autopilot.enricher import run as enricher_run
+
+    captured: dict = {}
+
+    def fake_execute(stage_args, config_path):
+        captured["vars"] = vars(stage_args)
+        return 0
+
+    original_execute = enricher_run.execute
+    enricher_run.execute = fake_execute
+    try:
+        code = pipeline._run_enrich("en", None, argparse.Namespace(dry_run=False), tmp_path)
+    finally:
+        enricher_run.execute = original_execute
+
+    assert code == 0
+    passed = captured["vars"]
+    # The exact attribute access that crashed on the server (enricher/run.py
+    # _resolve_batch_size reads args.no_batch / args.batch_size):
+    assert passed["no_batch"] is False
+    assert passed["batch_size"] is None
+    # The fields execute() itself unpacks:
+    for field in ("dir", "file", "lang", "platform", "force", "dry_run"):
+        assert field in passed
+
+
 def test_failure_stops_the_language_by_default(tmp_path, monkeypatch):
     calls: list[tuple[str, str]] = []
     _fake_stages(monkeypatch, {"batch": EXIT_FAILURES}, calls)
