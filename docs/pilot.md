@@ -441,6 +441,10 @@ langs:
 If a reasoning model burns its whole budget on the hidden draft and returns empty content, the
 error message says so and points at these three keys — that is the failure they exist for.
 
+If an LLM repeatedly returns invalid JSON, refill retries once, then splits the requested jobs
+into smaller requests. Valid sibling results are still appended; jobs that remain invalid at a
+single-job request are skipped with a console and Telegram warning.
+
 **Every relative path in `config.yaml` resolves against `config.yaml`'s own directory**, never
 the directory you run `mpt` from, so a cron entry behaves identically wherever it starts.
 

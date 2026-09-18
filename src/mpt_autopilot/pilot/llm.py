@@ -173,7 +173,8 @@ def _call_openai_compat(system: str, user: str, s: Settings, max_tokens: int) ->
     resp = _post_with_retry(url, payload, headers)
     resp.raise_for_status()
     data = resp.json()
-    message = data["choices"][0]["message"]
+    choice = data["choices"][0]
+    message = choice["message"]
     content = message.get("content")
 
     if content is None:
@@ -182,7 +183,7 @@ def _call_openai_compat(system: str, user: str, s: Settings, max_tokens: int) ->
         # the caller. Most commonly hit when a reasoning model burns the
         # whole max_tokens budget on `reasoning_content` and gets cut off
         # (finish_reason="length") before writing the visible answer.
-        finish_reason = data["choices"][0].get("finish_reason")
+        finish_reason = choice.get("finish_reason")
         reasoning_raw = message.get("reasoning_content") or message.get("reasoning") or ""
         reasoning_preview = reasoning_raw[:500]
         print(
@@ -197,6 +198,24 @@ def _call_openai_compat(system: str, user: str, s: Settings, max_tokens: int) ->
             "reasoning draft doesn't eat the whole token budget."
         )
 
+    if not isinstance(content, str):
+        raise ValueError(f"LLM returned non-text content ({type(content).__name__})")
+
+    usage = data.get("usage")
+    usage_summary = "unavailable"
+    if isinstance(usage, dict):
+        usage_summary = (
+            ", ".join(
+                f"{key}={usage[key]}"
+                for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+                if key in usage
+            )
+            or "available"
+        )
+    print(
+        f"  [llm] finish_reason={choice.get('finish_reason')!r} "
+        f"response_chars={len(content)} usage={usage_summary}"
+    )
     return content
 
 
@@ -221,6 +240,34 @@ def _normalise_json_item(item: object) -> Any:
     return item
 
 
+def _first_job_array(text: str) -> list[dict[str, Any]] | None:
+    """Find a complete JSON job array after provider-emitted prose."""
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\[", text):
+        try:
+            candidate, _ = decoder.raw_decode(text[match.start() :])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, list) and all(
+            isinstance(item, dict) and {"output_file", "video_subject"} <= item.keys()
+            for item in candidate
+        ):
+            return cast("list[dict[str, Any]]", candidate)
+    return None
+
+
+def _json_parse_error(text: str, error: json.JSONDecodeError) -> ValueError:
+    context_start = max(error.pos - 200, 0)
+    context_end = min(error.pos + 200, len(text))
+    return ValueError(
+        "LLM returned invalid JSON (could not parse JSON array)\n"
+        f"JSONDecodeError: {error.msg} at line {error.lineno}, column {error.colno} "
+        f"(char {error.pos}); response chars: {len(text)}\n"
+        f"Context around error:\n{text[context_start:context_end]}\n"
+        f"Last 250 chars:\n{text[-250:]}"
+    )
+
+
 def parse_json_array(raw_text: str) -> list[dict[str, Any]]:
     """
     Parse the LLM response as a JSON array.
@@ -236,11 +283,10 @@ def parse_json_array(raw_text: str) -> list[dict[str, Any]]:
 
     try:
         result = json.loads(text)
-    except json.JSONDecodeError:
-        raise ValueError(
-            f"LLM returned invalid JSON (could not parse JSON array)\n"
-            f"First 500 chars:\n{text[:500]}"
-        )
+    except json.JSONDecodeError as error:
+        result = _first_job_array(text)
+        if result is None:
+            raise _json_parse_error(text, error)
 
     if not isinstance(result, list):
         raise ValueError(

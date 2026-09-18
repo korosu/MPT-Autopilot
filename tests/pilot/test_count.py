@@ -216,10 +216,94 @@ def test_no_count_uses_threshold_guard():
     print("[check] no --count respects threshold guard: OK")
 
 
+def test_refill_accepts_jobs_after_reasoning_prefix():
+    """A provider that leaks reasoning prose must not discard a valid job array."""
+    from unittest.mock import patch
+
+    import mpt_autopilot.pilot.refill as refill
+
+    raw_response = """I need to generate one fresh job first.
+[{"output_file": "whale_heart.mp4", "video_subject": "Blue whale hearts are larger than cars"}]
+"""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        make_jobs_yaml(tmp_dir / "jobs.yaml")
+
+        with patch.object(refill, "load_settings", return_value=make_settings(count=1)):
+            with patch.object(refill, "call_llm", return_value=raw_response):
+                added = run(
+                    lang="en",
+                    jobs_dir=tmp_dir,
+                    seen_dir=tmp_dir,
+                    force=False,
+                    count_override=1,
+                    threshold_override=None,
+                    topics=None,
+                    themes=None,
+                )
+
+    assert added == 1
+
+
+def test_refill_splits_invalid_json_and_keeps_valid_partial_results():
+    """A persistently truncated branch must not discard valid sibling jobs."""
+    from unittest.mock import patch
+
+    import mpt_autopilot.pilot.refill as refill
+
+    calls: list[int] = []
+
+    def mock_call_llm(system_prompt, user_prompt, settings, count):
+        calls.append(count)
+        if len(calls) <= 2:
+            return '[{"output_file": "truncated.mp4"'
+        if len(calls) == 3:
+            return json.dumps(
+                [
+                    {
+                        "output_file": "valid_one.mp4",
+                        "video_subject": "Octopuses have three hearts and bright blue blood throughout their bodies",
+                    },
+                    {
+                        "output_file": "valid_two.mp4",
+                        "video_subject": "Penguins use carefully selected stones during courtship on Antarctic shores",
+                    },
+                ]
+            )
+        return '[{"output_file": "still_truncated.mp4"'
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        make_jobs_yaml(tmp_dir / "jobs.yaml")
+
+        with patch.object(refill, "load_settings", return_value=make_settings(count=3)):
+            with patch.object(refill, "call_llm", side_effect=mock_call_llm):
+                added = run(
+                    lang="en",
+                    jobs_dir=tmp_dir,
+                    seen_dir=tmp_dir,
+                    force=False,
+                    count_override=3,
+                    threshold_override=None,
+                    topics=None,
+                    themes=None,
+                )
+
+        jobs_text = (tmp_dir / "jobs.yaml").read_text(encoding="utf-8")
+
+    assert calls == [3, 3, 2, 1, 1]
+    assert added == 2
+    assert "valid_one.mp4" in jobs_text
+    assert "valid_two.mp4" in jobs_text
+
+
 def main() -> None:
     test_count_one_call_regardless_of_threshold()
     test_count_bypasses_full_queue_guard()
     test_no_count_uses_threshold_guard()
+    test_refill_accepts_jobs_after_reasoning_prefix()
+    test_refill_splits_invalid_json_and_keeps_valid_partial_results()
     print("test_count: OK")
 
 

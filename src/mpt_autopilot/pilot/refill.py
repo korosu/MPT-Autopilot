@@ -34,7 +34,9 @@ import math
 import re
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from mpt_autopilot import seen
 from mpt_autopilot.notify import alert as notify_alert
@@ -42,7 +44,7 @@ from mpt_autopilot.pilot import jobs
 from mpt_autopilot.pilot.llm import call_llm, parse_json_array
 from mpt_autopilot.pilot.prompt import VIDEO_SUBJECT_MAX_CHARS, build_themes
 from mpt_autopilot.pilot.prompt import build as build_prompt
-from mpt_autopilot.pilot.settings import LangSettings
+from mpt_autopilot.pilot.settings import LangSettings, Settings
 from mpt_autopilot.pilot.settings import load as load_settings
 from mpt_autopilot.seen import load_ordered as seen_load_ordered
 
@@ -558,6 +560,38 @@ def _run_topics(
 # give up early once an attempt yields nothing new, so a persistently
 # unproductive LLM/prompt combination can't burn unbounded API calls.
 _MAX_TOPUP_ATTEMPTS = 2
+_MAX_JSON_PARSE_ATTEMPTS = 2
+
+
+def _request_valid_jobs(
+    prompt_for_count: Callable[[int], tuple[str, str]], settings: Settings, count: int
+) -> tuple[list[dict[str, Any]], int]:
+    """Return parsed jobs, splitting only requests that repeatedly return invalid JSON."""
+    system_prompt, user_prompt = prompt_for_count(count)
+    for attempt in range(_MAX_JSON_PARSE_ATTEMPTS):
+        raw_text = call_llm(system_prompt, user_prompt, settings, count)
+        try:
+            return parse_json_array(raw_text), 0
+        except ValueError as error:
+            if attempt + 1 == _MAX_JSON_PARSE_ATTEMPTS:
+                break
+            print(f"  [retry] LLM returned invalid JSON ({error}), retrying...")
+            time.sleep(1)
+            user_prompt = (
+                user_prompt.rstrip() + " (IMPORTANT: return ONLY valid JSON array, "
+                "no prose, no explanation, no code fences)"
+            )
+
+    if count == 1:
+        print("  [warning] LLM could not return one valid job after two attempts")
+        return [], 1
+
+    left_count = (count + 1) // 2
+    right_count = count - left_count
+    print(f"  [retry] splitting {count} jobs into {left_count} + {right_count} after invalid JSON")
+    left_jobs, left_failed = _request_valid_jobs(prompt_for_count, settings, left_count)
+    right_jobs, right_failed = _request_valid_jobs(prompt_for_count, settings, right_count)
+    return left_jobs + right_jobs, left_failed + right_failed
 
 
 def run(
@@ -678,42 +712,28 @@ def run(
         else:
             this_count = generate_count
 
-        # Swap prompt builder and subject floor based on theme mode.
-        if active_themes:
-            system_prompt, user_prompt = build_themes(
-                lang_cfg,
-                prompt_seen_ordered,
-                this_count,
-                themes=active_themes,
-            )
-        else:
-            system_prompt, user_prompt = build_prompt(
-                lang_cfg,
-                prompt_seen_ordered,
-                this_count,
-            )
+        def prompt_for_count(request_count: int) -> tuple[str, str]:
+            if active_themes:
+                return build_themes(
+                    lang_cfg,
+                    prompt_seen_ordered,
+                    request_count,
+                    themes=active_themes,
+                )
+            return build_prompt(lang_cfg, prompt_seen_ordered, request_count)
+
         subj_min = _THEME_MIN_SUBJECT_CHARS if active_themes else _MIN_VIDEO_SUBJECT_CHARS
 
         print(f"[{lang}] calling LLM for {this_count} ideas...")
+        raw_jobs, failed_jobs = _request_valid_jobs(prompt_for_count, settings, this_count)
 
-        # Retry on JSON parse errors (wasted API call otherwise)
-        json_parse_attempts = 0
-        while True:
-            raw_text = call_llm(system_prompt, user_prompt, settings, this_count)
-            try:
-                raw_jobs = parse_json_array(raw_text)
-                break
-            except ValueError as e:
-                json_parse_attempts += 1
-                if json_parse_attempts >= 2:
-                    raise
-                print(f"  [retry] LLM returned invalid JSON ({e}), retrying...")
-                time.sleep(1)
-                # Re-prompt with stronger instruction
-                user_prompt = (
-                    user_prompt.rstrip() + " (IMPORTANT: return ONLY valid JSON array, "
-                    "no prose, no explanation, no code fences)"
-                )
+        if failed_jobs:
+            warning = (
+                f"[{lang}] WARNING: {failed_jobs}/{this_count} jobs could not be generated "
+                "because the LLM repeatedly returned invalid JSON"
+            )
+            print(warning)
+            notify_alert(warning, settings)
 
         if len(raw_jobs) < this_count:
             notify_alert(

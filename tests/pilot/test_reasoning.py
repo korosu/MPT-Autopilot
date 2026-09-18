@@ -113,6 +113,21 @@ def test_reasoning_enabled_false_forces_effort_none():
     assert captured["payload"]["chat_template_kwargs"] == {"reasoning_effort": "none"}
 
 
+def test_reasoning_disabled_uses_same_payload_for_every_model():
+    s = make_settings(model="nvidia/nemotron-3-super-120b-a12b", reasoning_enabled=False)
+    captured = {}
+
+    def fake_post(url, payload, headers):
+        captured["payload"] = payload
+        return _fake_resp({"choices": [{"message": {"content": "[]"}, "finish_reason": "stop"}]})
+
+    with patch.object(llm, "_post_with_retry", side_effect=fake_post):
+        llm.call_llm("sys", "user", s, count=21)
+
+    assert captured["payload"]["chat_template_kwargs"] == {"reasoning_effort": "none"}
+    assert captured["payload"]["messages"][0]["content"] == "sys"
+
+
 def test_reasoning_enabled_none_omits_field_entirely():
     """The critical backward-compat case: key absent from config.yaml -> payload untouched."""
     s = make_settings(reasoning_enabled=None)
@@ -127,3 +142,20 @@ def test_reasoning_enabled_none_omits_field_entirely():
 
     assert "chat_template_kwargs" not in captured["payload"]
     assert captured["payload"]["max_tokens"] == llm._token_budget(21)
+
+
+def test_completion_log_includes_finish_reason_and_usage(capsys):
+    s = make_settings()
+    resp = _fake_resp(
+        {
+            "choices": [{"message": {"content": "[]"}, "finish_reason": "length"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+    )
+
+    with patch.object(llm, "_post_with_retry", return_value=resp):
+        llm.call_llm("sys", "user", s, count=21)
+
+    output = capsys.readouterr().out
+    assert "finish_reason='length'" in output
+    assert "usage=prompt_tokens=10, completion_tokens=20, total_tokens=30" in output
