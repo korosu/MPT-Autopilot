@@ -346,12 +346,13 @@ batch:
         tts_server: "gemini"
         voice_name: "gemini:leda"
 
-    # A preset may pin rate/volume too:
-    # gemini_aoede_fast:
-    #   tts_server: "gemini"
-    #   voice_name: "gemini:aoede"
-    #   voice_rate: 1.3
-    #   voice_volume: 1
+    # S-6: voice_rate / voice_volume reach MPT only for Edge, Azure-v2
+    # ("...-V2"), SiliconFlow and MiniMax voices. Gemini and ElevenLabs
+    # ignore both (app/services/voice.py marks them "当前未使用" for
+    # Gemini; ElevenLabs pins its own stability/similarity/style). Pin
+    # rate/volume on a supported preset like the Edge override above;
+    # for gemini:* the only duration lever is the script word count —
+    # see docs/recommend/01-settings-now.md (S-6).
 
 
 # =============================================================================
