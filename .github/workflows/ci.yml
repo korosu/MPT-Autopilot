@@ -24,7 +24,10 @@ jobs:
       # on the oldest supported version is what catches accidental use of newer
       # syntax; anything newer would pass silently.
       - run: uv python install 3.10
-      - run: uv sync --extra dev
+      # --extra web: pyright type-checks src/ (including the Flask layer) and
+      # pytest runs tests/web — both need the optional dependency that the
+      # core CLI deliberately ships without.
+      - run: uv sync --extra dev --extra web
 
       - name: Lint
         run: uv run ruff check .

@@ -205,11 +205,13 @@ Optional Telegram alerts report each run's outcome — set `TELEGRAM_TOKEN` and
 ## Development
 
 ```bash
-uv sync --extra dev
+uv sync --extra dev --extra web
 uv run ruff check . && uv run ruff format --check . && uv run pyright src && uv run pytest tests/ -v
 ```
 
-CI runs exactly that on every push and pull request against `main`.
+CI runs exactly that on every push and pull request against `main` (`--extra
+web` because the type check covers the Flask layer and the tests cover
+`mpt web`).
 
 The layout mirrors the stages:
 

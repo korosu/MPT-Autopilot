@@ -1,3 +1,9 @@
+# pyright: reportMissingImports=false
+# Flask is an optional extra (`uv sync --extra web`): type checks may run in
+# an environment that does not have it (a plain `uv sync --extra dev`), and
+# flask is the only import such an environment cannot resolve. Per-file rule
+# override, not a blanket `# type: ignore` — everything else stays checked.
+# The directive must precede any statement, including the module docstring.
 """
 web/app.py — the Flask layer: one page, four endpoints, no state of its own.
 
