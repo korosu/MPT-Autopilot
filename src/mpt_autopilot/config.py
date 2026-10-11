@@ -12,6 +12,8 @@ one file, split into per-stage sections plus a small shared part:
     enricher: { ... }
     uploader: { ... }
     pipeline: { ... }
+    mpt:      { ... }   # where MoneyPrinterTurbo itself is installed; read by
+                        # batch/settings.py to locate its config.toml
 
 `langs` is deliberately shared: the batch stage only reads `file_suffix` from
 it while the pilot stage reads the whole block, and keeping two copies in sync
@@ -28,6 +30,7 @@ from __future__ import annotations
 import logging
 import socket
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -76,7 +79,7 @@ class Config:
         a mapping is a hard error.
         """
         if name not in SECTIONS:
-            raise ValueError(f"unknown config section '{name}'; expected one of {list(SECTIONS)}")
+            raise ConfigError(f"unknown config section '{name}'; expected one of {list(SECTIONS)}")
         value = self.raw.get(name)
         if value is None:
             return {}
@@ -123,7 +126,12 @@ class Config:
         back to the shared `paths:` block, then to `default`.
 
         Returns None when nothing is configured and no default is given, so a
-        caller can keep its own "use the current directory" behaviour.
+        caller can keep its own "use the current directory" behaviour. When a
+        default is always available, use require_path() instead — it returns a
+        plain Path and needs no narrowing at the call site.
+
+        `section` must be one of SECTIONS; the shared `paths:` block is already
+        consulted here, so passing "paths" raises rather than reading it.
         """
         own = self.section(section).get(key)
         if own:
@@ -134,6 +142,19 @@ class Config:
         if default is not None:
             return self.resolve(default)
         return None
+
+    def require_path(self, section: str, key: str, default: str) -> Path:
+        """
+        path_value() with a mandatory default, so the result is always a Path.
+
+        Call sites used `assert path_value(...) is not None` to narrow the type.
+        An assert is stripped by `python -O`, and the narrowing it bought was
+        only ever a restatement of "I passed a default".
+        """
+        resolved = self.path_value(section, key, default)
+        if resolved is None:
+            raise ConfigError(f"{self.path.name}: could not resolve {section}.{key}")
+        return resolved
 
     def langs(self) -> dict[str, dict]:
         """
@@ -165,8 +186,17 @@ class Config:
 
         This is the single source of truth for suffix-based directory
         derivation, used by pipeline and batch so they can never drift apart.
+
+        Raises ConfigError for a language code that is not in `langs:` — a bare
+        KeyError here reached the user as a traceback, against the stage
+        contract, and said nothing about which codes do exist.
         """
-        suffix = str(self.langs()[lang_code]["file_suffix"])
+        langs = self.langs()
+        if lang_code not in langs:
+            raise ConfigError(
+                f"{self.path.name}: unknown language '{lang_code}'; langs: defines {sorted(langs)}"
+            )
+        suffix = str(langs[lang_code]["file_suffix"])
         if not suffix:
             return base
         return base.parent / f"{base.name}{suffix}"
@@ -230,8 +260,13 @@ def load(
 def clear_cache() -> None:
     """Drop cached configs — used by tests and by `mpt run` between languages."""
     _cache.clear()
+    # The cleartext warning is memoised per URL; clearing it here keeps "warn
+    # once" scoped to one config rather than to the whole process, so a test (or
+    # the next language in `mpt run`) sees the warning again.
+    warn_cleartext.cache_clear()
 
 
+@lru_cache(maxsize=32)
 def warn_cleartext(url: str, setting: str) -> None:
     """
     Warn once when an endpoint is configured over plain HTTP off-loopback.
@@ -241,6 +276,10 @@ def warn_cleartext(url: str, setting: str) -> None:
     every local run. But a cleartext URL on a real host puts the payload — and
     for LLM_BASE_URL, the LLM_API_KEY Authorization header — on the wire
     unencrypted.
+
+    Memoised per (url, setting), which is what makes "once" true: pilot/llm.py
+    calls this on every LLM request, and each call that reaches the DNS branch
+    below pays a blocking getaddrinfo().
     """
     try:
         parsed = urlparse(url)
@@ -249,7 +288,10 @@ def warn_cleartext(url: str, setting: str) -> None:
             return
         if parsed.scheme != "http" or not host:
             return
-        if host == "0.0.0.0" or host.startswith("127.") or host == "::1":
+        # 0.0.0.0 is deliberately absent: it means "every interface", so a
+        # server bound there is reachable from the network and cleartext to it
+        # is exactly the case worth warning about.
+        if host.startswith("127.") or host == "::1":
             return
         if host == "localhost" or host.endswith(".localhost"):
             return

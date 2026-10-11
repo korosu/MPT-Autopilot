@@ -35,7 +35,7 @@ def _account(tmp_path: Path, n_videos: int, *, daily_limit: int | None = None) -
     )
 
 
-def _settings(tmp_path: Path, *, sleep: int = 0) -> Settings:
+def _settings(tmp_path: Path, *, sleep: int = 0, keep_uploaded: bool = True) -> Settings:
     return Settings(
         uploader_binary=make_uploader_binary(tmp_path),
         meta_dir=tmp_path / "meta",
@@ -47,6 +47,7 @@ def _settings(tmp_path: Path, *, sleep: int = 0) -> Settings:
         telegram_prefix="yt-shorts-uploader",
         ledger_path=tmp_path / "ledger.sqlite",
         accounts={},
+        keep_uploaded=keep_uploaded,
     )
 
 
@@ -60,6 +61,21 @@ def test_run_all_succeed_returns_ok(tmp_path, monkeypatch):
     assert exit_code == EXIT_OK
     uploaded = list((account.videos_dir / "old_videos").glob("*.mp4"))
     assert len(uploaded) == 3
+
+
+def test_run_keep_uploaded_false_deletes_source(tmp_path, monkeypatch):
+    account = _account(tmp_path, 2)
+    for video in account.videos_dir.glob("*.mp4"):
+        video.with_suffix(".json").write_text("{}", encoding="utf-8")
+    settings = _settings(tmp_path, keep_uploaded=False)
+    monkeypatch.setattr("mpt_autopilot.uploader.run.upload_video", lambda *a, **k: "ok")
+
+    exit_code = run(settings, account, dry_run=False, limit=None)
+
+    assert exit_code == EXIT_OK
+    assert list(account.videos_dir.glob("*.mp4")) == []
+    assert list(account.videos_dir.glob("*.json")) == []
+    assert not (account.videos_dir / "old_videos").exists()
 
 
 def test_run_quota_stop_returns_distinct_code(tmp_path, monkeypatch):

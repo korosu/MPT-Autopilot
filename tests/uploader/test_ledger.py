@@ -43,6 +43,7 @@ def _settings(tmp_path: Path) -> Settings:
         telegram_prefix="yt-shorts-uploader",
         ledger_path=tmp_path / "ledger.sqlite",
         accounts={},
+        keep_uploaded=True,
     )
 
 

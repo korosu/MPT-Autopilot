@@ -17,18 +17,32 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 from pathlib import Path
+
+from mpt_autopilot.lock import file_lock
 
 _logger = logging.getLogger(__name__)
 
 
 def add(path: Path, output_file: str, task_id: str, attempt: int) -> None:
-    """Record an in-progress job. One line, single write — safe to append."""
+    """
+    Record an in-progress job, durably and under the lock.
+
+    This is the write the whole module exists for: the task_id is already
+    submitted to MPT, so losing it to a crash means the next run submits a
+    duplicate. fsync (like _write_all) makes the line survive power loss,
+    and file_lock keeps a concurrent process's append from interleaving.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(
-            json.dumps({"output_file": output_file, "task_id": task_id, "attempt": attempt}) + "\n"
-        )
+    with file_lock(path):
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(
+                json.dumps({"output_file": output_file, "task_id": task_id, "attempt": attempt})
+                + "\n"
+            )
+            f.flush()
+            os.fsync(f.fileno())
 
 
 def remove(path: Path, output_file: str) -> None:
@@ -94,11 +108,18 @@ def _read_all(path: Path) -> list[dict]:
 
 
 def _write_all(path: Path, entries: list[dict]) -> None:
-    """Rewrite the file atomically: temp file in the same dir, then os.replace()."""
+    """
+    Rewrite the file atomically: temp file in the same dir, then os.replace().
+
+    mkstemp (as in seen.py/jobs.py) instead of a fixed ``.tmp`` name: two
+    concurrent writers would otherwise clobber each other's temp file and
+    one os.replace() would publish the other's half-written content.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix="." + path.name + ".")
+    tmp = Path(tmp_name)
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             for e in entries:
                 f.write(json.dumps(e, ensure_ascii=False) + "\n")
             f.flush()

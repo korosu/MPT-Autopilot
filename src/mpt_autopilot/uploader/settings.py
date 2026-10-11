@@ -23,6 +23,29 @@ SECTION = "uploader"
 DEFAULT_ACCOUNTS_NAME = "accounts.yaml"
 LEDGER_NAME = "yt-uploader-ledger.sqlite"
 
+# YouTube's three privacy values. Lives here (not metadata.py) because both
+# modules need it — settings validates the config.yaml default, metadata the
+# sidecar value — and metadata already imports from settings, so this is the
+# direction that keeps a single source of truth without an import cycle.
+VALID_PRIVACY = frozenset({"public", "private", "unlisted"})
+
+
+def _as_str_list(value: object, key: str) -> list[str]:
+    """
+    Normalise a config list: a bare string is wrapped (matching
+    batch/settings._as_platform_list), anything but a list is a named error.
+    `tags: shorts` used to be list()-ified into ['s','h','o','r','t','s']
+    (M-44).
+    """
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if not isinstance(value, list):
+        raise ValueError(
+            f"config.yaml: uploader.defaults.{key} must be a list "
+            f"(or a single value), got {type(value).__name__}"
+        )
+    return [str(item) for item in value if str(item).strip()]
+
 
 @dataclass
 class Account:
@@ -54,6 +77,7 @@ class Settings:
     telegram_prefix: str
     ledger_path: Path
     accounts: dict[str, Account]
+    keep_uploaded: bool = False
 
 
 def _load_accounts_yaml(path: Path) -> dict:
@@ -88,10 +112,19 @@ def load_settings(
             f"config.yaml: uploader.defaults.hashtag_placement must be 'tags', "
             f"'description', or 'both', got '{hashtag_placement}'"
         )
+    privacy_status = str(defaults_raw.get("privacy_status", "private")).strip().lower()
+    if privacy_status not in VALID_PRIVACY:
+        # The sidecar value is validated with a detailed message; the config
+        # default used to pass straight through and get every video rejected
+        # by YouTube one at a time (M-43).
+        raise ValueError(
+            f"config.yaml: uploader.defaults.privacy_status must be one of "
+            f"{', '.join(sorted(VALID_PRIVACY))}, got {privacy_status!r}"
+        )
     defaults = Defaults(
-        privacy_status=defaults_raw.get("privacy_status", "private"),
+        privacy_status=privacy_status,
         category_id=str(defaults_raw.get("category_id", "22")),
-        tags=list(defaults_raw.get("tags", ["shorts"])),
+        tags=_as_str_list(defaults_raw.get("tags", ["shorts"]), "tags"),
         hashtag_placement=hashtag_placement,
         contains_synthetic_media=bool(defaults_raw.get("contains_synthetic_media", True)),
     )
@@ -102,6 +135,13 @@ def load_settings(
 
     accounts: dict[str, Account] = {}
     for name, raw in (acc_raw.get("accounts") or {}).items():
+        if not isinstance(raw, dict):
+            # `accounts: {main:}` parses as {main: None}; raw.get() on None is
+            # an AttributeError the except clause below does not cover (M-45).
+            raise ValueError(
+                f"account '{name}' in {accounts_path.name} has no body — "
+                f"expected videos_dir / client_secrets / token_file keys"
+            )
         try:
             daily_limit = raw.get("daily_upload_limit")
             if daily_limit is not None and daily_limit <= 0:
@@ -126,8 +166,11 @@ def load_settings(
                 f"account '{name}' in {accounts_path.name} has invalid config: {exc}"
             ) from exc
 
-    meta_dir = cfg.path_value(SECTION, "meta_dir", "./meta")
-    assert meta_dir is not None  # a default was supplied
+    meta_dir = cfg.require_path(SECTION, "meta_dir", "./meta")
+
+    # Configurable (M-46); resolves relative to config.yaml's directory like
+    # every other path. Default keeps the historical <config dir>/ name.
+    ledger_path = cfg.path_value(SECTION, "ledger_path") or (cfg.dir / LEDGER_NAME)
 
     return Settings(
         uploader_binary=Path(sec.get("uploader_binary", "youtubeuploader")).expanduser(),
@@ -138,8 +181,9 @@ def load_settings(
         telegram_token=os.environ.get("TELEGRAM_TOKEN", ""),
         telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", ""),
         telegram_prefix=cfg.telegram_prefix(SECTION),
-        ledger_path=cfg.dir / LEDGER_NAME,
+        ledger_path=ledger_path,
         accounts=accounts,
+        keep_uploaded=bool(sec.get("keep_uploaded", False)),
     )
 
 

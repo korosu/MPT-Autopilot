@@ -30,7 +30,14 @@ import yaml
 
 from mpt_autopilot.lock import file_lock
 
+# Hard clamp applied by safe_name(). The prompts quote this number so the model
+# is told the limit that is actually enforced.
+NAME_MAX_CHARS = 60
+
 # Canonical key order for serialised job entries — matches hand-written style.
+# Mirrors MoneyPrinterTurbo's VideoParams: fields the live schema does not have
+# (tts_server, subtitle_background_enabled/color — B-2/B-3) are not listed,
+# so the pilot drops them with a note instead of writing dead keys.
 _KEY_ORDER = [
     # Identity
     "name",
@@ -39,6 +46,7 @@ _KEY_ORDER = [
     # Script
     "video_subject",
     "video_script",
+    "video_terms",
     "video_script_prompt",
     "custom_system_prompt",
     "video_language",
@@ -50,13 +58,15 @@ _KEY_ORDER = [
     "video_transition_mode",
     "video_clip_duration",
     "video_clip_speed",
+    "video_count",
+    "match_materials_to_script",
     "video_source",
     "video_materials",
     "custom_audio_file",
     # Voice
     "voice_rate",
     "voice_name",
-    "tts_server",
+    "voice_volume",
     # Audio / BGM
     "bgm_type",
     "bgm_file",
@@ -69,8 +79,6 @@ _KEY_ORDER = [
     "subtitle_display_mode",
     "subtitle_animation",
     "custom_position",
-    "subtitle_background_enabled",
-    "subtitle_background_color",
     "rounded_subtitle_background",
     # Style
     "font_name",
@@ -86,8 +94,8 @@ _KEY_ORDER = [
 # ── Reading ───────────────────────────────────────────────────────────────────
 
 
-def _new_path(jobs_dir: Path, suffix: str) -> Path:
-    """Return the canonical jobs file path based on suffix (mirrors seen._file())."""
+def new_path(jobs_dir: Path, suffix: str) -> Path:
+    """Return the canonical jobs file path based on suffix (mirrors seen.resolve())."""
     if suffix:
         slug = suffix.lstrip("_")
         return jobs_dir / f"jobs_{slug}.yaml"
@@ -102,7 +110,7 @@ def _resolve_path(jobs_dir: Path, suffix: str, lang: str) -> Path:
     2. Legacy path (jobs_<lang>.yaml) if new doesn't exist
     3. FileNotFoundError pointing to the NEW path
     """
-    new_p = _new_path(jobs_dir, suffix)
+    new_p = new_path(jobs_dir, suffix)
     if new_p.exists():
         return new_p
 
@@ -129,11 +137,9 @@ def _resolve_path(jobs_dir: Path, suffix: str, lang: str) -> Path:
 
 
 def load(jobs_dir: Path, suffix: str, lang: str) -> dict[str, Any]:
+    # _resolve_path either returns a path that exists or raises, so there is
+    # nothing left to check here.
     p = _resolve_path(jobs_dir, suffix, lang)
-    if not p.exists():
-        raise FileNotFoundError(
-            f"Jobs file not found: {p}\nCreate {p.name} in your jobs directory first."
-        )
     with open(p, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     if not isinstance(data, dict):
@@ -142,8 +148,42 @@ def load(jobs_dir: Path, suffix: str, lang: str) -> dict[str, Any]:
 
 
 def existing_names_from(cfg: dict[str, Any]) -> set[str]:
-    """Return output_file values from an already-loaded config dict."""
-    return {job.get("output_file", "") for job in (cfg.get("jobs") or [])}
+    """
+    Return output_file values from an already-loaded config dict, skipping
+    entries that have none — matching existing_names_ordered_from(). The empty
+    string used to end up in the set, where it served only to make the dedup
+    check in refill._deduplicate() look like it had one more known name.
+    """
+    return {name for job in (cfg.get("jobs") or []) if (name := job.get("output_file"))}
+
+
+def existing_job_names_from(cfg: dict[str, Any]) -> set[str]:
+    """
+    Return the `name` values already in the jobs file.
+
+    refill._deduplicate() keeps generated job names unique within one batch, but
+    without this it compared against an empty set: a new job could reuse the
+    name of a job already queued in the yaml.
+    """
+    return {name for job in (cfg.get("jobs") or []) if (name := job.get("name"))}
+
+
+def existing_subjects_by_output(cfg: dict[str, Any]) -> dict[str, str]:
+    """
+    Map output_file → video_subject for queued jobs (R4/A-2 p.5).
+
+    The dedup context used to show only filename slugs, so a semantically
+    identical idea with a fresh slug sailed through. Queued jobs carry the
+    real idea text; the subject is capped at 160 chars so one long entry
+    cannot eat the prompt's recency slice.
+    """
+    subjects: dict[str, str] = {}
+    for job in cfg.get("jobs") or []:
+        output = job.get("output_file")
+        subject = job.get("video_subject")
+        if isinstance(output, str) and isinstance(subject, str) and subject.strip():
+            subjects[output] = subject.strip()[:160]
+    return subjects
 
 
 def existing_names_ordered_from(cfg: dict[str, Any]) -> list[str]:
@@ -180,6 +220,24 @@ _ESCAPES = {
 }
 
 
+def _is_yaml_forbidden(ch: str) -> bool:
+    """
+    True for characters that must not be written into a YAML scalar verbatim.
+
+    Besides C0 (< 0x20) and DEL, the whole C1 block 0x80-0x9F counts. Verified
+    against PyYAML: 0x80-0x84 and 0x86-0x9F raise ReaderError on the next read
+    ("special characters are not allowed"), leaving the jobs file permanently
+    unparsable; 0x85 (NEL) is accepted but silently read back as a space, which
+    corrupts the subject instead. Escaped, every one of them round-trips
+    exactly. 0xA0 (NBSP) is legal YAML and stays verbatim.
+
+    How they get here: an LLM answer containing a stray \\u0085, or a
+    `--topics` line pasted out of a Windows-1252 document.
+    """
+    code = ord(ch)
+    return code < 0x20 or code == 0x7F or 0x80 <= code <= 0x9F
+
+
 def _scalar(value: Any) -> str:
     r"""
     Render a scalar value the way the original jobs files look:
@@ -189,11 +247,11 @@ def _scalar(value: Any) -> str:
     - None     → empty string ""
 
     Every character YAML 1.1 forbids inside a double-quoted scalar is escaped:
-    backslash, double quote, and all control characters below 0x20 plus DEL.
-    The named ones get mnemonic escapes; the rest become backslash-xNN.
-    Without this the file would be left permanently unparsable — a control
-    character emitted verbatim makes yaml.safe_load() raise ReaderError on the
-    next read.
+    backslash, double quote, and every control character (see
+    _is_yaml_forbidden). The named ones get mnemonic escapes; the rest become
+    backslash-xNN. Without this the file would be left permanently unparsable —
+    a control character emitted verbatim makes yaml.safe_load() raise
+    ReaderError on the next read.
 
     Sources worth protecting: the LLM's video_subject (a \u0000 in its JSON
     becomes a real NUL once parsed), and `mpt refill --topics file.txt`, which
@@ -209,7 +267,7 @@ def _scalar(value: Any) -> str:
     for ch in str(value):
         if ch in _ESCAPES:
             out.append(_ESCAPES[ch])
-        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+        elif _is_yaml_forbidden(ch):
             out.append(f"\\x{ord(ch):02x}")
         else:
             out.append(ch)
@@ -252,7 +310,13 @@ def _bootstrap_suffix(content: str, path: Path) -> str | None:
 
     Three bootstrap shapes are handled purely additively:
       - empty file                       → write "jobs:\n" (nothing to
-                                            preserve, there's no content)
+                                            preserve, there's no content).
+                                            Only an *existing* empty file
+                                            reaches this: _resolve_path()
+                                            raises FileNotFoundError with
+                                            instructions when the file is
+                                            absent, so append() never creates
+                                            one from scratch
       - valid yaml, no "jobs:" key at all → append a new "jobs:\n" section
       - "jobs:" present with no value     → verified safe to append
         (bare key, i.e. YAML null)          after as-is, no edit needed
@@ -399,4 +463,4 @@ def safe_name(text: str) -> str:
     text = text.lower().strip()
     text = re.sub(r"[^a-z0-9]+", "_", text)
     text = re.sub(r"_+", "_", text)
-    return text.strip("_")[:60]
+    return text.strip("_")[:NAME_MAX_CHARS]

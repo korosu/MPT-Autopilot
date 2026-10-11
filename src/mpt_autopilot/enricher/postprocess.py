@@ -45,15 +45,20 @@ def validate_and_filter(
     """
     Clean and validate a list of hashtag strings.
 
-    Filters applied in order:
+    Filters applied in order (the code's actual order — dedup runs before the
+    length and banned checks, which is behaviour-neutral: a tag dropped later
+    would have been dropped either way, and dedup keys on the lowercased form
+    so it cannot keep a duplicate alive):
     1. Ensure each tag starts with '#' (defensive normalisation).
-    2. Minimum length — tags that are just '#' or '#x' are dropped (< 3 chars).
-    3. Max length — tags with more than max_tag_length characters after '#' are dropped.
-    4. Banned list — caller-supplied tags are removed (empty by default; this
+    2. Deduplication — case-insensitive, first occurrence wins (the winner
+       keeps its original casing; LLM output is usually lowercase already,
+       but a mixed-case tag is preserved, not rewritten).
+    3. Minimum length — tags that are just '#' or '#x' are dropped (< 3 chars).
+    4. Max length — tags with more than max_tag_length characters after '#' are dropped.
+    5. Banned list — caller-supplied tags are removed (empty by default; this
        function has no opinion of its own about which tags are "bad" — the
        caller decides via the banned_tags argument, which is sourced from the
        user's own config.yaml).
-    5. Deduplication — case-insensitive, first occurrence wins.
     6. Hard limit — final list is truncated to hard_limit (platform safety net).
 
     Args:
@@ -98,7 +103,9 @@ def validate_and_filter(
         if tag_lower in effective_banned:
             continue
 
-        result.append(tag_lower)
+        # First occurrence wins, and keeps its original casing: the lowercased
+        # form is only the dedup key, not the emitted value.
+        result.append(tag)
 
     # Enforce platform hard limit (safety net — correct config should prevent this)
     return result[:hard_limit]

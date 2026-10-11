@@ -27,6 +27,7 @@ exports/
 exports_*/
 logs/
 meta/
+docs/recommend/
 
 # development scratch files
 .sandbox/

@@ -14,42 +14,59 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-# Same cap as enricher/llm.py::_MAX_TOPIC_LEN — the value ends up in an LLM prompt.
-_MAX_TOPIC_LEN = 300
+# The sanitised topic ends up in an LLM prompt, so it is capped here. This is
+# the one definition; enricher/llm.py imports both of these rather than keeping
+# its own copy — two copies drifted once already, and the reader's dropped every
+# space from the subject.
+MAX_TOPIC_LEN = 300
+
+# Control characters str.isprintable() lets through. VT, FF and CR must not
+# reach an LLM prompt; ordinary whitespace must, because a topic is several
+# words.
+_FORBIDDEN_CONTROLS = "\x0b\x0c\x0d"
+
+# Cap on the narration text read from script.json and handed to the
+# title/description prompt (A-4): a 60–90s script is ~150–250 words, so 4000
+# chars is generous headroom without letting a corrupt megabyte-sized file
+# reach the LLM call budget.
+MAX_SCRIPT_CHARS = 4000
 
 
-def _is_printable(ch: str) -> bool:
+def is_printable(ch: str) -> bool:
+    """True for characters that may appear in a prompt. Whitespace qualifies."""
+    return ch.isprintable() and ch not in _FORBIDDEN_CONTROLS
+
+
+def sanitise_topic(raw: object) -> str:
     """
-    str.isprintable() is too permissive for our purposes: it returns True for
-    VT (\\x0b), FF (\\x0c) and CR (\\x0d), all of which are control characters
-    that must not reach an LLM prompt.
-    """
-    return ch.isprintable() and not ch.isspace()
-
-
-def _sanitise_subject(raw: object) -> str:
-    """
-    Make a script.json video_subject safe to put into an LLM prompt.
+    Make an arbitrary topic string safe to put into an LLM prompt: drop
+    non-printables, cap the length, trim the edges.
 
     script.json is written by the batch stage but sits on disk as a plain file a
     user can hand-edit, so video_subject is untrusted here just like the
-    filename. Stripping non-printables mirrors enricher/llm.py::_sanitise_topic
-    and closes the asymmetry where the filename path was filtered but the
-    script.json path was not.
+    filename.
     """
-    cleaned = "".join(ch for ch in str(raw) if _is_printable(ch))
-    return cleaned[:_MAX_TOPIC_LEN].strip()
+    cleaned = "".join(ch for ch in str(raw) if is_printable(ch))
+    return cleaned[:MAX_TOPIC_LEN].strip()
 
 
 @dataclass
 class VideoMeta:
     topic: str
+    # Full narration text from script.json, when present (A-4): the hook of a
+    # good title lives in the first line of the script, not in the subject.
+    script: str
     language_hint: str | None  # None means "auto-detect via LLM"
     source: str  # "script_json" | "filename"
     mp4_path: Path
     json_path: Path  # path where output will be written (may not exist yet)
 
 
+# Closed, hand-maintained mapping of ISO codes to the language names the LLM
+# prompt template expects. Intentionally NOT auto-populated (no locale lists,
+# no pycountry): the enricher prompt is only ever filled with languages the
+# pipeline itself can produce, so an unknown code is passed through as-is
+# rather than guessed at.
 _LANG_CODE_MAP: dict[str, str] = {
     "en": "English",
     "es": "Spanish",
@@ -104,6 +121,7 @@ def resolve_meta(mp4_path: Path, lang_override: str | None = None) -> VideoMeta:
     json_path = mp4_path.with_suffix(".json")
 
     topic: str
+    script_text = ""
     lang_hint: str | None
     source: str
 
@@ -113,8 +131,13 @@ def resolve_meta(mp4_path: Path, lang_override: str | None = None) -> VideoMeta:
         params = data.get("params", {}) if isinstance(data, dict) else {}
         if not isinstance(params, dict):
             params = {}
-        video_subject = _sanitise_subject(params.get("video_subject", ""))
+        video_subject = sanitise_topic(params.get("video_subject", ""))
         script_lang = _normalize_lang(params.get("video_language"))
+        # MPT writes the full narration under "script" (task.py: _task
+        # kwargs); it is the raw material for the title/description stage.
+        raw_script = data.get("script") if isinstance(data, dict) else None
+        if isinstance(raw_script, str):
+            script_text = raw_script.strip()[:MAX_SCRIPT_CHARS]
 
         if video_subject:
             topic = video_subject
@@ -137,6 +160,7 @@ def resolve_meta(mp4_path: Path, lang_override: str | None = None) -> VideoMeta:
 
     return VideoMeta(
         topic=topic,
+        script=script_text,
         language_hint=lang_hint,
         source=source,
         mp4_path=mp4_path,

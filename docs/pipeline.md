@@ -32,13 +32,13 @@ of having one command:
 
 | Stage | What `mpt run` passes |
 |---|---|
-| `refill` | the language; config defaults for count/threshold, no `--force` |
+| `refill` | the language; config defaults for count/threshold, plus `--refill-force` / `--refill-count` / `--refill-threshold` when given |
 | `batch` | the language (so jobs/seen/output all get its suffix), `--dry-run` |
 | `enrich` | the language's exports directory, `--dry-run` |
 | `upload` | the account for the language, `--dry-run`, `--limit` |
 
-If you need a non-default flag — `--force` on refill, `--platform tiktok` on
-enrich — run that stage on its own. `mpt run` is for the routine path.
+If you need any other non-default flag — `--platform tiktok` on enrich, `--seen`
+on batch — run that stage on its own. `mpt run` is for the routine path.
 
 ### How the language wires the stages together
 
@@ -94,9 +94,12 @@ accounts:
     videos_dir: "/srv/mpt/exports_es"
 ```
 
-`mpt run --dry-run` is how you catch a mismatch: upload reports the files it
-would send, and an empty list right after batch listed jobs to render is the
-symptom.
+Two things catch a mismatch. `mpt validate` (and the pre-flight check `mpt run`
+runs before starting any stage) compares `enricher.videos_dir` against the
+suffixed `batch.output_dir` and refuses to start on a mismatch. And
+`mpt run --dry-run` shows the files upload would send — an empty list right
+after batch listed jobs to render is the symptom of the other mismatch, the one
+validate cannot check: `videos_dir` in accounts.yaml.
 
 ## Selecting stages
 
@@ -127,6 +130,14 @@ Use `mpt run --dry-run` before the first real run of a new config, and after
 changing paths. It exercises the same config loading, language resolution, and
 account lookup as a real run, so a wrong path surfaces in seconds instead of
 after a 40-minute render.
+
+## Pre-flight checks
+
+Every `mpt run` — dry or real — runs the checks behind `mpt validate` before
+starting any stage. A hard error (for example `enricher.videos_dir` pointing
+somewhere other than the suffixed `batch.output_dir`) prints the check report
+and refuses to start with exit code 1; a real run with only warnings stays
+quiet so unattended cron logs are not polluted.
 
 ## Failure handling
 

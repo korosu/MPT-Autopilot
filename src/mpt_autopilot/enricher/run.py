@@ -10,6 +10,13 @@ Usage examples:
   mpt enrich --dir ./videos --platform tiktok   # target TikTok
   mpt enrich --dir ./videos --force             # re-generate existing
   mpt enrich --dir ./videos --dry-run           # list candidates only
+
+Exit codes:
+    0 - every file enriched or skipped
+    1 - every attempted file errored
+    2 - partial: some files enriched and some errored. `mpt run` keeps going to
+        upload on a 2 but counts it as a failure in its own exit code — 2 at the
+        pipeline level is reserved for an upload quota stop.
 """
 
 from __future__ import annotations
@@ -26,11 +33,12 @@ from mpt_autopilot.enricher.llm import (
     batch_generate_hashtags,
     detect_and_generate,
     generate_hashtags,
+    generate_title_description,
 )
 from mpt_autopilot.enricher.reader import resolve_meta
 from mpt_autopilot.enricher.settings import configure, settings, validate_tag_budget
 from mpt_autopilot.enricher.writer import build_hashtags_block, write_hashtags
-from mpt_autopilot.logger import Logger
+from mpt_autopilot.logger import Logger, configure_root
 from mpt_autopilot.notify import alert
 
 # Initialise logger lazily (avoids triggering settings at import time)
@@ -98,6 +106,14 @@ def process_file(
             if not tags:
                 log.warn("No always_include configured — writing empty tags")
 
+        # ── Optional title/description (A-4) ───────────────────────────────────
+        # One extra LLM call per video, only when enabled in config.yaml —
+        # until now the uploader received a filename slug and an empty
+        # description because no stage produced them.
+        extra_fields: dict | None = None
+        if settings.generate_title_description:
+            extra_fields = generate_title_description(meta.topic, meta.script, language, platform)
+
         # ── Build and write output ────────────────────────────────────────────
         block = build_hashtags_block(
             tags_list=tags,
@@ -106,14 +122,15 @@ def process_file(
             source=meta.source,
             platform=platform,
         )
-        write_hashtags(meta.json_path, block)
+        write_hashtags(meta.json_path, block, extra_fields=extra_fields)
 
         tags_str = " ".join(tags)
         lang_origin = "provided" if meta.language_hint else "detected"
+        title_note = f", title={extra_fields['title']!r}" if extra_fields else ""
         log.info(
             f"ok: {mp4_path.name} → {tags_str} "
             f"({len(tags)} tags, lang={language} [{lang_origin}], "
-            f"platform={platform}, source={meta.source})"
+            f"platform={platform}, source={meta.source}{title_note})"
         )
         return "ok"
 
@@ -128,10 +145,19 @@ def process_file(
 
 
 def collect_mp4s(directory: Path) -> list[Path]:
-    """Return all *.mp4 files in directory (non-recursive, sorted)."""
+    """Return top-level *.mp4 files in directory (sorted), in a single walk.
+
+    The subdirectory count used to cost a second recursive glob over the same
+    tree — pointless for a hint line (M-40). One pass classifies every find.
+    """
     log = _get_log()
-    files = sorted(directory.glob("*.mp4"))
-    sub_count = len(list(directory.glob("**/*.mp4"))) - len(files)
+    files: list[Path] = []
+    sub_count = 0
+    for found in sorted(directory.glob("**/*.mp4")):
+        if found.parent == directory:
+            files.append(found)
+        else:
+            sub_count += 1
     if sub_count > 0:
         log.info(
             f"[hint] {sub_count} mp4(s) found in subdirectories are not included. "
@@ -141,6 +167,23 @@ def collect_mp4s(directory: Path) -> list[Path]:
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
+
+
+def _batch_size_arg(value: str) -> int:
+    """
+    argparse type for --batch-size: 1–100, same range Settings enforces for
+    enricher.batch_size. An out-of-range value used to be silently clamped
+    here while the config path raised — now both fail loudly (M-41).
+    """
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid integer: {value!r}") from None
+    if not 1 <= n <= 100:
+        raise argparse.ArgumentTypeError(
+            "must be between 1 and 100 (config.yaml's enricher.batch_size enforces the same limit)"
+        )
+    return n
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -197,7 +240,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument(
         "--batch-size",
         metavar="N",
-        type=int,
+        type=_batch_size_arg,
         default=None,
         help=(
             "Number of videos to send to the LLM in a single request (1–100, "
@@ -362,10 +405,23 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
                 topics.append((mp4_path.name, meta.topic))
 
             try:
-                batch_results = batch_generate_hashtags(topics, effective_platform)
-                # Write results
-                for mp4_path, result in zip(chunk, batch_results):
-                    written = _write_batch_result(mp4_path, result, platform_override, force)
+                batch_results = batch_generate_hashtags(
+                    topics, effective_platform, lang_override=lang_override
+                )
+                # batch_generate_hashtags returns results in the order of the
+                # filenames it was given; the check keeps that contract honest,
+                # because a mismatch here would write one video's hashtags into
+                # another video's sidecar. A raise lands in the except below and
+                # the chunk is redone per file.
+                for mp4_path, result in zip(chunk, batch_results, strict=True):
+                    if result["filename"] != mp4_path.name:
+                        raise ValueError(
+                            f"batch result order mismatch: expected {mp4_path.name!r}, "
+                            f"got {result['filename']!r}"
+                        )
+                    written = _write_batch_result(
+                        mp4_path, result, platform_override, force, lang_override
+                    )
                     counts[written] += 1
                 log.info(f"batch {batch_idx + 1}/{total_batches} ({len(chunk)} videos) — ok")
             except Exception as batch_exc:
@@ -403,13 +459,19 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
 
 
 def _resolve_batch_size(args) -> int:
-    """Determine effective batch_size from CLI args or settings singleton."""
+    """Determine effective batch_size from CLI args or settings singleton.
+
+    No clamping: argparse validates --batch-size to 1–100 and Settings
+    validates enricher.batch_size with the same range, so an out-of-range
+    value is a hard error on both paths instead of a silent truncation
+    (M-41).
+    """
     if args.no_batch:
         return 1
     cli_override: int | None = getattr(args, "batch_size", None)
     if cli_override is not None:
-        return max(1, min(cli_override, 100))
-    return max(1, min(getattr(settings, "batch_size", 5), 100))
+        return cli_override
+    return getattr(settings, "batch_size", 5)
 
 
 def _write_batch_result(
@@ -417,19 +479,22 @@ def _write_batch_result(
     result: dict,
     platform_override: str | None,
     force: bool,
+    lang_override: str | None = None,
 ) -> str:
     """
     Write a single batch result to the sidecar file.
 
+    lang_override is the same --lang flag the batch was generated with: the
+    sidecar's language must reflect the forced language, not whatever the
+    model reported alongside it (M-34).
+
     Returns one of: "ok" | "skipped" | "error".
     """
-    from mpt_autopilot.enricher.writer import build_hashtags_block, write_hashtags
-
     log = _get_log()
     filename = mp4_path.name
 
     try:
-        meta = resolve_meta(mp4_path, lang_override=None)
+        meta = resolve_meta(mp4_path, lang_override=lang_override)
     except Exception as exc:
         log.error(f"error resolving {filename}: {exc}")
         return "error"
@@ -443,7 +508,9 @@ def _write_batch_result(
         except (json.JSONDecodeError, OSError):
             pass
 
-    language = result.get("language", "English")
+    # The forced language wins over the model's self-reported one; without
+    # --lang the model's detection is the best information available.
+    language = lang_override or result.get("language", "English")
     tags = result.get("tags", [])
     platform = platform_override or settings.platform
 
@@ -453,6 +520,15 @@ def _write_batch_result(
         if not tags:
             log.warn("No always_include configured — writing empty tags")
 
+    # Optional title/description, same as the per-file path (A-4).
+    extra_fields: dict | None = None
+    if settings.generate_title_description:
+        try:
+            extra_fields = generate_title_description(meta.topic, meta.script, language, platform)
+        except Exception as exc:
+            # A failed extra must not discard the batch's good tags.
+            log.warn(f"title/description failed for {filename}: {exc}")
+
     block = build_hashtags_block(
         tags_list=tags,
         language=language,
@@ -460,11 +536,12 @@ def _write_batch_result(
         source=meta.source,
         platform=platform,
     )
-    write_hashtags(meta.json_path, block)
+    write_hashtags(meta.json_path, block, extra_fields=extra_fields)
 
+    title_note = f", title={extra_fields['title']!r}" if extra_fields else ""
     log.info(
         f"ok: {filename} → {' '.join(tags)} "
-        f"({len(tags)} tags, lang={language}, platform={platform})"
+        f"({len(tags)} tags, lang={language}, platform={platform}{title_note})"
     )
     return "ok"
 
@@ -484,6 +561,8 @@ def _dry_run_state(json_path: Path) -> str:
 
 
 def main() -> None:
+    # Give the root logger a handler before any stage runs (M-1).
+    configure_root()
     sys.exit(execute(build_parser().parse_args()))
 
 

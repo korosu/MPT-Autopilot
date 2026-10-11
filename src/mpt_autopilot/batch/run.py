@@ -13,6 +13,13 @@ Usage:
   mpt batch --dry-run
   mpt batch --status
   mpt batch --list-bgm
+
+Exit codes:
+    0 - every enabled job succeeded, or there was nothing to do
+    1 - every attempted job failed, or the run aborted before starting
+    2 - partial: some jobs succeeded and some failed. `mpt run` keeps going to
+        enrich/upload on a 2 but counts it as a failure in its own exit code —
+        2 at the pipeline level is reserved for an upload quota stop.
 """
 
 from __future__ import annotations
@@ -22,7 +29,6 @@ import json
 import os
 import re
 import shutil
-import signal
 import sys
 import time
 from collections import Counter
@@ -33,8 +39,14 @@ import yaml
 
 from mpt_autopilot import config as shared_config
 from mpt_autopilot import notify, seen
-from mpt_autopilot.batch import bgm, state, voices
-from mpt_autopilot.batch.api import health_check, submit_job, wait_for_task
+from mpt_autopilot.batch import bgm, postprocess, state, voices
+from mpt_autopilot.batch.api import (
+    PayloadRejected,
+    health_check,
+    submit_job,
+    validate_task_id,
+    wait_for_task,
+)
 from mpt_autopilot.batch.settings import Settings
 from mpt_autopilot.batch.settings import load as load_settings
 from mpt_autopilot.batch.upload_post import (
@@ -43,27 +55,35 @@ from mpt_autopilot.batch.upload_post import (
     upload_video,
 )
 from mpt_autopilot.config import ConfigError
+from mpt_autopilot.lock import file_lock, lock_path_for
+from mpt_autopilot.logger import Logger, configure_root
 from mpt_autopilot.uploader.metadata import title_from_filename
+
+# Stale threshold for the batch run lock: a run can legitimately take hours
+# (max_wait_seconds defaults to 2400s per task), so the keepalive in run()
+# refreshes the lock's mtime; this is only the fallback for a dead holder.
+_LOCK_STALE_AFTER = 1800
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
 
 def log(msg: str, settings: Settings, *, to_file: bool = True) -> None:
     """
-    Print + append to log_file. One backup copy (log_file.1) kept on rotation.
+    One line of batch output: timestamped, to stdout and (unless to_file=False)
+    to the stage log file.
+
+    Routes through the shared Logger instead of re-implementing rotation:
+    RotatingFileHandler keeps three backups where the hand-rolled version kept
+    one, and the level prefix now appears on stdout too (see logger.py). The
+    Logger itself handles reconfiguration when mpt run points the stage at a
+    different log file.
+
+    to_file=False is the dry-run mode: preview only, no log file.
     """
-    line = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
-    print(line)
     if not to_file:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
         return
-    log_file = settings.log_file
-    log_file.parent.mkdir(parents=True, exist_ok=True)
-    if log_file.exists() and log_file.stat().st_size > settings.log_max_bytes:
-        backup = log_file.with_suffix(log_file.suffix + ".1")
-        backup.unlink(missing_ok=True)
-        log_file.rename(backup)
-    with open(log_file, "a", encoding="utf-8") as f:
-        f.write(f"{line}\n")
+    Logger(settings.log_file, settings.log_max_bytes, name="mpt_autopilot.batch").info(msg)
 
 
 # ── File handling ─────────────────────────────────────────────────────────────
@@ -83,8 +103,6 @@ def _task_dir(task_id: object, settings: Settings) -> Path:
     Raises ValueError on anything that is not a safe single path segment or
     that would escape mpt_storage/tasks/.
     """
-    from mpt_autopilot.batch.api import validate_task_id
-
     safe = validate_task_id(task_id)
     tasks_root = settings.mpt_storage / "tasks"
     task_dir = tasks_root / safe
@@ -127,6 +145,51 @@ def _output_dest(output_file: object, settings: Settings) -> tuple[Path, Path]:
             f"which is outside {out_dir}"
         )
     return dest_video, dest_video.with_suffix(".json")
+
+
+def _quality_warnings(dest_script: Path, copied_subtitles: int) -> list[str]:
+    """
+    Degrade-but-don't-fail conditions for a finished video (R3).
+
+    Only checks observable facts: whether the copied script.json says
+    subtitles were ordered (params.subtitle_enabled) and whether any
+    .srt/.ass actually arrived. MPT's task-status response in the current
+    checkout exposes no `warnings[]` field (TaskStatusData cuts it off), so
+    the subtitle file is the only silent-failure marker we can see from here.
+    """
+    warnings: list[str] = []
+    if copied_subtitles == 0 and dest_script.exists():
+        try:
+            script = json.loads(dest_script.read_text(encoding="utf-8"))
+            params = script.get("params", {}) if isinstance(script, dict) else {}
+            if isinstance(params, dict) and params.get("subtitle_enabled"):
+                warnings.append(
+                    "no subtitles: params.subtitle_enabled is true but no "
+                    ".srt/.ass was produced by the render"
+                )
+        except (json.JSONDecodeError, OSError):
+            # An unreadable script must not turn a successful copy into noise.
+            pass
+    return warnings
+
+
+def _write_quality_warnings(dest_script: Path, quality_warnings: list[str]) -> None:
+    """
+    Persist the warnings into the sidecar so enrich/upload see the defect
+    before publishing. Best-effort by design (R3): a warning that cannot be
+    written must not fail an otherwise successful copy.
+    """
+    try:
+        data = json.loads(dest_script.read_text(encoding="utf-8")) if dest_script.exists() else {}
+        if not isinstance(data, dict):
+            data = {}
+    except (json.JSONDecodeError, OSError):
+        return
+    data["quality_warnings"] = quality_warnings
+    try:
+        dest_script.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def copy_result(task_data: dict, output_file: str, settings: Settings) -> tuple[str, Path]:
@@ -196,6 +259,7 @@ def copy_result(task_data: dict, output_file: str, settings: Settings) -> tuple[
         log(f"  note: no script.json found for {task_id}", settings)
 
     # Copy subtitle files if present
+    copied_subtitles = 0
     for pattern in ["*.srt", "*.ass"]:
         for sub_file in task_dir.glob(pattern):
             dest_sub = (settings.output_dir / sub_file.name).resolve()
@@ -203,6 +267,22 @@ def copy_result(task_data: dict, output_file: str, settings: Settings) -> tuple[
                 raise ValueError(f"refusing to copy subtitle outside output_dir: {sub_file}")
             shutil.copy2(sub_file, dest_sub)
             log(f"  saved: {dest_sub}", settings)
+            copied_subtitles += 1
+
+    # ── Quality check (R3 / B-12) ───────────────────────────────────────────
+    # A finished render may still be degraded. The visible-to-us case: MPT
+    # can silently produce no subtitle file (its Edge timing pass has a
+    # deliberate no-Whisper-fallback), and a video without subtitles was
+    # indistinguishable from a good one in logs and alerts.
+    quality_warnings = _quality_warnings(dest_script, copied_subtitles)
+    if quality_warnings:
+        for warning in quality_warnings:
+            log(f"  [quality] {output_file}: {warning}", settings)
+        notify.alert(
+            f"⚠️ Quality warnings for '{output_file}':\n" + "\n".join(quality_warnings),
+            settings,
+        )
+        _write_quality_warnings(dest_script, quality_warnings)
 
     return task_id, dest_video
 
@@ -231,6 +311,22 @@ def cleanup_cache(settings: Settings) -> None:
 # ── Single job (with retries) ─────────────────────────────────────────────────
 
 
+def build_payload(job: dict, defaults: dict, voice_pool: dict) -> dict:
+    """
+    Merge a job onto the stage defaults exactly as the API will receive it.
+
+    Single source of truth for both `--dry-run` preview and run_job: they used
+    to strip different meta keys (preview only dropped "name"), so the preview
+    could report a job as runnable while the real run sent a different payload.
+    """
+    meta_keys = ("name", "enabled", "output_file", "max_retries", "retry_delay_seconds")
+    payload = {
+        **defaults,
+        **{k: v for k, v in job.items() if k not in meta_keys},
+    }
+    return voices.resolve(payload, voice_pool)
+
+
 def run_job(
     job: dict, defaults: dict, voice_pool: dict, settings: Settings, in_progress_path: Path
 ) -> bool:
@@ -252,12 +348,7 @@ def run_job(
     Per-job max_retries / retry_delay_seconds override the global settings,
     implementing the "configurable retries per job" feature.
     """
-    _meta_keys = ("name", "enabled", "output_file", "max_retries", "retry_delay_seconds")
-    payload = {
-        **defaults,
-        **{k: v for k, v in job.items() if k not in _meta_keys},
-    }
-    payload = voices.resolve(payload, voice_pool)
+    payload = build_payload(job, defaults, voice_pool)
 
     max_retries = int(job.get("max_retries", settings.max_retries))
     retry_delay = int(job.get("retry_delay_seconds", settings.retry_delay_seconds))
@@ -274,18 +365,29 @@ def run_job(
             cleanup_task(copy_task_id, settings)
             state.remove(in_progress_path, job["output_file"])
 
+            # ── Optional audio post-pass (R5) ─────────────────────────────────
+            # Before upload-post and any cross-post: they must carry the
+            # leveled audio, not the raw render.
+            if settings.audio_normalize:
+                postprocess.normalize_audio(dest_video, lambda m: log(m, settings))
+
             # ── upload-post (optional) ────────────────────────────────────────
             if settings.upload_post_enabled:
                 try:
                     sidecar = dest_video.with_suffix(".json")
-                    meta_title = dest_video.stem
+                    # B-9: batch runs before enrich, so the sidecar is usually
+                    # raw script.json with no title/tags yet. Derive the title
+                    # the same way the uploader stage would (underscores to
+                    # spaces) instead of posting the bare filename slug.
+                    meta_title: str
                     meta_desc = ""
                     meta_tags: list[str] = []
                     if sidecar.exists():
                         raw = json.loads(sidecar.read_text(encoding="utf-8"))
-                        meta_title = raw.get("title", dest_video.stem)
-                        meta_desc = raw.get("description", "")
-                        meta_tags = raw.get("tags", [])
+                        meta_title = str(raw.get("title") or title_from_filename(dest_video))
+                        meta_desc = str(raw.get("description", ""))
+                        raw_tags = raw.get("tags")
+                        meta_tags = raw_tags if isinstance(raw_tags, list) else []
                     else:
                         meta_title = title_from_filename(dest_video)
                     upload_video(
@@ -304,6 +406,16 @@ def run_job(
             log(f"done: {job['name']}", settings)
             return True
 
+        except PayloadRejected as exc:
+            # R6: a 4xx means the payload itself is wrong (a schema drift, an
+            # invalid value). Retrying the identical bytes is pure waste —
+            # fail the job once and name the server's own error detail.
+            log(f"REJECTED (not retrying — fix the job or config): {exc}", settings)
+            if task_id:
+                cleanup_task(task_id, settings)
+            state.remove(in_progress_path, job["output_file"])
+            return False
+
         except Exception as exc:
             log(f"FAILED {job['name']} (attempt {attempt}/{max_retries}): {exc}", settings)
             if task_id:
@@ -321,18 +433,17 @@ def run_job(
 # ── Core logic ────────────────────────────────────────────────────────────────
 
 
-def _seen_base_for_settings(settings: Settings, config_path: Path | None) -> Path:
-    cfg = shared_config.load(config_path)
-    base = cfg.path_value("batch", "seen_dir") or cfg.path_value("paths", "seen_dir") or Path(".")
-    return cfg.resolve(str(base))
+def _seen_base_for_settings(config_path: Path | None) -> Path:
+    # path_value() already falls back to the shared `paths:` block and then to
+    # the default, so there is nothing to chain here. The previous
+    # `... or cfg.path_value("paths", "seen_dir") or Path(".")` raised
+    # ValueError("unknown config section 'paths'") whenever seen_dir was not
+    # configured at all — "paths" is not a stage section.
+    return shared_config.load(config_path).require_path("batch", "seen_dir", ".")
 
 
-def _seen_path_for_settings(
-    settings: Settings,
-    config_path: Path | None,
-    lang_suffix: str = "",
-) -> Path:
-    return seen.resolve(_seen_base_for_settings(settings, config_path), lang_suffix)
+def _seen_path_for_settings(config_path: Path | None, lang_suffix: str = "") -> Path:
+    return seen.resolve(_seen_base_for_settings(config_path), lang_suffix)
 
 
 def run(
@@ -348,7 +459,7 @@ def run(
 
     defaults: dict = jobs_cfg.get("defaults", {})
     jobs: list[dict] = jobs_cfg.get("jobs", [])
-    seen_file = seen_override or _seen_path_for_settings(settings, config_path)
+    seen_file = seen_override or _seen_path_for_settings(config_path)
     already_seen = seen.load(seen_file)
     voice_pool = settings.voice_pool
     in_progress_path = seen_file.with_name(seen_file.stem + ".in_progress.txt")
@@ -370,32 +481,40 @@ def run(
     if pending:
         log(f"{len(pending)} in-progress task(s) found — attempting resume", settings)
         for entry in pending:
-            output_file: str = entry["output_file"]
+            # Named `pending_file` (not `output_file`) so it cannot collide
+            # with the main loop's own variable of that name — pyright treats
+            # the two same-named declarations as one and mixes their types.
+            pending_file: str = entry["output_file"]
             task_id: str = entry["task_id"]
-            if output_file in already_seen:
-                state.remove(in_progress_path, output_file)
+            if pending_file in already_seen:
+                state.remove(in_progress_path, pending_file)
                 continue
-            job = next((j for j in jobs if j.get("output_file") == output_file), None)
+            job = next((j for j in jobs if j.get("output_file") == pending_file), None)
             if not job:
-                log(f"orphan in-progress entry '{output_file}' (not in jobs file)", settings)
-                state.remove(in_progress_path, output_file)
+                log(f"orphan in-progress entry '{pending_file}' (not in jobs file)", settings)
+                state.remove(in_progress_path, pending_file)
                 continue
-            name = job.get("name", output_file)
+            name = job.get("name", pending_file)
             log(f"resuming: {name} (task_id={task_id})", settings)
             try:
                 task_data = wait_for_task(task_id, settings, lambda m: log(m, settings))
-                copy_result(task_data, output_file, settings)
+                _, resumed_video = copy_result(task_data, pending_file, settings)
                 cleanup_task(task_id, settings)
-                seen.add(seen_file, output_file)
-                state.remove(in_progress_path, output_file)
-                log(f"resumed and done: {output_file}", settings)
+                # R5: the resumed copy goes through the same audio pass as a
+                # fresh one, so a crash mid-batch cannot leak an unnormalized
+                # video into the exports.
+                if settings.audio_normalize:
+                    postprocess.normalize_audio(resumed_video, lambda m: log(m, settings))
+                seen.add(seen_file, pending_file)
+                state.remove(in_progress_path, pending_file)
+                log(f"resumed and done: {pending_file}", settings)
             except Exception as exc:
                 log(
-                    f"resume failed for '{output_file}' (task_id={task_id}): {exc} — "
+                    f"resume failed for '{pending_file}' (task_id={task_id}): {exc} — "
                     f"will re-submit as new task",
                     settings,
                 )
-                state.remove(in_progress_path, output_file)
+                state.remove(in_progress_path, pending_file)
                 try:
                     cleanup_task(task_id, settings)
                 except Exception:
@@ -444,12 +563,14 @@ def run(
             if not job.get("enabled", True):
                 print(f"  disabled  {name}")
                 continue
+            if not job.get("output_file"):
+                print(f"  error     {name} - no output_file")
+                continue
             if job["output_file"] in already_seen:
                 print(f"  done      {name} (already done)")
                 continue
-            merged = {**defaults, **{k: v for k, v in job.items() if k != "name"}}
             try:
-                voices.resolve(merged, voice_pool)
+                build_payload(job, defaults, voice_pool)
                 print(f"  run       {name}")
             except KeyError as exc:
                 print(f"  error     {name} - {exc}")
@@ -465,130 +586,108 @@ def run(
         )
         return 1
 
-    lock_path = seen_file.with_name(seen_file.stem + ".lock")
-    _lock_timeout = 1800  # ponytail: 30 min stale lock timeout
+    # The batch lock keys off a `<seen stem>.run` marker (file
+    # `<seen stem>.run.lock`), NOT off seen_file itself: seen.add() takes
+    # file_lock(seen_file) inside the loop and file_lock is not re-entrant —
+    # the same target here would stall every registry write for the full wait
+    # timeout (tests/batch/test_lock_collision.py guards exactly this).
+    # A short acquisition wait lets a just-finished run release cleanly; the
+    # strict mode turns "still locked" into a clean exit 1 rather than the
+    # old silent 30-minute stall of a second batch.
+    batch_lock_target = seen_file.with_name(seen_file.stem + ".run")
     try:
-        os.close(os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY))
-    except FileExistsError:
-        try:
-            mtime = lock_path.stat().st_mtime
-            if time.time() - mtime > _lock_timeout:
-                log(
-                    f"Stale lock file (age {time.time() - mtime:.0f}s > {_lock_timeout}s) — "
-                    f"overwriting",
-                    settings,
-                )
-                os.close(os.open(str(lock_path), os.O_CREAT | os.O_TRUNC | os.O_WRONLY))
-            else:
-                log(
-                    f"ERROR: Lock file exists at {lock_path} — another batch may be running. "
-                    f"If not, delete it and re-run.",
-                    settings,
-                )
-                return 1
-        except OSError:
-            log(
-                f"ERROR: Lock file exists at {lock_path} and cannot be read. "
-                f"Delete manually if stale.",
+        with file_lock(
+            batch_lock_target,
+            timeout=5.0,
+            strict=True,
+            stale_after=_LOCK_STALE_AFTER,
+        ):
+            settings.output_dir.mkdir(parents=True, exist_ok=True)
+            start_time = time.time()
+            notify.alert(
+                f"Batch started: {jobs_path.name}\n"
+                f"Total jobs: {len(jobs)}  To run: {to_run_count}  "
+                f"Already done: {already_done_count}  Disabled: {disabled_count}",
                 settings,
             )
-            return 1
 
-    # ── Lock cleanup on Ctrl+C / SIGTERM / exceptions ──
-    # Installed before anything that can raise after the marker was created:
-    # an exception between lock creation and the try/finally below (e.g. a
-    # PermissionError from output_dir.mkdir) would otherwise leave the marker
-    # behind until the 30-minute stale timeout.
-    _lock_cleaned_up = False
+            ok: list[str] = []
+            failed: list[str] = []
+            skipped: list[str] = []
+            consecutive_failures = 0
+            last_cleanup_at = 0
 
-    def _cleanup_lock() -> None:
-        nonlocal _lock_cleaned_up
-        if not _lock_cleaned_up:
-            lock_path.unlink(missing_ok=True)
-            _lock_cleaned_up = True
+            for index, job in enumerate(jobs, start=1):
+                name = job.get("name", job.get("output_file", "?"))
 
-    def _on_signal(signum: int, _frame: object) -> None:  # _frame unused but required by signal API
-        _cleanup_lock()
-        signal.signal(signum, signal.SIG_DFL)
-        os.kill(os.getpid(), signum)
+                if not job.get("enabled", True):
+                    skipped.append(f"{name} (disabled)")
+                    continue
 
-    _prev_sigint = signal.signal(signal.SIGINT, _on_signal)
-    try:
-        _prev_sigterm = signal.signal(signal.SIGTERM, _on_signal)
-    except AttributeError:
-        _prev_sigterm = None  # ponytail: Windows has no SIGTERM
+                # Annotated: pyright keeps the isinstance-narrowed type of the
+                # previous loop iteration as the declared type and would reject
+                # re-assigning `Unknown | None` to it on the next pass.
+                output_file: object = job.get("output_file")
+                if not isinstance(output_file, str) or not output_file.strip():
+                    # A hand-edited jobs.yaml can miss the key. run_job is
+                    # guarded by a wide except, but this check runs before it;
+                    # without it a missing key killed the whole run with a
+                    # traceback.
+                    log(f"ERROR: job '{name}' has no output_file — skipped", settings)
+                    failed.append(name)
+                    continue
 
-    try:
-        settings.output_dir.mkdir(parents=True, exist_ok=True)
-        start_time = time.time()
-        notify.alert(
-            f"Batch started: {jobs_path.name}\n"
-            f"Total jobs: {len(jobs)}  To run: {to_run_count}  "
-            f"Already done: {already_done_count}  Disabled: {disabled_count}",
-            settings,
-        )
+                if seen.contains(seen_file, output_file):
+                    skipped.append(f"{name} (already done)")
+                    log(f"skip: {output_file} (in seen registry)", settings)
+                    continue
 
-        ok: list[str] = []
-        failed: list[str] = []
-        skipped: list[str] = []
-        consecutive_failures = 0
-        last_cleanup_at = 0
+                success = run_job(job, defaults, voice_pool, settings, in_progress_path)
 
-        for index, job in enumerate(jobs, start=1):
-            name = job.get("name", job.get("output_file", "?"))
+                if success:
+                    ok.append(name)
+                    consecutive_failures = 0
+                    seen.add(seen_file, output_file)
+                    # ponytail: keepalive — refresh the lock's mtime so a
+                    # concurrent run never steals the lock of a long, alive
+                    # batch (stale_after would otherwise misread it).
+                    os.utime(lock_path_for(batch_lock_target), None)
+                    if (
+                        settings.cache_cleanup_enabled
+                        and settings.cache_cleanup_interval > 0
+                        and len(ok) % settings.cache_cleanup_interval == 0
+                    ):
+                        log(f"periodic cache cleanup after {len(ok)} videos", settings)
+                        cleanup_cache(settings)
+                        last_cleanup_at = len(ok)
+                else:
+                    failed.append(name)
+                    consecutive_failures += 1
+                    if consecutive_failures >= settings.max_consecutive_failures:
+                        log(
+                            f"ABORT: {consecutive_failures} consecutive failures — "
+                            f"API may be down or token expired",
+                            settings,
+                        )
+                        notify.alert(
+                            f"Batch aborted: {consecutive_failures} consecutive failures "
+                            f"(last: {name})\n"
+                            f"Progress: {index}/{len(jobs)} jobs processed — "
+                            f"{len(ok)} succeeded, {len(failed)} failed so far.\n"
+                            f"Likely cause: API unreachable or an invalid/expired token. "
+                            f"Remaining jobs were not attempted.",
+                            settings,
+                        )
+                        break
 
-            if not job.get("enabled", True):
-                skipped.append(f"{name} (disabled)")
-                continue
-
-            if seen.contains(seen_file, job["output_file"]):
-                skipped.append(f"{name} (already done)")
-                log(f"skip: {job['output_file']} (in seen registry)", settings)
-                continue
-
-            success = run_job(job, defaults, voice_pool, settings, in_progress_path)
-
-            if success:
-                ok.append(name)
-                consecutive_failures = 0
-                seen.add(seen_file, job["output_file"])
-                if not _lock_cleaned_up:
-                    os.utime(lock_path, None)  # ponytail: keepalive so lock doesn't look stale
-                if (
-                    settings.cache_cleanup_enabled
-                    and settings.cache_cleanup_interval > 0
-                    and len(ok) % settings.cache_cleanup_interval == 0
-                ):
-                    log(f"periodic cache cleanup after {len(ok)} videos", settings)
-                    cleanup_cache(settings)
-                    last_cleanup_at = len(ok)
-            else:
-                failed.append(name)
-                consecutive_failures += 1
-                if consecutive_failures >= settings.max_consecutive_failures:
-                    log(
-                        f"ABORT: {consecutive_failures} consecutive failures — "
-                        f"API may be down or token expired",
-                        settings,
-                    )
-                    notify.alert(
-                        f"Batch aborted: {consecutive_failures} consecutive failures "
-                        f"(last: {name})\n"
-                        f"Progress: {index}/{len(jobs)} jobs processed — "
-                        f"{len(ok)} succeeded, {len(failed)} failed so far.\n"
-                        f"Likely cause: API unreachable or an invalid/expired token. "
-                        f"Remaining jobs were not attempted.",
-                        settings,
-                    )
-                    break
-
-        if settings.cache_cleanup_enabled and len(ok) != last_cleanup_at:
-            cleanup_cache(settings)
-    finally:
-        _cleanup_lock()
-        signal.signal(signal.SIGINT, _prev_sigint)
-        if _prev_sigterm is not None:
-            signal.signal(signal.SIGTERM, _prev_sigterm)
+            if settings.cache_cleanup_enabled and len(ok) != last_cleanup_at:
+                cleanup_cache(settings)
+    except TimeoutError as exc:
+        # Ctrl+C / exceptions unwind through the `with`, so the lock is
+        # released without the old dedicated signal handlers; only a SIGTERM
+        # kill leaves the marker behind, and stale_after then clears it.
+        log(f"ERROR: {exc}", settings)
+        return 1
 
     return _print_summary(ok, failed, skipped, settings, started_at=start_time)
 
@@ -844,9 +943,7 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
         return 1
 
     # Configure seen.txt rotation threshold from config.yaml.
-    from mpt_autopilot import seen as seen_registry
-
-    seen_registry.set_rotation_max_bytes(settings.seen_max_mb * 1024 * 1024)
+    seen.set_rotation_max_bytes(settings.seen_max_mb * 1024 * 1024)
 
     # ── CLI overrides ────────────────────────────────────────────────────
     if getattr(args, "upload_post", None) is not None:
@@ -879,7 +976,7 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
     # Resolve --seen default when --lang is set and --seen not explicitly passed
     seen_arg: Path | None = args.seen
     if seen_arg is None and lang_suffix:
-        seen_arg = _seen_path_for_settings(settings, config_path, lang_suffix)
+        seen_arg = _seen_path_for_settings(config_path, lang_suffix)
 
     # Apply lang suffix to output_dir
     if lang_suffix:
@@ -893,7 +990,7 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
         seen_override = seen_arg if seen_arg.is_absolute() else cfg_dir / seen_arg
 
     if args.status:
-        seen_path = seen_override or _seen_path_for_settings(settings, config_path, lang_suffix)
+        seen_path = seen_override or _seen_path_for_settings(config_path, lang_suffix)
         entries = seen.list_all(seen_path)
         print(f"\nSeen registry: {seen_path}")
         print(f"Total entries: {len(entries)}\n")
@@ -918,10 +1015,18 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
         print(f"        Copy jobs/jobs.example.yaml to {jobs_path.name} and add your video topics.")
         return 1
 
-    return run(jobs_path, settings, dry_run=args.dry_run, seen_override=seen_override)
+    return run(
+        jobs_path,
+        settings,
+        dry_run=args.dry_run,
+        config_path=config_path,
+        seen_override=seen_override,
+    )
 
 
 def main() -> None:
+    # Give the root logger a handler before any stage runs (M-1).
+    configure_root()
     sys.exit(execute(build_parser().parse_args()))
 
 

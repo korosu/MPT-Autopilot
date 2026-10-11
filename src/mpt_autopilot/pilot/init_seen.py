@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 
 from mpt_autopilot import seen
+from mpt_autopilot.logger import configure_root
 from mpt_autopilot.pilot.settings import load as load_settings
 
 
@@ -52,12 +53,15 @@ def _filter_by_suffix(names: set[str], file_suffix: str, all_suffixes: set[str])
     file_suffix ""    → keep files that do NOT end with any known suffix from config
 
     Uses the full set of known suffixes from config.yaml so detection is always
-    exact — no regex guessing needed.
+    exact — no regex guessing needed. Both sides are lowercased: filenames on
+    disk vary in case, and a config suffix like "_ES" would otherwise match
+    nothing at all.
     """
+    known = {s.lower() for s in all_suffixes if s}
     if file_suffix:
-        return {n for n in names if n.lower().endswith(f"{file_suffix}.mp4")}
+        return {n for n in names if n.lower().endswith(f"{file_suffix.lower()}.mp4")}
     else:
-        return {n for n in names if not any(n.lower().endswith(f"{s}.mp4") for s in all_suffixes)}
+        return {n for n in names if not any(n.lower().endswith(f"{s}.mp4") for s in known)}
 
 
 def init_all(scan_dirs: list[Path], seen_dir: Path) -> int:
@@ -246,6 +250,8 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
 
 
 def main() -> None:
+    # Give the root logger a handler before any stage runs (M-1).
+    configure_root()
     sys.exit(execute(build_parser().parse_args()))
 
 

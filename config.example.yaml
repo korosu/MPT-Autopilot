@@ -157,6 +157,39 @@ pilot:
     # reasoning_effort: "medium" # none|low|medium|high|xhigh|max
     # reasoning_max_tokens: 8192 # extra budget reserved for the hidden draft
 
+    # ── Visual search terms (R1/A-3, default off) ──────────────────────────
+    # When true, the pilot asks its LLM (in the SAME response that generates
+    # the ideas — one call) for a video_terms array per idea. Non-empty
+    # video_terms makes MPT skip its own hardcoded English-only 5-term
+    # generator entirely, which is the only lever over the visual row.
+    # Terms are written into each job and ordered like a storyboard when
+    # match_materials_to_script: true (see jobs/jobs.example.yaml).
+    visual_terms: false
+    # Required when visual_terms: true. The rules are content, not code —
+    # they live here so they stay visible and editable.
+    # visual_terms_rules: |
+    #   10-14 keywords, ALWAYS in English regardless of the video language
+    #   (stock APIs search English tags). Concrete visible subjects, not
+    #   abstractions: "satellite orbiting Earth" yes, "innovation" no.
+    #   Order = order of appearance in the narration (this IS the storyboard
+    #   when match_materials_to_script is true). 1-4 words per term. Put the
+    #   main subject in the first three terms. End with 3-4 broad "safety"
+    #   terms so a too-specific query never leaves the clip pool empty.
+
+    # ── Sampling (R4, default: key not sent) ───────────────────────────────
+    # Leave `temperature` out entirely and the request never mentions it —
+    # reasoning models reject the parameter and existing setups must not
+    # change behaviour. Set a number to control idea diversity on providers
+    # that support it.
+    # temperature: 0.9
+
+    # ── Strict JSON (R4, default off) ───────────────────────────────────────
+    # When true, requests to OpenAI-compatible providers ask for a guaranteed
+    # JSON object (response_format). Many providers reject the field, and the
+    # tolerant parser already salvages near-JSON replies — enable only when
+    # your provider documents support for it.
+    strict_json: false
+
   # Directories scanned by `mpt init-seen` for existing .mp4 files, so refill
   # never re-proposes a topic you already rendered. Combined with any --dir
   # flags. Leave empty to always pass --dir at runtime.
@@ -205,6 +238,17 @@ batch:
   max_wait_seconds: 2400
   # Give up if a task's progress does not move for this long.
   stuck_threshold_seconds: 3600
+  # Delay between two status polls of a running task. Lower = faster reaction
+  # to a finished task, higher = fewer requests against the MPT API.
+  poll_interval_seconds: 10
+
+  # ── Audio post-pass (R5, default off) ──────────────────────────────────
+  # When true, every finished video goes through ONE ffmpeg pass that levels
+  # the loudness (-14 LUFS, -1.5 dBTP) and trims the trailing silence Edge
+  # TTS leaves behind. Video stream is copied, not re-encoded (-c:v copy) —
+  # MPT already runs the pixels through 2-3 lossy encodes.
+  # Requires ffmpeg on the machine running `mpt batch` (checked by mpt validate).
+  audio_normalize: false
 
   # Retries cover transient trouble (dropped connection, MPT briefly down, a
   # one-off stuck task). They will not fix bad credentials —
@@ -234,6 +278,13 @@ batch:
     # username: ""          # override — leave empty to read from MPT config.toml
     # platforms: ["youtube", "tiktok"]  # override — leave empty to read from MPT
     # youtube_privacy_status: "public"  # public | unlisted | private
+    # upload-post's own privacy field for the non-YouTube platforms (TikTok
+    # and friends); values come from those platforms' APIs (e.g.
+    # PUBLIC_TO_EVERYONE / PRIVATE_TO_SELF). Leave unset to keep the
+    # historical public default — but note the run refuses to start an
+    # upload when youtube_privacy_status is non-public and no explicit
+    # privacy_level is given, rather than silently publishing publicly.
+    # privacy_level: "PUBLIC_TO_EVERYONE"
 
   # ── Voice presets ────────────────────────────────────────────────────────
   #
@@ -254,10 +305,12 @@ batch:
   #       voice: "es_es_elvira"          # es-ES-ElviraNeural (Female)
   #
   # This section is only for EXTRA presets: paid providers, or a bundled voice
-  # with a custom rate/volume. Each preset sets tts_server and voice_name
-  # together so they cannot drift apart. The grouping keys (gemini, ...) are
-  # for readability only — alias names must be unique across the whole section,
-  # and an alias here overrides a bundled one of the same name.
+  # with a custom rate/volume. `tts_server` labels the preset in
+  # `mpt batch --list-voices` output — it is NOT sent to MPT (VideoParams has
+  # no such field; the API dispatches on voice_name alone). The grouping keys
+  # (gemini, ...) are for readability only — alias names must be unique across
+  # the whole section, and an alias here overrides a bundled one of the
+  # same name.
   #
   # Paid providers need their key configured on the MoneyPrinterTurbo SERVER;
   # nothing here can supply it. If your fork supports siliconflow / mimo /
@@ -403,7 +456,7 @@ enricher:
     topic "ostriches never bury heads" →
     {{"language": "English", "tags": ["#ostrichfacts", "#ostrichmyths", "#birdmyths", "#animalscience"]}}
     topic "nadie puede oír tus gritos en el espacio" →
-    {{"language": "Spanish", "tags": ["#silencioenelespacio", "#sonidoenelespacio", "#vacíoespacial", "#curiosidadescósmicas"]}}
+    {{"language": "Spanish", "tags": ["#silencioenelespacio", "#sonidoenelespacio", "#vacíoespacial", "#curiosidadescosmos"]}}
 
   # Used when the language IS known (--lang, or video_language in script.json).
   prompt_generate: |
@@ -430,7 +483,7 @@ enricher:
     SECONDARY tags (generate 1–2):
       Describe the broader niche — medium competition level (not mega-popular, not obscure).
       Think: "What community or sub-topic does this video belong to?"
-      Good examples: #animalscience  #astronomía  #curiosidadesdeluniverso  #animalbehavior
+      Good examples: #animalscience  #astronomía  #universocurioso  #animalbehavior
 
     ── STRICT FORMATTING RULES ──────────────────────────────────────────────────
     - All hashtags in {language} — never mix languages
@@ -457,13 +510,70 @@ enricher:
     ["#ostrichfacts", "#ostrichmyths", "#birdmyths", "#animalscience"]
 
     Spanish / youtube / topic "sound impossible in space":
-    ["#silencioenelespacio", "#sonidoenelespacio", "#vacíoespacial", "#curiosidadescósmicas"]
+    ["#silencioenelespacio", "#sonidoenelespacio", "#vacíoespacial", "#curiosidadescosmos"]
 
     English / tiktok / topic "opossum involuntarily faints":
     ["#opossumfacts", "#involuntaryfainting", "#animalbiology", "#wildlifefacts"]
 
     Spanish / instagram / topic "moon fits inside Russia":
-    ["#lalunacaberusia", "#curiosidadesdeluniverso", "#astronomía", "#datoscuriosos"]
+    ["#lalunacaberusia", "#universocurioso", "#astronomía", "#datoscuriosos"]
+
+  # Batch mode (`mpt enrich` with batch_size > 1, including `mpt run`): ONE
+  # LLM call for several videos. Same placeholders as prompt_generate plus
+  # {count}, {videos}, {language}. {language} is the forced --lang value or
+  # "the language of each video (you detect it)" when none is forced.
+  prompt_batch: |
+    You are a {platform} short-form video SEO specialist applying 2026 best practices.
+
+    Generate hashtags for the {count} videos below.
+    Language: write every tag in {language}; set each result's "language" field to {language}.
+
+    ── PRIORITY ORDER (most to least important) ────────────────────────────────
+    For EACH video:
+    - PRIMARY tags (2–3): highly specific to that video's unique angle — what
+      would someone type into {platform} search to find exactly this video?
+      Do NOT use mega-tags: ❌ #animals  ❌ #nature  ❌ #science  ❌ #espacio
+    - SECONDARY tags (1–2): the broader niche, medium competition level.
+    - {min_tags}–{max_tags} tags per video.
+    - Lowercase, no spaces inside a tag, preserve native diacritics,
+      max {max_tag_length} characters per tag (after #), no duplicates.
+    - Tags to EXCLUDE entirely (they are added automatically afterwards):
+      {excluded_tags}
+
+    VIDEOS:
+    {videos}
+
+    Respond ONLY as JSON — no markdown, no explanation:
+    {{"results": [{{"filename": "...", "language": "...", "tags": ["#tag", ...]}}]}}
+
+  # ── Title + description (optional, default off) ─────────────────────────
+  # When generate_title_description is true, every enriched video also gets a
+  # YouTube-ready title (≤100 chars) and description (≤5000) written into the
+  # sidecar's TOP level — exactly the keys `mpt upload` already reads.
+  # Until now nothing produced them, so uploads carried a filename-derived
+  # lowercase slug and an empty description.
+  # Placeholders: {video_subject} {script} {platform} {language}.
+  # Keep the no-hashtags rule inside the description: the uploader counts
+  # existing hashtags and tops the list up to 15.
+  generate_title_description: false
+  prompt_title_description: |
+    You are a {platform} metadata writer for short-form videos.
+    Write in the video's language: {language}.
+
+    Video topic: "{video_subject}"
+    Voiceover script (may be empty):
+    {script}
+
+    Produce:
+    1. "title": a clickable title, at most 100 characters. Base it on the
+       strongest hook in the script's opening line when there is one. No
+       clickbait lies, no ALL CAPS, no hashtags.
+    2. "description": at most three short lines — one curiosity line, one
+       line of context, one question that invites a comment. NO hashtags
+       inside the description (they are added separately).
+
+    Respond ONLY with a JSON object, no markdown:
+    {{"title": "...", "description": "..."}}
 
 
 # =============================================================================
@@ -485,11 +595,23 @@ uploader:
   # accounts.yaml location. Defaults to accounts.yaml beside THIS file.
   # accounts_file: "./accounts.yaml"
 
+  # SQLite dedup ledger. Defaults to yt-uploader-ledger.sqlite beside THIS
+  # file, and it is fine to leave it there. If you do move it: copy the
+  # -wal and -shm sidecars too (or run one final `mpt upload` first so they
+  # fold into the main file) — a bare .sqlite without them loses recent
+  # dedup records, and the next run would happily re-upload "unknown" videos.
+  # ledger_path: "./yt-uploader-ledger.sqlite"
+
   # Pause between uploads, so YouTube does not see a burst.
   sleep_between_uploads: 5
 
+  # After a successful upload, keep the video + its .json sidecar by moving
+  # them into uploaded_dir_name (true), or delete them from disk (false).
+  # Default false: uploaded files are deleted, not archived.
+  keep_uploaded: false
+
   # Subfolder inside each account's videos_dir where a video is moved once its
-  # upload succeeds.
+  # upload succeeds. Only used when keep_uploaded is true.
   uploaded_dir_name: "old_videos"
 
   # Used when a video has no <name>.json sidecar, or the sidecar omits a field.

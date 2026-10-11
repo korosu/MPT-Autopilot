@@ -9,12 +9,15 @@ unreadable file is not fatal — the caller decides whether to proceed without i
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 
-try:
-    import tomllib  # type: ignore[reportMissingImports]
-except ImportError:
-    import tomli as tomllib  # type: ignore[no-redef]
+# A version guard, not try/except: pyright follows sys.version_info and resolves
+# the right module on both branches, so neither needs a `# type: ignore`.
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 _logger = logging.getLogger(__name__)
 
@@ -54,20 +57,17 @@ def load_mpt_config(path: Path | None) -> dict[str, object] | None:
 
 def extract_upload_post(mpt_app: dict[str, object] | None) -> dict[str, object]:
     """
-    Pull the upload-post keys out of an ``[app]`` section dict.
+    Pull the upload-post keys that are actually PRESENT in an ``[app]`` section.
 
-    Returns a dict with keys:
-        enabled, api_key, username, platforms, youtube_privacy_status
-
-    Missing keys fall back to safe defaults (disabled, empty strings, etc.).
+    Returns a dict keyed exactly as MoneyPrinterTurbo's own ``[app]`` names
+    them — the ``upload_post_`` prefix is part of each key, and batch/settings.py
+    reads them under those names. Only keys the section really carries are
+    returned: injecting a default for every key (the old behaviour) made the
+    documented "omit the keys in config.yaml to fall back to MPT's config"
+    flow a lie — the fallback always fired, so a missing MPT key and an
+    explicitly-disabled one were indistinguishable (B-13). Callers decide
+    their own defaults.
     """
-    defaults: dict[str, object] = {
-        "upload_post_enabled": False,
-        "upload_post_api_key": "",
-        "upload_post_username": "",
-        "upload_post_platforms": ["youtube", "tiktok"],
-        "upload_post_youtube_privacy_status": "public",
-    }
     if not mpt_app:
-        return dict(defaults)
-    return {key: mpt_app.get(key, defaults[key]) for key in _REQUIRED_KEYS}
+        return {}
+    return {key: mpt_app[key] for key in _REQUIRED_KEYS if key in mpt_app}

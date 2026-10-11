@@ -26,17 +26,26 @@ _logger = logging.getLogger(__name__)
 _shared_client: httpx.Client | None = None
 
 
+def _timeout_from_env() -> httpx.Timeout:
+    """LLM_TIMEOUT seconds total, 10 seconds connect — enricher/llm.py's original values."""
+    return httpx.Timeout(float(os.getenv("LLM_TIMEOUT", "60")), connect=10.0)
+
+
 def get_shared_client() -> httpx.Client:
     """
     Return the shared httpx.Client, creating it on first call.
 
-    The timeout mirrors enricher/llm.py's previous behaviour: LLM_TIMEOUT
-    seconds total, 10 seconds connect. Read after dotenv has been loaded.
+    The timeout is re-read from the environment on every call, not frozen at
+    creation: nothing guarantees the first caller comes after dotenv has been
+    loaded (notify.alert() can reach here before any stage reads its config),
+    and a client built before .env was read would otherwise keep the default
+    60s for the whole process.
     """
     global _shared_client
     if _shared_client is None:
-        timeout = float(os.getenv("LLM_TIMEOUT", "60"))
-        _shared_client = httpx.Client(timeout=httpx.Timeout(timeout, connect=10.0))
+        _shared_client = httpx.Client(timeout=_timeout_from_env())
+    else:
+        _shared_client.timeout = _timeout_from_env()
     return _shared_client
 
 
@@ -93,8 +102,11 @@ def retrying_request(
         httpx.Response on success.
 
     Raises:
-        httpx.HTTPStatusError: on non-retried HTTP errors.
-        Last caught transport exception: when all retries are exhausted.
+        httpx.HTTPStatusError: on non-retried HTTP errors, and when retries are
+            exhausted on a retried status (429 included — a caller watching for
+            a rate-limit or quota condition catches one exception type, not two).
+        Last caught transport exception: when all retries are exhausted on a
+            connection error or timeout.
     """
     transient = transient_status or frozenset()
     _log = log or _logger.warning
@@ -119,16 +131,30 @@ def retrying_request(
             time.sleep(delay)
             continue
 
-        assert resp is not None  # noqa: S101 — caller's request() must return a response
+        if resp is None:
+            # A real guard, not an assert: `python -O` strips asserts, and a
+            # client stand-in that returns None would then fail on .status_code
+            # with an AttributeError from inside the retry loop.
+            raise RuntimeError(f"{type(client).__name__}.request() returned None")
         status = resp.status_code
         if status == 429:
             if attempt >= max_retries:
-                raise RuntimeError(f"429 Too Many Requests — gave up after {max_retries} retries")
+                raise httpx.HTTPStatusError(
+                    f"429 Too Many Requests — gave up after {max_retries} retries",
+                    request=resp.request,
+                    response=resp,
+                )
             delay = min(backoff_base * (2**attempt), backoff_max)
             if respect_retry_after:
+                # Only an integer delta-seconds value is honoured. Retry-After
+                # may also be an HTTP-date; that form falls through to the
+                # exponential backoff above rather than being parsed.
                 retry_after = resp.headers.get("Retry-After")
                 if retry_after and retry_after.isdigit():
-                    delay = min(float(retry_after), backoff_max)
+                    # Floored at backoff_base: a server answering "Retry-After: 0"
+                    # would otherwise turn the retry loop into a tight spin
+                    # against the endpoint that just rate-limited us.
+                    delay = min(max(float(retry_after), backoff_base), backoff_max)
             _log(
                 "429 rate-limited — waiting %.0fs before retry %d/%d",
                 delay,

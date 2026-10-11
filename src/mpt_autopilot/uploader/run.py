@@ -18,8 +18,11 @@ Setup:
 
 Each video is uploaded together with an optional sidecar <name>.json (same
 schema youtubeuploader itself expects for -metaJSON). No sidecar -> title is
-derived from the filename. On success, the video and its sidecar are moved
-into <account videos_dir>/<uploaded_dir_name>/.
+derived from the filename. On success the video and its sidecar are deleted;
+set `uploader.keep_uploaded: true` in config.yaml to archive them into
+<account videos_dir>/<uploaded_dir_name>/ instead. Deleting is the default
+because the videos are reproducible from the jobs queue and a full exports
+directory is the common failure mode.
 
 Exit codes:
     0 - nothing to do, or every video uploaded successfully
@@ -31,6 +34,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import sys
 import time
@@ -38,6 +42,7 @@ from pathlib import Path
 
 from mpt_autopilot import notify
 from mpt_autopilot.config import ConfigError
+from mpt_autopilot.logger import configure_root
 from mpt_autopilot.uploader.ledger import (
     is_done,
     mark_moved,
@@ -62,6 +67,14 @@ EXIT_QUOTA_STOP = 2
 
 
 def find_videos(account: Account) -> list[Path]:
+    """
+    Candidate videos for upload: non-empty .mp4 files at the top of videos_dir.
+
+    ponytail: st_size > 0 is the only freshness check. A partially-copied
+    video can appear here only if the batch stage died mid-shutil.copy2 into
+    this very directory — the next batch run re-copies the file, and any
+    0-byte leftover is already excluded by the size check.
+    """
     if not account.videos_dir.exists():
         return []
     return sorted(
@@ -69,6 +82,21 @@ def find_videos(account: Account) -> list[Path]:
         for f in account.videos_dir.iterdir()
         if f.is_file() and f.suffix.lower() == ".mp4" and f.stat().st_size > 0
     )
+
+
+def _video_id_from_output(output: str) -> str | None:
+    """
+    Best-effort YouTube video id from youtubeuploader's output (R8).
+
+    The binary prints the video URL; both youtu.be/<id> and watch?v=<id>
+    carry the standard 11-character id. None when nothing recognizable —
+    the mapping is an extra, never a gate.
+    """
+    for pattern in (r"youtu\.be/([\w-]{11})", r"[?&]v=([\w-]{11})"):
+        match = re.search(pattern, output)
+        if match:
+            return match.group(1)
+    return None
 
 
 def move_to_uploaded(video: Path, sidecar: Path, uploaded_dir: Path) -> None:
@@ -90,6 +118,27 @@ def move_to_uploaded(video: Path, sidecar: Path, uploaded_dir: Path) -> None:
     dst_video = uploaded_dir / video.name
     dst_video.unlink(missing_ok=True)
     shutil.move(str(video), str(dst_video))
+
+
+def discard_uploaded(video: Path, sidecar: Path) -> None:
+    """
+    Delete a finished video and its sidecar instead of archiving them.
+
+    Sidecar first, video last — same ordering rationale as move_to_uploaded():
+    crash-recovery keys on the video still being present at the source, so the
+    video must be the last thing removed. A crash after the sidecar unlink leaves
+    the video in place and the recovery pass finishes the job.
+    """
+    if sidecar.exists():
+        sidecar.unlink()
+    video.unlink(missing_ok=True)
+
+
+def finalize_uploaded(video: Path, sidecar: Path, uploaded_dir: Path, *, keep: bool) -> None:
+    if keep:
+        move_to_uploaded(video, sidecar, uploaded_dir)
+    else:
+        discard_uploaded(video, sidecar)
 
 
 def sweep_orphan_sidecars(videos_dir: Path, uploaded_dir: Path) -> int:
@@ -152,18 +201,33 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
             for name in pending_recovery:
                 print(f"[{account.name}] would recover: {name} (uploaded earlier, not yet moved)")
         else:
-            for row in conn.execute(
+            # Materialise the rows before mutating: mark_moved() UPDATEs and
+            # COMMITs on the same connection mid-iteration, and SQLite makes
+            # no promise about which rows a cursor still owes you after that
+            # — rows could be visited twice or skipped. The --dry-run branch
+            # right above already does it this way (M-42).
+            pending_rows = conn.execute(
                 "SELECT video_name FROM uploads WHERE account = ? AND status = 'uploaded'",
                 (account.name,),
-            ):
+            ).fetchall()
+            for row in pending_rows:
                 uploaded_name = row[0]
                 video_path = account.videos_dir / uploaded_name
                 if video_path.exists():
                     content_hash = sha256_file(video_path)
-                    print(f"[{account.name}] recovering: {uploaded_name} (was uploaded, moving)")
-                    move_to_uploaded(video_path, sidecar_path(video_path), uploaded_dir)
+                    action = "moving" if settings.keep_uploaded else "deleting"
+                    print(f"[{account.name}] recovering: {uploaded_name} (was uploaded, {action})")
+                    finalize_uploaded(
+                        video_path,
+                        sidecar_path(video_path),
+                        uploaded_dir,
+                        keep=settings.keep_uploaded,
+                    )
                     mark_moved(conn, account.name, content_hash)
 
+            # ponytail: legacy move-era orphan sweep. No-op when
+            # keep_uploaded=false (it only moves sidecars whose video sits in
+            # uploaded_dir, which never happens on the delete path).
             swept = sweep_orphan_sidecars(account.videos_dir, uploaded_dir)
             if swept:
                 print(f"[{account.name}] recovered {swept} orphan sidecar(s) from earlier runs")
@@ -225,7 +289,7 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
             print(f"[{account.name}] uploading: {video.name} ({meta.title})")
             mark_started(conn, account.name, content_hash, video.name)
             try:
-                upload_video(
+                upload_output = upload_video(
                     settings.uploader_binary,
                     video,
                     meta_file,
@@ -246,11 +310,16 @@ def run(settings: Settings, account: Account, *, dry_run: bool, limit: int | Non
                     time.sleep(settings.sleep_between_uploads)
                 continue
 
-            mark_uploaded(conn, account.name, content_hash)
-            move_to_uploaded(video, sidecar_path(video), uploaded_dir)
+            mark_uploaded(conn, account.name, content_hash, _video_id_from_output(upload_output))
+            finalize_uploaded(video, sidecar_path(video), uploaded_dir, keep=settings.keep_uploaded)
             mark_moved(conn, account.name, content_hash)
+            # The meta JSON is a scratch artifact of this run — regenerated
+            # from the sidecar on every attempt — so keeping one per upload
+            # littered meta_dir forever (audit L).
+            meta_file.unlink(missing_ok=True)
             uploaded += 1
-            print(f"[{account.name}] done: {video.name} -> {settings.uploaded_dir_name}/")
+            dest = f"{settings.uploaded_dir_name}/" if settings.keep_uploaded else "deleted"
+            print(f"[{account.name}] done: {video.name} -> {dest}")
             if account.daily_upload_limit is not None and uploaded >= account.daily_upload_limit:
                 self_limited = True
                 break
@@ -403,6 +472,8 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
 
 
 def main() -> None:
+    # Give the root logger a handler before any stage runs (M-1).
+    configure_root()
     sys.exit(execute(build_parser().parse_args()))
 
 

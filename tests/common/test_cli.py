@@ -23,7 +23,16 @@ def test_all_stages_are_registered():
     for action in parser._actions:
         if action.dest == "stage" and action.choices:
             choices = set(action.choices)
-    assert choices == {"refill", "init-seen", "batch", "enrich", "upload", "run", "validate"}
+    assert choices == {
+        "refill",
+        "init-seen",
+        "batch",
+        "enrich",
+        "upload",
+        "run",
+        "validate",
+        "web",
+    }
 
 
 def test_every_stage_exposes_the_hook_pair():
@@ -41,7 +50,7 @@ def test_unknown_stage_hook_raises():
 
 @pytest.mark.parametrize(
     "stage",
-    ["refill", "init-seen", "batch", "enrich", "upload", "run", "validate"],
+    ["refill", "init-seen", "batch", "enrich", "upload", "run", "validate", "web"],
 )
 def test_stage_help_shows_the_stage_examples(stage, tmp_path, monkeypatch, capsys):
     """Each stage's EPILOG has to reach `mpt <stage> --help`, not just its standalone parser."""
@@ -63,7 +72,7 @@ def test_root_help_needs_no_config(tmp_path, monkeypatch, capsys):
 
 @pytest.mark.parametrize(
     "stage",
-    ["refill", "init-seen", "batch", "enrich", "upload", "run", "validate"],
+    ["refill", "init-seen", "batch", "enrich", "upload", "run", "validate", "web"],
 )
 def test_stage_help_needs_no_config(stage, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)

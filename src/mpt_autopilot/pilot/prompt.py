@@ -9,18 +9,35 @@ from __future__ import annotations
 
 import json
 
+from mpt_autopilot.pilot.jobs import NAME_MAX_CHARS
 from mpt_autopilot.pilot.settings import LangSettings
 
 VIDEO_SUBJECT_MAX_CHARS = 500
 
 _MAX_SEEN_IN_PROMPT = 200
-_THEME_MAX_SUBJECT_CHARS = 80  # For short titles in theme mode
+# Theme mode asks for short titles, not scripts. refill._deduplicate enforces
+# this as the clamp for theme mode; a prompt rule nothing checks is a
+# suggestion, and the model exceeded it regularly.
+THEME_MAX_SUBJECT_CHARS = 80
+
+# What the system prompt claims about video length when no duration_range is
+# configured. With one configured, build() states that range instead — telling
+# the model "30–45 seconds" while video_script_prompt asks for 60–90 gives it
+# two incompatible targets.
+_DEFAULT_DURATION_PHRASE = "30–45 seconds"
+
+
+def _duration_phrase(duration: tuple[int, int | None] | None) -> str:
+    if duration is None:
+        return _DEFAULT_DURATION_PHRASE
+    lo, hi = duration
+    return f"{lo}–{hi} seconds" if hi is not None else f"at least {lo} seconds"
 
 
 def _seen_block(seen_ordered: list[str]) -> str:
     """Render the ALREADY USED TOPICS block for prompts (shared by both modes)."""
     recent = seen_ordered[-_MAX_SEEN_IN_PROMPT:] if seen_ordered else []
-    return "\n".join(n.replace(".mp4", "") for n in recent) if recent else "(none yet)"
+    return "\n".join(n.removesuffix(".mp4") for n in recent) if recent else "(none yet)"
 
 
 def _prompt_defaults(lang_cfg: LangSettings) -> dict:
@@ -36,7 +53,6 @@ def _prompt_defaults(lang_cfg: LangSettings) -> dict:
         "bgm_type": defaults.get("bgm_type", "random"),
         # New upstream fields (MPT v1.3.6 VideoParams)
         "fit_mode": defaults.get("video_fit_mode", "cover"),
-        "transition_mode": defaults.get("video_transition_mode", "None"),
         "display_mode": defaults.get("subtitle_display_mode", "sentence"),
         "animation": defaults.get("subtitle_animation", "none"),
     }
@@ -46,8 +62,21 @@ def build(
     lang_cfg: LangSettings,
     seen_ordered: list[str],
     count: int,
+    duration: tuple[int, int | None] | None = None,
+    visual_terms_rules: str | None = None,
 ) -> tuple[str, str]:
-    """Returns (system_prompt, user_prompt) for the given language and context."""
+    """
+    Returns (system_prompt, user_prompt) for the given language and context.
+
+    `duration` is the parsed job_defaults.duration_range, when configured, so
+    the system prompt's length claim matches the word-count guidance refill
+    injects into video_script_prompt.
+
+    `visual_terms_rules` (R1-step2/A-3) is the configured rule text for the
+    video_terms field — None/empty keeps the prompt exactly as it was. The
+    rules live in config.yaml (pilot.generation.visual_terms_rules), not in
+    code: an inline prompt nobody sees degrades silently (B-10's lesson).
+    """
     used_str = _seen_block(seen_ordered)
     d = _prompt_defaults(lang_cfg)
 
@@ -69,17 +98,28 @@ def build(
         "bgm_volume": d["bgm_volume"],
         "paragraph_number": d["paragraph_number"],
         "video_fit_mode": d["fit_mode"],
-        "video_transition_mode": d["transition_mode"],
         "subtitle_display_mode": d["display_mode"],
         "subtitle_animation": d["animation"],
         "video_clip_speed": 1.0,
-        "subtitle_background_enabled": False,
     }
+    if visual_terms_rules:
+        # Terms are ALWAYS English (stock APIs search English tags; MPT's own
+        # generator requires the same), independent of the video language.
+        example["video_terms"] = [
+            "human tongue closeup",
+            "jaw muscle anatomy diagram",
+            "person chewing slow motion",
+            "tongue taste buds macro",
+            "anatomy textbook page",
+            "doctor pointing at skull model",
+            "medical animation",
+            "human anatomy",
+        ]
 
     system = (
         f"You are a YouTube Shorts content strategist.\n"
         f"Your job is to generate viral fact/myth-busting short video scripts in {lang_cfg.label}.\n"  # noqa: E501
-        f"Each video is 30–45 seconds long, spoken in a direct, engaging voice.\n"
+        f"Each video is {_duration_phrase(duration)} long, spoken in a direct, engaging voice.\n"
         f"Each script opens with a single-sentence HOOK so the viewer stays past the 3-second mark.\n"
         f"Return ONLY a valid JSON array. No markdown, no explanation, no code fences."
     )
@@ -99,22 +139,23 @@ shocking claim, counterintuitive observation, teaser question, or vivid image \
 (no greetings, no "did you know", no throat-clearing). Sentences 2–4 deliver the \
 surprising fact and explain WHY. End with a memorable kicker. No hashtags, no emojis. \
 Maximum {VIDEO_SUBJECT_MAX_CHARS} characters — be concise.
-- name and output_file: snake_case, max 50 chars. \
+- name and output_file: snake_case, max {NAME_MAX_CHARS} chars. \
 output_file must end with "{d["suffix"]}.mp4" (e.g. "fact_water_memory{d["suffix"]}.mp4").
-- voice_rate: float between {lang_cfg.voice_rate_min} and {lang_cfg.voice_rate_max}, vary across jobs.  # noqa: E501
-- voice_name: pick from {d["voices_json"]}, vary across jobs.
-- video_clip_duration: {d["clip_duration"]} or {d["clip_duration"] + 1}.
+- voice_rate: float between {lang_cfg.voice_rate_min} and {lang_cfg.voice_rate_max}, vary across jobs.
+- voice_name: pick from {d["voices_json"]}, vary across jobs."""
+    if visual_terms_rules:
+        user += f"""- video_terms: a JSON array of stock-search keywords. Rules:
+{visual_terms_rules}
+"""
+    user += f"""- video_clip_duration: {d["clip_duration"]} or {d["clip_duration"] + 1}.
 - paragraph_number: 1 or {d["paragraph_number"]}.
 - bgm_volume: {d["bgm_volume"]}.
 - bgm_type: "{d["bgm_type"]}".
 - video_concat_mode: "{d["concat_mode"]}".
 - video_fit_mode: "{d["fit_mode"]}" ("cover" crops to fill; "contain" adds black bars).
-- video_transition_mode: "{d["transition_mode"]}".
 - subtitle_display_mode: "{d["display_mode"]}" ("sentence" or "word_by_word").
 - subtitle_animation: "{d["animation"]}" ("none" or "pop_spring").
 - video_clip_speed: 1.0 (use 0.8–1.2 for slow/fast motion).
-- subtitle_background_enabled: false (set true for rounded subtitle background).
-- video_script: when appropriate, insert [pause:Xs] tags (0.1-10s) between sentences for natural silences. Use 1-3 per script. Example: [pause:1.5s].
 - enabled: true.
 
 Example of ONE object (do not copy it — generate fresh, original content):
@@ -151,11 +192,9 @@ def build_themes(
         "bgm_volume": d["bgm_volume"],
         "paragraph_number": d["paragraph_number"],
         "video_fit_mode": d["fit_mode"],
-        "video_transition_mode": d["transition_mode"],
         "subtitle_display_mode": d["display_mode"],
         "subtitle_animation": d["animation"],
         "video_clip_speed": 1.0,
-        "subtitle_background_enabled": False,
     }
 
     system = (
@@ -177,12 +216,12 @@ ALREADY USED TOPICS — do not repeat any of these:
 {used_str}
 
 Rules:
-- video_subject: a short topic title, 3–12 words, max {_THEME_MAX_SUBJECT_CHARS} characters.
+- video_subject: a short topic title, 3–12 words, max {THEME_MAX_SUBJECT_CHARS} characters.
   Title case or sentence case. No hashtags, no emojis, no trailing period. Must relate
   to one of the listed themes.
-- name and output_file: snake_case, max 50 chars.
+- name and output_file: snake_case, max {NAME_MAX_CHARS} chars.
   output_file must end with "{d["suffix"]}.mp4" (e.g. "fact_water_memory{d["suffix"]}.mp4").
-- voice_rate: float between {lang_cfg.voice_rate_min} and {lang_cfg.voice_rate_max}, vary across jobs.  # noqa: E501
+- voice_rate: float between {lang_cfg.voice_rate_min} and {lang_cfg.voice_rate_max}, vary across jobs.
 - voice_name: pick from {d["voices_json"]}, vary across jobs.
 - video_clip_duration: {d["clip_duration"]} or {d["clip_duration"] + 1}.
 - paragraph_number: 1 or {d["paragraph_number"]}.
@@ -190,12 +229,9 @@ Rules:
 - bgm_type: "{d["bgm_type"]}".
 - video_concat_mode: "{d["concat_mode"]}".
 - video_fit_mode: "{d["fit_mode"]}" ("cover" crops to fill; "contain" adds black bars).
-- video_transition_mode: "{d["transition_mode"]}".
 - subtitle_display_mode: "{d["display_mode"]}" ("sentence" or "word_by_word").
 - subtitle_animation: "{d["animation"]}" ("none" or "pop_spring").
 - video_clip_speed: 1.0 (use 0.8–1.2 for slow/fast motion).
-- subtitle_background_enabled: false (set true for rounded subtitle background).
-- video_script: when appropriate, insert [pause:Xs] tags (0.1-10s) between sentences for natural silences. Use 1-3 per script. Example: [pause:1.5s].
 - enabled: true.
 
 Example of ONE object (do not copy it — generate fresh titles on the listed themes):

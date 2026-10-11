@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from mpt_autopilot.uploader.settings import Defaults
+from mpt_autopilot.uploader.settings import VALID_PRIVACY, Defaults
 
 _logger = logging.getLogger(__name__)
 
@@ -67,7 +67,9 @@ def title_from_filename(video_path: Path, account_name: str = "") -> str:
 
     Only strips a known suffix pattern (_<account_name>) to avoid
     mangling legitimate titles. If the stem doesn't end with this suffix,
-    the title is derived as-is.
+    the title is derived as-is. Result is title-cased (R2): a filename-derived
+    fallback used to reach YouTube as a lowercase slug ("fact water memory"),
+    which reads as a filename, not a title.
     """
     name = video_path.stem
     if account_name:
@@ -76,7 +78,7 @@ def title_from_filename(video_path: Path, account_name: str = "") -> str:
             name = name[: len(name) - len(suffix)]
     name = name.replace("_", " ").replace("-", " ")
     name = " ".join(name.split())
-    return name[:TITLE_MAX_LEN]
+    return name.title()[:TITLE_MAX_LEN]
 
 
 def _apply_tags_placement(existing_tags: list[str], sidecar_tags: list[str]) -> list[str]:
@@ -176,17 +178,24 @@ def load_meta(video_path: Path, defaults: Defaults, account_name: str = "") -> V
         raw = json.loads(sidecar.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
         raise ValueError(f"invalid sidecar metadata file {sidecar}: {exc}") from exc
+    if not isinstance(raw, dict):
+        # Valid JSON but not an object (e.g. a top-level array): raw.get()
+        # below used to crash with a bare AttributeError this function's
+        # error contract doesn't cover (M-47).
+        raise ValueError(
+            f"invalid sidecar metadata file {sidecar}: expected a JSON object, "
+            f"got {type(raw).__name__}"
+        )
 
     title = str(raw.get("title") or title_from_filename(video_path, account_name))[:TITLE_MAX_LEN]
     description = str(raw.get("description", ""))[:DESCRIPTION_MAX_LEN]
 
-    sidecar_tags = raw.get("tags")
-    if sidecar_tags and isinstance(sidecar_tags, list) and len(sidecar_tags) > 0:
-        sidecar_tags = _clean_sidecar_tags(sidecar_tags)
-        if not sidecar_tags:
-            sidecar_tags = None
+    # _clean_sidecar_tags drops unusable entries and warns; a single collapse
+    # replaces the old two identical if-chains (audit L).
+    raw_tags = raw.get("tags")
+    sidecar_tags = _clean_sidecar_tags(raw_tags) if isinstance(raw_tags, list) else []
 
-    if sidecar_tags and isinstance(sidecar_tags, list) and len(sidecar_tags) > 0:
+    if sidecar_tags:
         placement = defaults.hashtag_placement
         if placement == "tags":
             tags = _apply_tags_placement(list(defaults.tags), sidecar_tags)
@@ -215,10 +224,10 @@ def load_meta(video_path: Path, defaults: Defaults, account_name: str = "") -> V
     )
 
 
-# YouTube's three privacy values. Anything else used to be str()-coerced straight
-# into the upload metadata: ["public"] became the literal string "['public']",
-# which YouTube rejected — failing one video that would have uploaded fine.
-_VALID_PRIVACY = {"public", "private", "unlisted"}
+# YouTube's three privacy values — the shared source of truth lives in
+# settings.py (uploader settings import direction); imported here so the
+# sidecar value and the config default are checked against the same set.
+_VALID_PRIVACY = VALID_PRIVACY
 
 
 def _validate_privacy_status(value: object, default: str, sidecar: Path) -> str:

@@ -13,7 +13,7 @@ import argparse
 import pytest
 
 from mpt_autopilot import config as shared_config
-from mpt_autopilot import pipeline
+from mpt_autopilot import pipeline, validate
 from mpt_autopilot.config import ConfigError
 from mpt_autopilot.pipeline import EXIT_FAILURES, EXIT_OK, EXIT_QUOTA_STOP
 
@@ -272,7 +272,8 @@ def test_failure_dominates_quota_stop(tmp_path, monkeypatch):
 
 
 def test_partial_batch_continues_to_enrich_and_upload(tmp_path, monkeypatch):
-    """batch returning 2 (partial success) must not stop the pipeline."""
+    """batch returning 2 (partial success) must not stop the pipeline, but it is
+    a failure for the aggregate — 2 is reserved for an upload quota stop."""
     calls: list[tuple[str, str]] = []
     _fake_stages(monkeypatch, {"batch": EXIT_QUOTA_STOP}, calls)
     (tmp_path / "exports").mkdir()
@@ -280,7 +281,7 @@ def test_partial_batch_continues_to_enrich_and_upload(tmp_path, monkeypatch):
 
     code = pipeline.execute(_args(langs=["en"]), _config(tmp_path))
 
-    assert code == EXIT_QUOTA_STOP
+    assert code == EXIT_FAILURES
     assert ("en", "enrich") in calls
     assert ("en", "upload") in calls
 
@@ -293,9 +294,20 @@ def test_partial_then_partial_continues_to_upload(tmp_path, monkeypatch):
 
     code = pipeline.execute(_args(langs=["en"]), _config(tmp_path))
 
-    assert code == EXIT_QUOTA_STOP
+    assert code == EXIT_FAILURES
     assert ("en", "enrich") in calls
     assert ("en", "upload") in calls
+
+
+def test_only_upload_quota_stop_reaches_the_exit_code(tmp_path, monkeypatch):
+    """A quota stop from upload is reported as 2; the same code from batch is not."""
+    calls: list[tuple[str, str]] = []
+    _fake_stages(monkeypatch, {"upload": EXIT_QUOTA_STOP}, calls)
+    (tmp_path / "exports").mkdir()
+
+    code = pipeline.execute(_args(langs=["en"]), _config(tmp_path))
+
+    assert code == EXIT_QUOTA_STOP
 
 
 def test_dry_run_skips_refill(tmp_path, monkeypatch, capsys):
@@ -324,3 +336,95 @@ def test_missing_config_is_reported_not_raised(tmp_path, capsys):
     code = pipeline.execute(_args(), tmp_path / "absent.yaml")
     assert code == EXIT_FAILURES
     assert "not found" in capsys.readouterr().out
+
+
+# ── pre-flight checks run before the stages (M-50/M-52/M-53) ─────────────────
+
+
+MISMATCH = """\
+langs:
+  en:
+    file_suffix: ""
+batch:
+  output_dir: ./exports
+enricher:
+  videos_dir: ./somewhere_else
+"""
+
+
+def test_path_mismatch_stops_a_real_run_before_any_stage(tmp_path, monkeypatch, capsys):
+    """M-53: the check used to run only in --dry-run — precisely the run
+    where the mismatch does no damage. A hard config error must refuse to
+    start the stages."""
+    calls: list[tuple[str, str]] = []
+    _fake_stages(monkeypatch, {}, calls)
+
+    code = pipeline.execute(_args(langs=["en"]), _config(tmp_path, MISMATCH))
+
+    assert code == EXIT_FAILURES
+    assert calls == []
+    assert "[ERROR]" in capsys.readouterr().out
+
+
+def test_path_mismatch_fails_a_dry_run_too(tmp_path, monkeypatch, capsys):
+    """M-52: --dry-run used to print the [ERROR] and still exit 0."""
+    calls: list[tuple[str, str]] = []
+    _fake_stages(monkeypatch, {}, calls)
+
+    code = pipeline.execute(_args(langs=["en"], dry_run=True), _config(tmp_path, MISMATCH))
+
+    assert code == EXIT_FAILURES
+    assert calls == []
+    assert "[ERROR]" in capsys.readouterr().out
+
+
+def test_real_run_stays_quiet_without_hard_errors(tmp_path, monkeypatch, capsys):
+    """Warnings (missing seen/jobs on a fresh install) must not spam a real
+    run; they stay visible in --dry-run."""
+    calls: list[tuple[str, str]] = []
+    _fake_stages(monkeypatch, {}, calls)
+
+    code = pipeline.execute(_args(langs=["en"]), _config(tmp_path))
+
+    assert code == EXIT_OK
+    out = capsys.readouterr().out
+    assert "[WARN]" not in out
+    assert "pre-flight" not in out
+
+
+def test_pre_flight_uses_validates_implementation(tmp_path):
+    """M-50: one implementation — pipeline imports validate's, not a copy."""
+    assert pipeline.validate._run_checks is validate._run_checks
+
+
+# ── refill flags on mpt run (M-55) ───────────────────────────────────────────
+
+
+def test_refill_flags_reach_the_refill_stage(monkeypatch):
+    """--refill-force/--refill-count/--refill-threshold used to not exist on
+    `mpt run`, which hard-coded the no-force defaults."""
+    from mpt_autopilot.pilot import refill
+
+    seen_args: list[argparse.Namespace] = []
+    monkeypatch.setattr(refill, "execute", lambda a, c: seen_args.append(a) or 0)
+
+    pipeline._run_refill("en", None, _args(refill_force=True, refill_count=7, refill_threshold=3))
+
+    assert seen_args[0].force is True
+    assert seen_args[0].count == 7
+    assert seen_args[0].threshold == 3
+
+
+def test_refill_defaults_stay_false_for_old_namespaces(monkeypatch):
+    """execute() is also called with hand-built Namespaces that predate the
+    flags — they must keep the old behaviour."""
+    from mpt_autopilot.pilot import refill
+
+    seen_args: list[argparse.Namespace] = []
+    monkeypatch.setattr(refill, "execute", lambda a, c: seen_args.append(a) or 0)
+
+    pipeline._run_refill("en", None, argparse.Namespace())
+
+    assert seen_args[0].force is False
+    assert seen_args[0].count is None
+    assert seen_args[0].threshold is None

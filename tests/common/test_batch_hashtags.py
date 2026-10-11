@@ -34,13 +34,34 @@ def _fake_response(status_code: int = 200, content: str = "") -> MagicMock:
 
 @pytest.fixture(autouse=True)
 def _mock_settings():
-    """Mock the enricher settings singleton for llm.py tests."""
+    """Mock the enricher settings singleton for llm.py tests.
+
+    The attributes _finalize_tags() reads are real values, not MagicMock
+    defaults: len(MagicMock) raises TypeError and frozenset(MagicMock) is
+    meaningless, and since batch results now go through _finalize_tags too
+    (M-33) every batch test would otherwise crash before asserting anything.
+    """
     fake_settings = MagicMock()
     fake_settings.max_tags = 5
+    fake_settings.min_tags = 3
     fake_settings.max_tag_length = 20
+    fake_settings.banned_tags = frozenset()
+    fake_settings.always_include = []
+    fake_settings.platform = "youtube"
+    # B-10: the batch prompt is a configured template since R9.1 — give the
+    # mock a real string so .format() behaves like production.
+    fake_settings.prompt_batch = (
+        "Hashtags for {count} videos on {platform}; tags in {language}; "
+        "{min_tags}-{max_tags}; max {max_tag_length}; excluded {excluded_tags}. "
+        "VIDEOS:\n{videos}\n"
+        'JSON: {{"results": [{{"filename": "...", "language": "...", "tags": []}}]}}'
+    )
+    # _finalize_tags now runs on batch results too and may log (min_tags
+    # shortfall) — the real _get_log would try to open a MagicMock log path.
     with (
         patch("mpt_autopilot.enricher.llm.settings", fake_settings),
         patch("mpt_autopilot.enricher.llm._build_excluded_string", return_value="#shorts"),
+        patch("mpt_autopilot.enricher.llm._get_log"),
     ):
         yield
 
@@ -113,6 +134,49 @@ def test_batch_generate_hashtags_wrong_count():
             batch_generate_hashtags(topics, "youtube")
 
 
+def test_batch_results_follow_the_requested_order_not_the_model_order():
+    """A reordered response must not pair one video's tags with another's file."""
+    topics = [
+        ("clip_a.mp4", "topic a"),
+        ("clip_b.mp4", "topic b"),
+    ]
+    response_json = json.dumps(
+        {
+            "results": [
+                {"filename": "clip_b.mp4", "language": "English", "tags": ["#bee"]},
+                {"filename": "clip_a.mp4", "language": "English", "tags": ["#ant"]},
+            ]
+        }
+    )
+
+    with patch("mpt_autopilot.enricher.llm._chat", return_value=response_json):
+        results = batch_generate_hashtags(topics, "youtube")
+
+    assert [r["filename"] for r in results] == ["clip_a.mp4", "clip_b.mp4"]
+    assert results[0]["tags"] == ["#ant"]
+    assert results[1]["tags"] == ["#bee"]
+
+
+def test_batch_results_must_cover_every_requested_filename():
+    """Right count, wrong filenames — raises so the caller falls back per file."""
+    topics = [
+        ("clip_a.mp4", "topic a"),
+        ("clip_b.mp4", "topic b"),
+    ]
+    response_json = json.dumps(
+        {
+            "results": [
+                {"filename": "clip_a.mp4", "language": "English", "tags": ["#ant"]},
+                {"filename": "clip_z.mp4", "language": "English", "tags": ["#zebra"]},
+            ]
+        }
+    )
+
+    with patch("mpt_autopilot.enricher.llm._chat", return_value=response_json):
+        with pytest.raises(ValueError, match="does not cover"):
+            batch_generate_hashtags(topics, "youtube")
+
+
 def test_batch_generate_hashtags_empty_topics():
     """Empty topics list returns empty results without calling the LLM."""
     with patch("mpt_autopilot.enricher.llm._chat") as mock_chat:
@@ -173,24 +237,34 @@ def test_batch_size_cli_override():
         assert _resolve_batch_size(args) == 25
 
 
-def test_batch_size_clamps_to_range():
-    """Out-of-range values are clamped to [1, 100]."""
-    from mpt_autopilot.enricher.run import _resolve_batch_size
+def test_batch_size_rejects_out_of_range_on_cli():
+    """M-41: --batch-size 0 / 500 is a hard argparse error now.
 
-    class _FakeSettings:
-        batch_size = 3
+    The CLI used to silently clamp both to the valid range while config.yaml
+    raised for the same numbers — one contract, two behaviours. Both paths
+    now fail loudly.
+    """
+    import argparse
 
-    args_low = MagicMock()
-    args_low.no_batch = False
-    args_low.batch_size = 0  # would be clamped to 1
+    from mpt_autopilot.enricher.run import add_arguments
 
-    args_high = MagicMock()
-    args_high.no_batch = False
-    args_high.batch_size = 999  # would be clamped to 100
+    for bad_value in ("0", "500", "-1"):
+        parser = argparse.ArgumentParser()
+        add_arguments(parser)
+        with pytest.raises(SystemExit) as exc_info:
+            parser.parse_args(["--batch-size", bad_value])
+        assert exc_info.value.code == 2  # argparse usage error
 
-    with patch("mpt_autopilot.enricher.run.settings", _FakeSettings()):
-        assert _resolve_batch_size(args_low) == 1
-        assert _resolve_batch_size(args_high) == 100
+
+def test_batch_size_accepts_range_boundaries_on_cli():
+    import argparse
+
+    from mpt_autopilot.enricher.run import add_arguments
+
+    parser = argparse.ArgumentParser()
+    add_arguments(parser)
+    assert parser.parse_args(["--batch-size", "1"]).batch_size == 1
+    assert parser.parse_args(["--batch-size", "100"]).batch_size == 100
 
 
 # ── Settings.batch_size validation ────────────────────────────────────────────

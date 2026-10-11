@@ -11,6 +11,7 @@ learns one interface:
     mpt upload     — upload rendered videos to YouTube
     mpt run        — the whole pipeline, in order
     mpt validate   — pre-flight configuration checks
+    mpt web        — a local web interface for all of the above
 
 `--config` lives at the root (`mpt --config /srv/mpt/config.yaml batch`) and is
 also accepted after the subcommand, so muscle memory from the four separate
@@ -32,11 +33,17 @@ from pathlib import Path
 from typing import NamedTuple
 
 from mpt_autopilot import __version__
+from mpt_autopilot.logger import configure_root
 
 
 # A stage is registered as (name, help text, add-arguments hook, execute hook).
-# The hooks are imported lazily inside _register so building the parser never
-# pulls in requests/httpx/yaml for stages the user isn't running.
+# _stage_hooks does the importing so this module has no stage imports at its
+# own top level — but note that build_parser() calls _stage_hooks for EVERY
+# stage, so `mpt --help` does import the stage modules and, through them,
+# yaml/httpx. Only Flask is truly deferred (web/cli.py imports it inside
+# execute()). That is not fixable here: argparse needs every subparser built
+# before parse_args, and web/spec.py's introspection of the built parsers
+# depends on exactly that (M-54).
 class StageHooks(NamedTuple):
     add_arguments: Callable[[argparse.ArgumentParser], argparse.ArgumentParser]
     execute: Callable[[argparse.Namespace, Path | None], int]
@@ -72,6 +79,12 @@ def _stage_hooks(name: str) -> StageHooks:
         from mpt_autopilot import validate
 
         return StageHooks(validate.add_arguments, validate.execute, validate.EPILOG)
+    if name == "web":
+        # web/cli.py keeps Flask behind a function-level import for exactly this
+        # reason: build_parser() reaches here on every `mpt --help`.
+        from mpt_autopilot.web import cli as web_cli
+
+        return StageHooks(web_cli.add_arguments, web_cli.execute, web_cli.EPILOG)
     raise ValueError(f"unknown stage '{name}'")
 
 
@@ -83,6 +96,7 @@ STAGES: tuple[tuple[str, str], ...] = (
     ("upload", "upload rendered videos to YouTube"),
     ("run", "run the whole pipeline: refill → batch → enrich → upload"),
     ("validate", "pre-flight configuration checks"),
+    ("web", "serve a local web interface for every stage"),
 )
 
 EPILOG = """
@@ -92,6 +106,7 @@ Examples:
   mpt enrich --dir ./exports_en
   mpt upload --account en --dry-run
   mpt run --lang en
+  mpt web                              # browser UI for every command above
 
   # One config somewhere else entirely
   mpt --config /srv/mpt/config.yaml run --all-langs
@@ -173,6 +188,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     _force_utf8_output()
+    # The root logger gets its one handler here, before any stage code runs:
+    # thirteen modules hold a logging.getLogger(__name__) and until now their
+    # warnings fell to lastResort (unformatted, stderr) and their info lines —
+    # refill's "skip duplicate" among them — were dropped outright (M-1).
+    configure_root()
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -180,8 +200,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.print_help()
         return 1
 
-    # A --config after the subcommand wins over the root one; both are optional.
-    config_path: Path | None = getattr(args, "stage_config", None) or args.config
+    # A --config after the subcommand wins over the root one; both are
+    # optional. Only None means "unset": a stage_config the user typed is
+    # theirs, whatever it resolves to (audit L — `or` would treat any falsy
+    # value as absent and silently fall back to the root flag).
+    stage_config = getattr(args, "stage_config", None)
+    config_path: Path | None = stage_config if stage_config is not None else args.config
 
     return _stage_hooks(args.stage).execute(args, config_path)
 

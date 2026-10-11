@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 
+from mpt_autopilot._http_utils import get_shared_client
 from mpt_autopilot.batch.settings import Settings
 
 _UPLOAD_POST_BASE = "https://api.upload-post.com"
@@ -35,9 +36,9 @@ def upload_video(
     meta_title: str,
     meta_description: str,
     meta_tags: list[str],
-    settings: Settings,  # type: ignore[name-defined]
+    settings: Settings,
     *,
-    privacy_status: str = "public",
+    privacy_status: str | None = None,
     platforms: list[str] | None = None,
     log=lambda msg: None,
 ) -> dict:
@@ -50,7 +51,9 @@ def upload_video(
         meta_description: Video description.
         meta_tags: List of tag strings (with or without # prefix).
         settings: Batch Settings — must have upload_post_* fields populated.
-        privacy_status: One of "public", "unlisted", "private".
+        privacy_status: One of "public", "unlisted", "private". None (the
+            default) falls back to settings.upload_post_youtube_privacy_status —
+            a non-None default here used to make that setting unreachable.
         platforms: Target platforms. Defaults to settings.upload_post_platforms.
         log: Logger callable.
 
@@ -58,7 +61,10 @@ def upload_video(
         {"success": bool, "request_id": str | None, "error": str | None}
 
     Raises:
-        UploadPostUnavailable: credentials missing or endpoint not reachable.
+        UploadPostUnavailable: credentials missing, endpoint not reachable,
+            or privacy_level unconfigured while the YouTube status is
+            non-public and non-YouTube platforms would receive the default
+            (public) visibility.
         UploadPostError: 4xx (except 404) or non-transient 5xx.
     """
     # ── sanity checks ────────────────────────────────────────────────────────
@@ -77,11 +83,32 @@ def upload_video(
     title = meta_title[:2200]
     description = meta_description[:5000]
 
+    youtube_privacy = privacy_status or settings.upload_post_youtube_privacy_status
+
+    # privacy_level is upload-post's own field and applies to the non-YouTube
+    # platforms (TikTok and friends); its accepted values come from those
+    # platforms' APIs, so a configured value is passed through verbatim. The
+    # historical hard-coded PUBLIC_TO_EVERYONE published those platforms
+    # publicly even when privacy_status asked for unlisted/private — refuse
+    # that combination instead of guessing the user's intent.
+    non_youtube = [str(p) for p in platforms if not str(p).lower().startswith("youtube")]
+    privacy_level = settings.upload_post_privacy_level
+    if privacy_level is None:
+        if non_youtube and youtube_privacy != "public":
+            raise UploadPostUnavailable(
+                f"upload_post.privacy_level is not configured but "
+                f"youtube_privacy_status is {youtube_privacy!r} — refusing to "
+                f"default {', '.join(non_youtube)} to public visibility. Set "
+                f"batch.upload_post.privacy_level explicitly (e.g. "
+                f"PUBLIC_TO_EVERYONE or PRIVATE_TO_SELF)."
+            )
+        privacy_level = "PUBLIC_TO_EVERYONE"
+
     # Build multipart form fields
     data: dict[str, Any] = {
         "user": settings.upload_post_username,
         "title": title,
-        "privacy_level": "PUBLIC_TO_EVERYONE",
+        "privacy_level": privacy_level,
     }
 
     # platform[] fields — httpx multipart encodes a list[str] as repeated keys.
@@ -91,16 +118,20 @@ def upload_video(
     data["platform[]"] = platform_fields
 
     # YouTube-specific extras
-    has_youtube = any(str(p).lower().startswith("youtube") for p in platforms)
-    if has_youtube:
+    if len(non_youtube) < len(platforms):
         youtube_title = title[:100]
         youtube_tags = [t.lstrip("#") for t in meta_tags if t and t.strip()]
         data.update(
             {
                 "youtube_title": youtube_title,
                 "youtube_description": description,
-                "privacyStatus": privacy_status or settings.upload_post_youtube_privacy_status,
-                "containsSyntheticMedia": "true",
+                "privacyStatus": youtube_privacy,
+                # The AI-use disclosure is a config decision, not a constant
+                # (B-9/R9.6): MoneyPrinterTurbo output is AI-generated, so
+                # the default is true, but the sender decides.
+                "containsSyntheticMedia": (
+                    "true" if settings.upload_post_contains_synthetic_media else "false"
+                ),
             }
         )
         # tags[] as simple string list — httpx encodes as repeated multipart keys.
@@ -113,13 +144,13 @@ def upload_video(
     # ── HTTP call with retries ────────────────────────────────────────────────
     url = f"{_UPLOAD_POST_BASE}/api/upload"
     headers = {"Authorization": f"Apikey {settings.upload_post_api_key}"}
+    client = get_shared_client()
 
-    last_exc: UploadPostError | None = None
     for attempt in range(1, _UPLOAD_MAX_RETRIES + 1):
         try:
             with open(video_path, "rb") as fh:
                 files = {"video": (video_path.name, fh, "video/mp4")}
-                r = httpx.post(
+                r = client.post(
                     url,
                     headers=headers,
                     data=data,
@@ -174,9 +205,8 @@ def upload_video(
                     f" retrying in {delay:.0f}s",
                 )
                 time.sleep(delay)
-                last_exc = err
                 continue
         raise err
 
-    assert last_exc is not None
-    raise last_exc
+    # Unreachable: on the last attempt every branch above returns or raises.
+    raise UploadPostError("upload-post retry loop exited without a result")

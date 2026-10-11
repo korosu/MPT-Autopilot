@@ -19,11 +19,12 @@ def test_resolve_no_voice():
 
 
 def test_resolve_with_voice():
-    """Voice alias is resolved to voice_name."""
+    """Voice alias resolves to voice_name; tts_server stays a pool-only label
+    (B-3: VideoParams has no tts_server field, so it must not reach payload)."""
     pool = {"test_voice": {"tts_server": "edge", "voice_name": "en-US-JennyNeural"}}
     payload = {"voice": "test_voice", "topic": "Hello"}
     result = voices.resolve(payload, pool)
-    assert result["tts_server"] == "edge"
+    assert "tts_server" not in result
     assert result["voice_name"] == "en-US-JennyNeural"
     assert "voice" not in result
 
@@ -50,12 +51,16 @@ def test_resolve_unknown_voice_error():
         assert "unknown" in str(e)
 
 
-def test_resolve_explicit_tts_server_warning(capsys):
-    """Explicit tts_server override prints warning if differs from alias."""
+def test_resolve_preset_tts_server_never_reaches_payload(capsys):
+    """B-3: an explicit tts_server in the job is neither overwritten nor
+    merged from the preset — the MPT generation schema has no such field,
+    and the old conflict warning implied the field mattered."""
     pool = {"my_voice": {"tts_server": "edge", "voice_name": "edge_voice"}}
     payload = {"voice": "my_voice", "tts_server": "gemini", "topic": "Hello"}
     result = voices.resolve(payload, pool)
     captured = capsys.readouterr()
-    assert "WARNING" in captured.out
-    # Voice name still takes precedence
+    assert captured.out == ""  # no cosmetic-conflict warning anymore
     assert result["voice_name"] == "edge_voice"
+    # A hand-written tts_server passes through untouched (it is dropped by
+    # pydantic's extra='ignore' on MPT's side either way, silently).
+    assert result["tts_server"] == "gemini"

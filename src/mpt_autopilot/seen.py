@@ -39,7 +39,15 @@ _rotation_max_bytes: int = 64 * 1024 * 1024  # 64 MB default; set via set_rotati
 
 
 def set_rotation_max_bytes(n: int) -> None:
-    """Override the file-size threshold that triggers rotation (bytes)."""
+    """
+    Override the file-size threshold that triggers rotation (bytes).
+
+    Process-global, not per-file: every stage that writes a seen file applies its
+    own `<stage>.seen_max_mb` on entry to its run (`refill`, `batch`,
+    `init-seen`), so under `mpt run` — where all of them share one process — the
+    value in effect is the current stage's. Floored at 1 KB so a typo like
+    `seen_max_mb: 0` cannot rotate the registry down to a single entry.
+    """
     global _rotation_max_bytes
     _rotation_max_bytes = max(n, 1024)
 
@@ -138,64 +146,76 @@ def _contains_cached(path: Path, output_file: str) -> bool:
     """
     Return True if output_file is in the in-memory cache for path.
 
-    Returns False when the cache is empty or stale, so the caller falls back
-    to a full load() — this keeps add() and add_many() idempotent even when
-    another process has written to the file.
+    Deliberately does not check the fingerprint: a stale cache can only be
+    missing an entry another process appended, never hold one that was never
+    written, so a False here just sends the caller to a full load(). That keeps
+    add() and add_many() idempotent without re-reading the file every time.
     """
-    key = _key(path)
-    cached = _cache.get(key)
+    cached = _cache.get(_key(path))
     if cached is None:
         return False
-    _fp, _size, entries = cached
-    return output_file in entries
+    return output_file in cached[2]
 
 
 # ── Rotation ───────────────────────────────────────────────────────────────────
 
 
+def _line_size(entry: str) -> int:
+    # The on-disk gate is path.stat().st_size, which is bytes — counting
+    # characters would under-measure every non-ASCII filename, and this project
+    # generates videos in several languages. The writes below are text mode, so
+    # the line separator is os.linesep (two bytes on Windows), not "\n".
+    return len(entry.encode("utf-8")) + len(os.linesep)
+
+
 def _do_rotate(entries: list[str]) -> list[str] | None:
     """
-    Compute which entries to keep to fit within the rotation limit.
-    Returns kept entries, or None if no rotation needed.
+    Compute which entries to keep to fit within the rotation limit: the longest
+    run of newest entries that fits. Returns None if no rotation is needed, or
+    if not even the newest entry fits.
     Pure computation — no file I/O.
     """
     if len(entries) <= 1:
         return None
-    total_size = sum(len(e) + 1 for e in entries)
-    if total_size <= _rotation_max_bytes:
+    if sum(_line_size(e) for e in entries) <= _rotation_max_bytes:
         return None
-    # Trim oldest entries until the remaining ones fit
-    for n in range(len(entries), 0, -1):
-        candidate = entries[-n:]
-        approx_size = sum(len(e) + 1 for e in candidate)
-        if approx_size <= _rotation_max_bytes:
-            return candidate
-    return None
+    # Walk backwards from the newest entry, accumulating until the budget is
+    # spent. One pass instead of re-measuring a candidate tail per length.
+    total = 0
+    keep_from = len(entries)
+    for index in range(len(entries) - 1, -1, -1):
+        cost = _line_size(entries[index])
+        if total + cost > _rotation_max_bytes:
+            break
+        total += cost
+        keep_from = index
+    if keep_from == len(entries):
+        return None
+    return entries[keep_from:]
 
 
-def _perform_rotation(path: Path, entries: list[str]) -> None:
+def _perform_rotation(path: Path, entries: list[str]) -> list[str] | None:
     """
-    Atomically write rotated entries to disk. Caller must hold file_lock(path).
+    Atomically trim the file to the rotation limit. Returns the kept entries,
+    or None when no rotation was needed. Caller must hold file_lock(path).
 
-    Used by add()/add_many() which already hold the lock — avoids
-    re-entrant deadlock that would occur if they called rotate() directly.
+    Used by add()/add_many()/rotate(), all of which already hold the lock.
+    Calling rotate() from inside the lock instead would block on the same
+    marker until file_lock's timeout and then proceed unlocked — file_lock is
+    not re-entrant.
     """
     kept = _do_rotate(entries)
-    if kept is None or len(kept) == len(entries):
-        return
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix="." + path.name + ".")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write("\n".join(kept) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    if kept is None:
+        return None
+    _write_entries(path, kept)
+    _logger.info(
+        "seen rotation: trimmed %s to %d of %d entries (limit %d MB)",
+        path.name,
+        len(kept),
+        len(entries),
+        _rotation_max_bytes // (1024 * 1024),
+    )
+    return kept
 
 
 def rotate(path: Path) -> None:
@@ -207,44 +227,16 @@ def rotate(path: Path) -> None:
     The in-memory cache is updated to match the new on-disk content.
 
     A no-op when the file is under the limit, has no entries, or does not exist.
+
+    Do not call this while already holding file_lock(path) — add()/add_many()
+    use _perform_rotation() for exactly that reason.
     """
     if not path.exists() or path.stat().st_size <= _rotation_max_bytes:
         return
     with file_lock(path):
-        entries = _read_entries(path)
-        if len(entries) <= 1:
-            return
-        kept: list[str] | None = None
-        for n in range(1, len(entries) + 1):
-            candidate = entries[-n:]
-            approx_size = sum(len(e) + 1 for e in candidate)
-            if approx_size <= _rotation_max_bytes:
-                kept = candidate
-                break
-        if kept is None or len(kept) == len(entries):
-            return
-        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write("\n".join(kept) + "\n")
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp, path)
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
-    key = _key(path)
-    _cache[key] = (*_fingerprint(path), kept)
-    _logger.info(
-        "seen rotation: trimmed %s to %d entries (%d bytes, limit %d MB)",
-        path.name,
-        len(kept),
-        path.stat().st_size,
-        _rotation_max_bytes // (1024 * 1024),
-    )
+        kept = _perform_rotation(path, _read_entries(path))
+    if kept is not None:
+        _cache[_key(path)] = (*_fingerprint(path), kept)
 
 
 def _write_entries(path: Path, entries: list[str]) -> None:
@@ -280,13 +272,20 @@ def add(path: Path, output_file: str) -> None:
     with file_lock(path):
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(f"{output_file}\n")
+            # The module docstring promises a crash never loses progress; an
+            # un-fsynced append can still be lost on power failure.
+            fh.flush()
+            os.fsync(fh.fileno())
         key = _key(path)
         prev = _cache.get(key)
         entries = list(prev[2]) if prev is not None else []
         if output_file not in entries:
             entries.append(output_file)
-        _cache[key] = (*_fingerprint(path), entries)
-        rotate(path)
+        # _perform_rotation, not rotate(): the lock is already held here.
+        kept = _perform_rotation(path, entries)
+        # Fingerprint after the rotation write, or the cache would carry a
+        # fingerprint the file no longer matches.
+        _cache[key] = (*_fingerprint(path), entries if kept is None else kept)
 
 
 def add_many(path: Path, output_files: list[str]) -> None:
@@ -306,14 +305,16 @@ def add_many(path: Path, output_files: list[str]) -> None:
     with file_lock(path):
         with open(path, "a", encoding="utf-8") as fh:
             fh.write("\n".join(new) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
         key = _key(path)
         prev = _cache.get(key)
         entries = list(prev[2]) if prev is not None else []
         for name in new:
             if name not in entries:
                 entries.append(name)
-        _cache[key] = (*_fingerprint(path), entries)
-        _perform_rotation(path, entries)
+        kept = _perform_rotation(path, entries)
+        _cache[key] = (*_fingerprint(path), entries if kept is None else kept)
 
 
 def list_all(path: Path) -> list[str]:

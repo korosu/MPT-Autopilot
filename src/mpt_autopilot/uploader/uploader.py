@@ -4,6 +4,7 @@ uploader.py — subprocess wrapper for youtubeuploader with retry logic.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -11,18 +12,19 @@ from pathlib import Path
 _MAX_RETRIES = 3
 _BASE_DELAY = 2
 
-# only these are retried — they occur before youtubeuploader finalizes
-# the upload session, so a retry cannot create a duplicate. Any other non-zero
-# exit may be post-finalize and is treated as permanent (fail fast). Expand the
-# set only when a real failure proves a string is pre-finalize-safe.
+# Only markers that PROVABLY mean the failure happened before youtubeuploader
+# finalized the upload session — a retry after finalize would create a
+# duplicate video on the channel, which is strictly worse than one lost
+# attempt. These are Google API error reasons, matched on word boundaries: the
+# old list also had raw substrings "503" and "timeout", which fired on those
+# digits/words in unrelated output — a filename, a byte count (M-48). A
+# subprocess timeout proves nothing about finalize either, so it is treated
+# as permanent, not transient (M-49).
 _TRANSIENT_MARKERS = (
-    "503",  # backend / service unavailable
     "backendError",
-    "context deadline exceeded",
-    "deadline exceeded",
-    "timeout",
-    "temporary",
+    "serviceUnavailable",
     "try again later",
+    "temporary",
 )
 
 
@@ -35,8 +37,9 @@ class UploadFailed(Exception):
 
 
 def _is_transient(output: str) -> bool:
+    """Word-boundary match — '503' inside a byte count must not read as transient."""
     low = output.lower()
-    return any(marker.lower() in low for marker in _TRANSIENT_MARKERS)
+    return any(re.search(rf"\b{re.escape(marker.lower())}\b", low) for marker in _TRANSIENT_MARKERS)
 
 
 def upload_video(
@@ -82,16 +85,16 @@ def upload_video(
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            output = f"timeout after {timeout}s"
-            if _is_transient(output):
-                last_exc = UploadFailed(f"transient error: {output}")
-                if attempt < _MAX_RETRIES:
-                    delay = _BASE_DELAY * (2 ** (attempt - 1))
-                    print(f"[retry {attempt}/{_MAX_RETRIES}] timeout, retrying in {delay}s...")
-                    sleep(delay)
-                    continue
-            raise UploadFailed(output)
+        except subprocess.TimeoutExpired as exc:
+            # Being killed on timeout proves nothing about whether
+            # youtubeuploader had already finalized the upload; retrying could
+            # duplicate the video on the channel. Permanent — the old code
+            # built "timeout after Ns" and then matched its own "timeout"
+            # marker, so this branch was tautologically transient (M-49).
+            raise UploadFailed(
+                f"timed out after {timeout}s — not retried: a retry after "
+                "finalize would duplicate the video on the channel"
+            ) from exc
         except OSError as exc:
             raise UploadFailed(f"failed to execute {binary}: {exc}") from exc
 
@@ -111,5 +114,10 @@ def upload_video(
             print(f"[retry {attempt}/{_MAX_RETRIES}] transient error, retrying in {delay}s...")
             sleep(delay)
 
-    assert last_exc is not None
-    raise last_exc
+    # All attempts exhausted on transient errors. A real raise rather than an
+    # assert on last_exc, which `python -O` would strip.
+    raise (
+        last_exc
+        if last_exc is not None
+        else UploadFailed("upload retry loop exited without a result")
+    )

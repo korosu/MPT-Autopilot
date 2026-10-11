@@ -27,6 +27,7 @@ def _settings(
         log_max_bytes=5_000_000,
         max_wait_seconds=2400,
         stuck_threshold_seconds=3600,
+        poll_interval_seconds=10,
         max_retries=3,
         retry_delay_seconds=180,
         max_consecutive_failures=3,

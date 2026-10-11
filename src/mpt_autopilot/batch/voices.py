@@ -142,6 +142,11 @@ def resolve(payload: dict, pool: dict[str, dict]) -> dict:
     If payload contains a "voice" key, look it up in the pool and merge the
     resolved fields in (without overwriting anything the job already set
     explicitly). Returns a new dict; "voice" is never sent to the API.
+
+    tts_server is deliberately NOT merged: VideoParams has no such field (it
+    exists only on MPT's SubtitleRequest), so sending it was a silent no-op
+    (B-3). It stays inside pool presets as a readability label for
+    `--list-voices`.
     """
     if "voice" not in payload:
         return payload
@@ -157,12 +162,10 @@ def resolve(payload: dict, pool: dict[str, dict]) -> dict:
         )
 
     for field, value in pool[alias].items():
-        if field == "tts_server" and "tts_server" in payload and payload["tts_server"] != value:
-            print(
-                f"[batch] WARNING: voice alias '{alias}' sets tts_server='{value}' "
-                f"but job explicitly sets tts_server='{payload['tts_server']}' — "
-                f"voice_name takes precedence for voice selection, tts_server is cosmetic"
-            )
+        # A preset may carry a tts_server label for readability; the MPT
+        # generation schema ignores it, so it must not reach the payload.
+        if field == "tts_server":
+            continue
         payload.setdefault(field, value)
 
     return payload

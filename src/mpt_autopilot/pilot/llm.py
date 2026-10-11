@@ -124,6 +124,10 @@ def _call_anthropic(system: str, user: str, s: Settings, max_tokens: int) -> str
         "system": system,
         "messages": [{"role": "user", "content": user}],
     }
+    # R4: absent (None) = key not sent at all — reasoning models reject it and
+    # every existing config must keep byte-for-byte behavior.
+    if s.temperature is not None:
+        payload["temperature"] = s.temperature
     resp = _post_with_retry(url, payload, headers)
     resp.raise_for_status()
     data = resp.json()
@@ -169,6 +173,17 @@ def _call_openai_compat(system: str, user: str, s: Settings, max_tokens: int) ->
         payload["chat_template_kwargs"] = {"reasoning_effort": s.reasoning_effort}
     elif s.reasoning_enabled is False:
         payload["chat_template_kwargs"] = {"reasoning_effort": "none"}
+
+    # R4: same tri-state as reasoning_enabled — absent means "don't send the
+    # key" (reasoning models reject temperature; existing configs unchanged).
+    if s.temperature is not None:
+        payload["temperature"] = s.temperature
+
+    # R4: strict JSON mode, opt-in. Many OpenAI-compatible providers reject
+    # the field outright, and the tolerant parser already salvages near-JSON
+    # replies — so this changes the request only when explicitly asked for.
+    if s.strict_json:
+        payload["response_format"] = {"type": "json_object"}
 
     resp = _post_with_retry(url, payload, headers)
     resp.raise_for_status()
@@ -219,25 +234,22 @@ def _call_openai_compat(system: str, user: str, s: Settings, max_tokens: int) ->
     return content
 
 
-def _strip_trailing_artifact(value: str) -> str:
-    """Remove a stray ')' and a trailing autocomplete ',' appended by the model."""
-    value = value.rstrip()
-    if value.endswith(",)") or value.endswith("])"):
-        value = value[:-1].rstrip()
-    elif value.endswith(","):
-        value = value[:-1].rstrip()
-    return value
+def _strip_trailing_artifact(text: str) -> str:
+    """
+    Remove a stray ')' and a trailing autocomplete ',' appended by the model
+    after the closing bracket of the array.
 
-
-def _normalise_json_item(item: object) -> Any:
-    """Recursively strip trailing artefacts from leaf strings in a parsed JSON value."""
-    if isinstance(item, str):
-        return _strip_trailing_artifact(item)
-    if isinstance(item, dict):
-        return {k: _normalise_json_item(v) for k, v in item.items()}
-    if isinstance(item, list):
-        return [_normalise_json_item(v) for v in item]
-    return item
+    Applies to the raw response text only. It used to be mapped over every
+    leaf string of the *parsed* result, which cannot contain a JSON artefact
+    (json.loads already consumed the syntax) and silently ate the final comma
+    of any legitimate value — a video_subject ending in a comma, for instance.
+    """
+    text = text.rstrip()
+    if text.endswith(",)") or text.endswith("])"):
+        text = text[:-1].rstrip()
+    elif text.endswith(","):
+        text = text[:-1].rstrip()
+    return text
 
 
 def _first_job_array(text: str) -> list[dict[str, Any]] | None:
@@ -280,6 +292,7 @@ def parse_json_array(raw_text: str) -> list[dict[str, Any]]:
     text = re.sub(r"^```json\s*", "", text)
     text = re.sub(r"^```\s*", "", text)
     text = re.sub(r"\s*```$", "", text).strip()
+    text = _strip_trailing_artifact(text)
 
     try:
         result = json.loads(text)
@@ -294,4 +307,4 @@ def parse_json_array(raw_text: str) -> list[dict[str, Any]]:
             f"First 500 chars:\n{text[:500]}"
         )
 
-    return cast("list[dict[str, Any]]", [_normalise_json_item(item) for item in result])
+    return cast("list[dict[str, Any]]", result)

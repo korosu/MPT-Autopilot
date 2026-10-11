@@ -147,32 +147,34 @@ def test_description_only_placement(tmp_path: Path):
 
 
 def test_title_from_filename_strips_account_suffix():
-    """Account suffix is stripped from the filename stem."""
+    """Account suffix is stripped from the filename stem; the fallback title is
+    title-cased (R2) so it reads like a title, not a filename slug."""
     # With matching account suffix
     video = Path("mi_video_es.mp4")
-    assert title_from_filename(video, "es") == "mi video"
+    assert title_from_filename(video, "es") == "Mi Video"
 
     # Without account suffix (no strip)
     video = Path("my_cool_video.mp4")
-    assert title_from_filename(video, "en") == "my cool video"
+    assert title_from_filename(video, "en") == "My Cool Video"
 
     # No account name provided (backward compat)
     video = Path("cool_video.mp4")
-    assert title_from_filename(video) == "cool video"
+    assert title_from_filename(video) == "Cool Video"
 
     # Case-insensitive suffix match
     video = Path("test_video_ES.mp4")
-    assert title_from_filename(video, "es") == "test video"
+    assert title_from_filename(video, "es") == "Test Video"
 
 
 def test_load_meta_strips_suffix_from_filename(tmp_path: Path):
-    """load_meta strips account suffix when deriving title from filename."""
+    """load_meta strips account suffix when deriving title from filename;
+    the fallback is title-cased (R2)."""
     video = tmp_path / "my_subject_es.mp4"
     video.touch()
 
     defaults = Defaults()
     meta = load_meta(video, defaults, account_name="es")
-    assert meta.title == "my subject"
+    assert meta.title == "My Subject"
 
 
 def test_load_meta_no_strip_without_suffix(tmp_path: Path):
@@ -182,7 +184,7 @@ def test_load_meta_no_strip_without_suffix(tmp_path: Path):
 
     defaults = Defaults()
     meta = load_meta(video, defaults, account_name="en")
-    assert meta.title == "best ai"
+    assert meta.title == "Best Ai"
 
 
 def test_load_meta_sidecar_without_title_uses_account_name(tmp_path: Path):
@@ -194,7 +196,7 @@ def test_load_meta_sidecar_without_title_uses_account_name(tmp_path: Path):
 
     defaults = Defaults()
     meta = load_meta(video, defaults, account_name="es")
-    assert meta.title == "my video"  # suffix stripped
+    assert meta.title == "My Video"  # suffix stripped
 
 
 def test_contains_synthetic_media_defaults_true_no_sidecar(tmp_path: Path):

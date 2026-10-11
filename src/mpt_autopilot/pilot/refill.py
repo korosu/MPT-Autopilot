@@ -39,10 +39,15 @@ from pathlib import Path
 from typing import Any
 
 from mpt_autopilot import seen
+from mpt_autopilot.logger import configure_root
 from mpt_autopilot.notify import alert as notify_alert
 from mpt_autopilot.pilot import jobs
 from mpt_autopilot.pilot.llm import call_llm, parse_json_array
-from mpt_autopilot.pilot.prompt import VIDEO_SUBJECT_MAX_CHARS, build_themes
+from mpt_autopilot.pilot.prompt import (
+    THEME_MAX_SUBJECT_CHARS,
+    VIDEO_SUBJECT_MAX_CHARS,
+    build_themes,
+)
 from mpt_autopilot.pilot.prompt import build as build_prompt
 from mpt_autopilot.pilot.settings import LangSettings, Settings
 from mpt_autopilot.pilot.settings import load as load_settings
@@ -120,6 +125,10 @@ _HOOK_INSTRUCTION = (
     "image. Do NOT start with greetings, 'did you know', filler, or throat-clearing."
 )
 
+# [pause:Xs] tags are deliberately NOT requested anymore (B-4): MPT's script
+# post-processing strips bracketed tags before TTS even for Edge voices, so
+# the instruction only burned the 2000-char video_script_prompt budget.
+
 
 def build_duration_instruction(words: tuple[int, int | None] | None) -> str:
     """Build video_script_prompt: always-on hook + (optional) word-count guidance."""
@@ -154,11 +163,15 @@ def build_duration_instruction(words: tuple[int, int | None] | None) -> str:
 _VALID_CONCAT_MODES = {"random", "sequential"}
 _VALID_BGM_TYPES = {"random", "custom", "none"}
 
-# Upstream VideoFitMode, VideoTransitionMode, SubtitleDisplayMode, SubtitleAnimation
-# and subtitle-background fields — mirrors MoneyPrinterTurbo app/models/schema.py.
+# Upstream VideoFitMode, VideoTransitionMode, SubtitleDisplayMode and
+# SubtitleAnimation — mirrors MoneyPrinterTurbo app/models/schema.py.
 _VALID_FIT_MODES = {"cover", "contain"}
+# The transition enum has NO "None" member: its "none" case carries a Python
+# None, which serialises to JSON null — and the schema field is
+# Optional[VideoTransitionMode] = None. "No transition" therefore means the
+# key is ABSENT (or null), never the string "None" (B-1: pydantic rejected the
+# string with HTTP 400, which retried 3×180s and killed the batch).
 _VALID_TRANSITION_MODES = {
-    "None",
     "Shuffle",
     "FadeIn",
     "FadeOut",
@@ -171,17 +184,38 @@ _VALID_DISPLAY_MODES = {"sentence", "word_by_word"}
 _VALID_ANIMATIONS = {"none", "pop_spring"}
 
 
+def _num_default(defaults: dict, key: str, fallback: float) -> float:
+    """
+    Read a numeric job_defaults value, ignoring a non-numeric one.
+
+    The validations below fall back to `defaults.get(key, ...)` when the LLM
+    sends garbage. A config.yaml holding `paragraph_number: "2"` made that
+    fallback just as broken as the value it replaced — and `max()` against the
+    paragraph_floor band then raised TypeError mid-run.
+    """
+    value = defaults.get(key, fallback)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return fallback
+    return value
+
+
+def _int_default(defaults: dict, key: str, fallback: int) -> int:
+    """Positive-int variant of _num_default (paragraph_number feeds max())."""
+    value = _num_default(defaults, key, fallback)
+    return int(value) if value > 0 else fallback
+
+
 def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
     """
     Check the fields the LLM was asked to fill in (voice_name, voice_rate,
     video_script, video_clip_duration, video_concat_mode, bgm_type,
     bgm_volume, video_fit_mode, video_transition_mode, subtitle_display_mode,
-    subtitle_animation, rounded_subtitle_background, subtitle_background_enabled,
-    subtitle_background_color, video_clip_speed, video_music_prompt,
-    sonilo_bgm_prompt, custom_system_prompt, video_materials) against
-    config.yaml and MPT schema constraints. Anything missing, the wrong type,
-    out of range, or exceeding MPT length limits is replaced with a safe
-    configured default instead of being written into the jobs yaml as-is.
+    subtitle_animation, rounded_subtitle_background, video_clip_speed,
+    video_music_prompt, sonilo_bgm_prompt, custom_system_prompt,
+    video_materials) against config.yaml and MPT schema constraints. Anything
+    missing, the wrong type, out of range, or exceeding MPT length limits is
+    replaced with a safe configured default instead of being written into the
+    jobs yaml as-is.
 
     Always injects an always-on hook instruction into video_script_prompt.
     If duration_range is configured, also adds word-count guidance and may
@@ -204,15 +238,15 @@ def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
 
     clip = out.get("video_clip_duration")
     if not isinstance(clip, (int, float)) or isinstance(clip, bool) or clip <= 0:
-        out["video_clip_duration"] = defaults.get("video_clip_duration", 3)
+        out["video_clip_duration"] = _num_default(defaults, "video_clip_duration", 3)
 
     volume = out.get("bgm_volume")
     if not isinstance(volume, (int, float)) or isinstance(volume, bool) or not (0 <= volume <= 1):
-        out["bgm_volume"] = defaults.get("bgm_volume", 0.15)
+        out["bgm_volume"] = _num_default(defaults, "bgm_volume", 0.15)
 
     para = out.get("paragraph_number")
     if not isinstance(para, int) or isinstance(para, bool) or para <= 0:
-        out["paragraph_number"] = defaults.get("paragraph_number", 2)
+        out["paragraph_number"] = _int_default(defaults, "paragraph_number", 2)
 
     # video_concat_mode: must be a known MPT value
     if out.get("video_concat_mode") not in _VALID_CONCAT_MODES:
@@ -235,10 +269,65 @@ def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
     if out.get("video_fit_mode") not in _VALID_FIT_MODES:
         out["video_fit_mode"] = defaults.get("video_fit_mode", "cover")
 
-    # video_transition_mode: clip-to-clip transition effect
+    # video_transition_mode: clip-to-clip transition effect. "No transition"
+    # is the absence of the key — the MPT enum has no "None" string member
+    # (B-1), so an unrecognised value (including a legacy "None") removes the
+    # key instead of substituting a string pydantic would reject.
     t_mode = out.get("video_transition_mode")
     if t_mode not in _VALID_TRANSITION_MODES:
-        out["video_transition_mode"] = defaults.get("video_transition_mode", "None")
+        t_mode = defaults.get("video_transition_mode")
+    if t_mode not in _VALID_TRANSITION_MODES:
+        out.pop("video_transition_mode", None)
+    else:
+        out["video_transition_mode"] = t_mode
+
+    # video_terms (B-7): explicit stock-search terms. When non-empty, MPT
+    # skips its own English-only 5-term generator entirely — the only lever
+    # over the visual row, which the pilot used to drop on write. Accept
+    # str (MPT splits a bare string on commas) or a list; normalise to a list.
+    terms = out.get("video_terms")
+    if isinstance(terms, str):
+        cleaned_terms = [t.strip() for t in terms.split(",") if t.strip()]
+    elif isinstance(terms, list):
+        cleaned_terms = [t.strip() for t in terms if isinstance(t, str) and t.strip()]
+    else:
+        cleaned_terms = []
+    if cleaned_terms:
+        out["video_terms"] = cleaned_terms
+    else:
+        out.pop("video_terms", None)
+
+    # match_materials_to_script (B-7): order clips by narration and
+    # round-robin downloads across the terms. With it on, MPT forces
+    # sequential concat, and 8+ terms is the width that keeps the pool from
+    # thinning out (S-2).
+    out["match_materials_to_script"] = bool(out.get("match_materials_to_script", False))
+    if out["match_materials_to_script"] and cleaned_terms and len(cleaned_terms) < 8:
+        _log.warning(
+            "job %s: match_materials_to_script=true with only %d video_terms — "
+            "8+ terms keep the round-robin download pool from thinning out",
+            out.get("name", "<unnamed>"),
+            len(cleaned_terms),
+        )
+
+    # video_count: schema floor is 1; >1 silently forces random concat in MPT
+    # (B-8), overriding video_concat_mode — warn rather than silently sending
+    # a value that changes assembly behaviour.
+    v_count = out.get("video_count")
+    if isinstance(v_count, bool) or not isinstance(v_count, int) or v_count < 1:
+        out.pop("video_count", None)
+    elif v_count > 1:
+        _log.warning(
+            "job %s: video_count=%d makes MPT override video_concat_mode to random",
+            out.get("name", "<unnamed>"),
+            v_count,
+        )
+
+    # voice_volume: amplification in the final mix (not TTS loudness); MPT
+    # has no bounds on it and values >1 clip without a limiter (N-5).
+    v_vol = out.get("voice_volume")
+    if isinstance(v_vol, bool) or not isinstance(v_vol, (int, float)):
+        out.pop("voice_volume", None)
 
     # subtitle_display_mode: per-sentence or per-word subtitles
     if out.get("subtitle_display_mode") not in _VALID_DISPLAY_MODES:
@@ -248,17 +337,22 @@ def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
     if out.get("subtitle_animation") not in _VALID_ANIMATIONS:
         out["subtitle_animation"] = defaults.get("subtitle_animation", "none")
 
-    # rounded_subtitle_background: rounded corners on subtitle bg
+    # rounded_subtitle_background: rounded corners on the subtitle plate.
+    # Only renders together with a real text_background_color value (MPT
+    # video.py); on its own it is a no-op.
     out["rounded_subtitle_background"] = bool(out.get("rounded_subtitle_background", False))
-
-    # Subtitle background split (replaces text_background_color=true with two fields)
-    out["subtitle_background_enabled"] = bool(out.get("subtitle_background_enabled", False))
-    out["subtitle_background_color"] = str(out.get("subtitle_background_color", "#000000"))
+    # NOTE: subtitle_background_enabled / subtitle_background_color are
+    # deliberately absent — VideoParams has no such fields (verified against
+    # MoneyPrinterTurbo app/models/schema.py), so sending them meant silent
+    # no-ops while the real lever, text_background_color, sat unused (B-2).
+    # Drop them even when an older prompt or hand-copied example supplied them.
+    out.pop("subtitle_background_enabled", None)
+    out.pop("subtitle_background_color", None)
 
     # video_clip_speed: playback speed multiplier
     speed = out.get("video_clip_speed")
     if not isinstance(speed, (int, float)) or isinstance(speed, bool) or speed <= 0:
-        out["video_clip_speed"] = defaults.get("video_clip_speed", 1.0)
+        out["video_clip_speed"] = _num_default(defaults, "video_clip_speed", 1.0)
 
     # video_music_prompt / sonilo_bgm_prompt: AI-generated music prompts
     # (pass-through, no range validation — prompt text is freeform)
@@ -288,7 +382,10 @@ def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
                     )
             out["video_materials"] = cleaned or defaults.get("video_materials", [])
 
-    # ponytail: always-on hook + optional duration-range guidance
+    # ponytail: always-on hook + optional duration-range guidance. A
+    # video_script_prompt from job_defaults used to be overwritten wholesale
+    # (B-5) — the only reachable lever over the script — so the built
+    # instruction is appended on its own lines instead of replacing it.
     dur = defaults.get("duration_range")
     words: tuple[int, int | None] | None = None
     if dur:
@@ -296,7 +393,9 @@ def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
         if sec:
             words = duration_to_words(sec)
             out["paragraph_number"] = max(out["paragraph_number"], paragraph_floor(sec))
-    out["video_script_prompt"] = build_duration_instruction(words)
+    user_prompt = str(defaults.get("video_script_prompt", "") or "").strip()
+    built_prompt = build_duration_instruction(words)
+    out["video_script_prompt"] = f"{user_prompt}\n\n{built_prompt}" if user_prompt else built_prompt
 
     return out
 
@@ -305,10 +404,10 @@ def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
 # missing one (see fix #6: previously "" silently passed straight through).
 _MIN_VIDEO_SUBJECT_CHARS = 30
 
-# theme_mode emits short topic titles as video_subject; the existing 30-char
-# floor would reject them. Loosen it to "non-trivial" only while theme mode
-# is active.
-_THEME_MIN_SUBJECT_CHARS = 5
+# theme_mode emits short topic titles as video_subject, and topics mode imports
+# whatever line the user supplied verbatim; the 30-char floor would reject both.
+# Loosen it to "non-trivial" only for those two modes.
+_SHORT_MIN_SUBJECT_CHARS = 5
 
 # Strip leading list markers (1. 2) 3 - - * •) from topic lines so pasted
 # numbered/bulleted lists don't leak markers into slugs and video_subjects.
@@ -359,6 +458,7 @@ def _normalise(
     lang_cfg: LangSettings | None = None,
     foreign_suffixes: set[str] | None = None,
     min_subject_chars: int = _MIN_VIDEO_SUBJECT_CHARS,
+    max_subject_chars: int = VIDEO_SUBJECT_MAX_CHARS,
 ) -> dict:
     """
     Return a cleaned copy of job with:
@@ -372,7 +472,7 @@ def _normalise(
       present (e.g. "..._es.mp4" while generating for "en") is stripped
       instead — previously nothing validated this case at all, so such a
       file could be permanently misclassified by init-seen's suffix filter
-    - video_subject clamped to VIDEO_SUBJECT_MAX_CHARS
+    - video_subject clamped to max_subject_chars
     - voice/timing/bgm fields validated against lang_cfg (when provided),
       falling back to configured defaults instead of raising on bad LLM output
 
@@ -411,8 +511,8 @@ def _normalise(
             f"video_subject is missing or too short ({len(subject)} chars, "
             f"need at least {min_subject_chars})"
         )
-    if len(subject) > VIDEO_SUBJECT_MAX_CHARS:
-        subject = _truncate_subject(subject, VIDEO_SUBJECT_MAX_CHARS)
+    if len(subject) > max_subject_chars:
+        subject = _truncate_subject(subject, max_subject_chars)
 
     clean = {
         **job,
@@ -434,13 +534,18 @@ def _deduplicate(
     expected_suffix: str = "",
     foreign_suffixes: set[str] | None = None,
     min_subject_chars: int = _MIN_VIDEO_SUBJECT_CHARS,
+    max_subject_chars: int = VIDEO_SUBJECT_MAX_CHARS,
+    known_job_names: set[str] | None = None,
 ) -> list[dict]:
     # Lowercase for comparison: new output_file values are always already
     # lowercased by _normalise, but already_known (seen.txt + existing yaml
     # entries) may still hold case-varied names predating this fix, or from
     # a manual edit — comparing case-insensitively catches those too.
     known = {n.lower() for n in already_known}
-    known_names: set[str] = set()
+    # Names already queued in the jobs file, so a generated job cannot reuse
+    # one. Starting from an empty set made the uniqueness pass below blind to
+    # everything already on disk.
+    known_names: set[str] = set(known_job_names or ())
     result = []
     for job in raw_jobs:
         if not isinstance(job, dict):
@@ -463,6 +568,7 @@ def _deduplicate(
                 lang_cfg,
                 foreign_suffixes,
                 min_subject_chars=min_subject_chars,
+                max_subject_chars=max_subject_chars,
             )
         except Exception as e:
             _log.warning("malformed job %r: %s", job.get("name", "?"), e)
@@ -540,12 +646,17 @@ def _run_topics(
         lang_cfg,
         expected_suffix=suffix,
         foreign_suffixes=foreign_suffixes,
+        # Topics are imported verbatim, so a short one ("Octopus hearts") is a
+        # valid topic, not a malformed job — the 30-char script floor would
+        # drop it silently.
+        min_subject_chars=_SHORT_MIN_SUBJECT_CHARS,
+        known_job_names=jobs.existing_job_names_from(cfg),
     )
     print(f"[{lang}] after dedup: {len(clean_jobs)} new jobs")
 
     if clean_jobs:
         jobs.append(jobs_dir, suffix, lang, clean_jobs)
-        jobs_file = jobs._new_path(jobs_dir, suffix).name
+        jobs_file = jobs.new_path(jobs_dir, suffix).name
         print(f"[{lang}] appended {len(clean_jobs)} jobs to {jobs_file}")
     else:
         notify_alert(f"[{lang}] topics mode: 0 jobs added (all duplicates?)", settings)
@@ -607,6 +718,12 @@ def run(
 ) -> int:
     settings = load_settings(config_path, require_llm=topics is None)
 
+    # Process-global, so it has to be (re)applied on entry to every stage that
+    # writes a seen file — in `mpt run` the batch stage sets its own value in the
+    # same process. Without this, pilot.seen_max_mb was read into Settings and
+    # then never used by refill at all.
+    seen.set_rotation_max_bytes(settings.seen_max_mb * 1024 * 1024)
+
     # Priority: explicit CLI flag > paths.* from config.yaml > current directory.
     jobs_dir = (jobs_dir or settings.jobs_dir or Path(".")).resolve()
     seen_dir = (seen_dir or settings.seen_dir or jobs_dir).resolve()
@@ -617,9 +734,10 @@ def run(
     lang_cfg = settings.lang(lang)
     suffix = lang_cfg.file_suffix
 
-    # ponytail: validate duration_range before LLM call (topics mode uses _validate later)
-    if lang_cfg.job_defaults.get("duration_range"):
-        parse_duration_range(lang_cfg.job_defaults["duration_range"])
+    # ponytail: validate duration_range before LLM call (topics mode uses _validate later).
+    # The parsed value also feeds build_prompt so the system prompt's length claim
+    # matches the word-count guidance _validate_against_config injects.
+    duration_sec = parse_duration_range(lang_cfg.job_defaults.get("duration_range"))
 
     if topics:
         return _run_topics(lang, jobs_dir, seen_dir, settings, lang_cfg, topics)
@@ -669,6 +787,7 @@ def run(
 
     existing = jobs.existing_names_from(cfg)
     already_known = seen_set | existing
+    known_job_names = jobs.existing_job_names_from(cfg)
     print(f"[{lang}] known titles: {len(already_known)} | model: {settings.model}")
 
     # Other configured languages' suffixes, used so an output_file that
@@ -690,7 +809,13 @@ def run(
     # below with each top-up attempt's own new names too.
     existing_ordered = jobs.existing_names_ordered_from(cfg)
     pending_ordered = [n for n in existing_ordered if n not in seen_set]
-    prompt_seen_ordered = seen_list + pending_ordered
+    # R4: dedup against the TOPIC, not just the slug. Queued jobs know their
+    # own video_subject — showing the idea text instead of (only) the filename
+    # stops a semantically identical idea with a fresh slug from sailing
+    # through. Rendered entries (seen.txt) only have filenames, so those stay
+    # as-is.
+    subjects_by_output = jobs.existing_subjects_by_output(cfg)
+    prompt_seen_ordered = seen_list + [subjects_by_output.get(n) or n for n in pending_ordered]
 
     total_added = 0
     attempt = 0
@@ -720,9 +845,24 @@ def run(
                     request_count,
                     themes=active_themes,
                 )
-            return build_prompt(lang_cfg, prompt_seen_ordered, request_count)
+            # R1-step2/A-3: with pilot.generation.visual_terms enabled the
+            # same response carries a video_terms array per idea (one LLM
+            # call, terms derived from the idea itself); the rules come from
+            # config so they are visible and editable content.
+            return build_prompt(
+                lang_cfg,
+                prompt_seen_ordered,
+                request_count,
+                duration_sec,
+                visual_terms_rules=(
+                    settings.visual_terms_rules if settings.visual_terms_enabled else None
+                ),
+            )
 
-        subj_min = _THEME_MIN_SUBJECT_CHARS if active_themes else _MIN_VIDEO_SUBJECT_CHARS
+        # Theme mode asks for short titles, not scripts: loosen the floor and
+        # apply the ceiling the theme prompt actually promises the model.
+        subj_min = _SHORT_MIN_SUBJECT_CHARS if active_themes else _MIN_VIDEO_SUBJECT_CHARS
+        subj_max = THEME_MAX_SUBJECT_CHARS if active_themes else VIDEO_SUBJECT_MAX_CHARS
 
         print(f"[{lang}] calling LLM for {this_count} ideas...")
         raw_jobs, failed_jobs = _request_valid_jobs(prompt_for_count, settings, this_count)
@@ -754,21 +894,28 @@ def run(
             expected_suffix=suffix,
             foreign_suffixes=foreign_suffixes,
             min_subject_chars=subj_min,
+            max_subject_chars=subj_max,
+            known_job_names=known_job_names,
         )
         print(f"[{lang}] after dedup: {len(clean_jobs)} new jobs")
 
         if clean_jobs:
             jobs.append(jobs_dir, suffix, lang, clean_jobs)
-            jobs_file = jobs._new_path(jobs_dir, suffix).name
+            jobs_file = jobs.new_path(jobs_dir, suffix).name
             print(f"[{lang}] appended {len(clean_jobs)} jobs to {jobs_file}")
             total_added += len(clean_jobs)
 
-            # Feed this attempt's new names into the next attempt's dedup
+            # Feed this attempt's new topics into the next attempt's dedup
             # context, so a top-up round doesn't just re-propose what the
-            # previous round already added.
+            # previous round already added (subjects preferred over slugs,
+            # same as the initial context above).
             new_names = [j["output_file"] for j in clean_jobs]
             already_known |= set(new_names)
-            prompt_seen_ordered += new_names
+            known_job_names |= {j["name"] for j in clean_jobs}
+            prompt_seen_ordered += [
+                str(j.get("video_subject", "")).strip()[:160] or j["output_file"]
+                for j in clean_jobs
+            ]
 
         if count_explicit or pending + total_added >= threshold:
             break
@@ -983,6 +1130,8 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
 
 
 def main() -> None:
+    # Give the root logger a handler before any stage runs (M-1).
+    configure_root()
     sys.exit(execute(build_parser().parse_args()))
 
 

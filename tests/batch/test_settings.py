@@ -51,3 +51,57 @@ def test_load_ignores_other_sections(tmp_path: Path) -> None:
     settings = load(config, tmp_path / ".env")
 
     assert settings.api_url == "http://127.0.0.1:8080"
+
+
+def test_upload_post_platforms_wraps_a_bare_string(tmp_path: Path) -> None:
+    """
+    A scalar `platforms: youtube` must become ["youtube"].
+
+    It used to be cast() to list[str] without a check, and upload_post iterates
+    the value — so a string went out as platform[]=y&platform[]=o&platform[]=u…
+    """
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        _BASE + "  mpt_songs_dir: ./songs\n  upload_post:\n    platforms: youtube\n",
+        encoding="utf-8",
+    )
+
+    settings = load(config, tmp_path / ".env")
+
+    assert settings.upload_post_platforms == ["youtube"]
+
+
+def test_upload_post_platforms_rejects_a_mapping(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        _BASE + "  mpt_songs_dir: ./songs\n  upload_post:\n    platforms:\n      a: b\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="platforms must be a list"):
+        load(config, tmp_path / ".env")
+
+
+def test_poll_interval_defaults_to_ten_seconds(tmp_path: Path) -> None:
+    """The hardcoded 10s wait_for_task poll became a setting (audit L);
+    the default must keep the old behaviour."""
+    config = tmp_path / "config.yaml"
+    config.write_text(_BASE + "  mpt_songs_dir: ./songs\n", encoding="utf-8")
+
+    settings = load(config, tmp_path / ".env")
+
+    assert settings.poll_interval_seconds == 10
+
+
+def test_upload_post_privacy_level_is_configurable(tmp_path: Path) -> None:
+    """M-22: upload-post's privacy_level for non-YouTube platforms is a
+    config.yaml setting, passed through verbatim."""
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        _BASE + "  mpt_songs_dir: ./songs\n  upload_post:\n    privacy_level: PRIVATE_TO_SELF\n",
+        encoding="utf-8",
+    )
+
+    settings = load(config, tmp_path / ".env")
+
+    assert settings.upload_post_privacy_level == "PRIVATE_TO_SELF"

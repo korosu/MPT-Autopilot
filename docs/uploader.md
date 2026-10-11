@@ -35,7 +35,8 @@ with `pipeline.accounts` overriding that.
 - For each video, looks for a sidecar `<name>.json` with title/description/tags
   - No sidecar? Title is derived from the filename.
 - Uploads via [youtubeuploader](https://github.com/porjo/youtubeuploader)
-- Moves successfully uploaded videos into `old_videos/` (configurable name)
+- Deletes successfully uploaded videos, or archives them into `old_videos/`
+  (configurable) when `keep_uploaded: true`
 - Stops early and alerts if YouTube's daily upload quota is hit
 - Optional Telegram notifications on completion / failure / quota hit
 
@@ -191,7 +192,8 @@ skipped as already uploaded. It lists every remaining candidate, though —
 `--limit` only caps real uploads. Note that a dry run is not entirely read-only:
 it opens (and therefore creates) the ledger, and the crash-recovery pass
 described under [Crash-safe resumes](#crash-safe-resumes-sqlite-ledger) still
-moves anything left marked `uploaded` into `old_videos/`.
+finalizes anything left marked `uploaded` (moving it into `old_videos/`, or
+deleting it when `keep_uploaded: false`).
 
 ## Metadata sidecar
 
@@ -342,11 +344,14 @@ is recorded as `uploaded` but before the file is moved, the next run skips
 that video - no duplicate upload, and the leftover file is moved into
 `old_videos/` during a recovery pass at the start of the run.
 
-The ledger's location is deliberately **not** configurable and deliberately not
-relative to the working directory: a cron entry that started in the wrong place
-would otherwise create a fresh, empty ledger and happily re-upload everything.
-It follows `config.yaml`, so `--config /srv/mpt/config.yaml` always uses
-`/srv/mpt/yt-uploader-ledger.sqlite`.
+The ledger's location is configurable via `uploader.ledger_path` (it resolves
+relative to `config.yaml`, never to the working directory) and defaults to
+`yt-uploader-ledger.sqlite` beside `config.yaml`, so `--config
+/srv/mpt/config.yaml` always uses `/srv/mpt/yt-uploader-ledger.sqlite` even
+from a cron entry started elsewhere. If you point it at an existing ledger,
+copy the `-wal`/`-shm` sidecars along with the `.sqlite` file — moving the
+ledger without them discards the most recent dedup records and the next run
+re-uploads those videos.
 
 Dedup is by content hash, not filename, and is scoped per account — the same
 video can legitimately go to two channels.
@@ -355,10 +360,13 @@ video can legitimately go to two channels.
 
 A failed upload is attempted up to 3 times with exponential backoff between
 attempts (2s, then 4s), but **only** for failures that provably happen before
-youtubeuploader finalizes the upload session: HTTP 503, `backendError`,
-deadline/timeout, `temporary`, and `try again later`. Any other non-zero exit may
-be post-finalize, so it fails immediately rather than risk a duplicate upload. A
-single upload is given 600 seconds before it is treated as timed out.
+youtubeuploader finalizes the upload session: the Google API error reasons
+`backendError`, `serviceUnavailable`, `temporary`, and `try again later`,
+matched as whole words. Any other non-zero exit may be post-finalize, so it
+fails immediately rather than risk a duplicate upload. A single upload is
+given 600 seconds; a timeout is treated as a permanent failure too — a kill
+on timeout proves nothing about whether the upload had already been finalized,
+and a retry could duplicate the video on the channel.
 
 A failed video does not stop the run: it is counted, alerted, and the account
 continues with the next file. The account's exit code becomes 1.
@@ -379,6 +387,7 @@ uploader:
   # accounts_file: "./accounts.yaml"
 
   sleep_between_uploads: 5
+  keep_uploaded: false
   uploaded_dir_name: "old_videos"
 
   defaults:
@@ -401,9 +410,12 @@ uploader:
 - **`sleep_between_uploads`** — seconds to pause between uploads so YouTube does
   not see a burst. Must be ≥ 0. Default: 5. No sleep is added after the last
   video.
+- **`keep_uploaded`** — whether to keep a video and its sidecar after a
+  successful upload. `true` moves both into `uploaded_dir_name`; `false` deletes
+  them from disk. Default: `false`.
 - **`uploaded_dir_name`** — the subfolder inside each account's `videos_dir` that
-  successfully uploaded videos and their sidecars are moved into. Default:
-  `old_videos`.
+  successfully uploaded videos and their sidecars are moved into. Only used when
+  `keep_uploaded` is `true`. Default: `old_videos`.
 - **`defaults`** — used when a video has no sidecar, or the sidecar omits a field:
   `privacy_status` (default `private`), `category_id` (default `"22"`), `tags`
   (default `["shorts"]`), `hashtag_placement` (default `both`), and

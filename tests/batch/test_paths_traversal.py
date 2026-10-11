@@ -112,7 +112,13 @@ def test_submit_job_validates_the_task_id_from_the_api(monkeypatch) -> None:
             return {"data": {"task_id": ".."}}
 
     settings = SimpleNamespace(api_url="http://127.0.0.1:1")
-    monkeypatch.setattr(batch_api.httpx, "post", lambda *a, **k: FakeResponse())
+    # submit_job goes through the shared httpx client; patch that, not
+    # httpx.post at module level (which no longer exists in the call path).
+    monkeypatch.setattr(
+        batch_api,
+        "get_shared_client",
+        lambda: SimpleNamespace(post=lambda *a, **k: FakeResponse()),
+    )
     with pytest.raises(ValueError, match="unsafe task_id"):
         batch_api.submit_job({}, settings)  # type: ignore[arg-type]
 

@@ -1,7 +1,8 @@
 """
 validate.py — `mpt validate`: pre-flight configuration checks.
 
-Runs the same checks that `mpt run --dry-run` does before starting stages:
+Owns the pre-flight checks that `mpt run` also runs before starting any stage
+(pipeline.py imports _run_checks from here — one implementation, M-50):
   1. File-access permissions for seen.txt and jobs files (warnings)
   2. Path consistency: batch.output_dir vs enricher.videos_dir (errors)
 
@@ -14,11 +15,16 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
+import shutil
 import sys
 from pathlib import Path
 
 from mpt_autopilot import config as shared_config
+from mpt_autopilot import seen
 from mpt_autopilot.config import ConfigError
+from mpt_autopilot.logger import configure_root
+from mpt_autopilot.pilot import jobs
 
 # ── Data types ───────────────────────────────────────────────────────────────
 
@@ -76,7 +82,109 @@ def _run_checks(cfg: shared_config.Config) -> list[CheckResult]:
     results: list[CheckResult] = []
     results.extend(_check_file_access(cfg))
     results.extend(_check_path_consistency(cfg))
+    results.extend(_check_audio_normalize(cfg))
+    results.extend(_check_prompt_health(cfg))
     return results
+
+
+# Placeholders the enricher/pilot code actually fills at runtime. A prompt
+# referencing anything else renders the literal "{name}" into the LLM call —
+# invisible until it degrades the output (R9.3).
+_KNOWN_PROMPT_PLACEHOLDERS = frozenset(
+    {
+        "video_subject",
+        "script",
+        "platform",
+        "language",
+        "text",
+        "min_tags",
+        "max_tags",
+        "max_tag_length",
+        "excluded_tags",
+        "count",
+        "videos",
+    }
+)
+_ENRICHER_PROMPT_KEYS = (
+    "prompt_detect_language",
+    "prompt_generate",
+    "prompt_detect_and_generate",
+    "prompt_batch",
+    "prompt_title_description",
+)
+
+
+def _check_prompt_health(cfg: shared_config.Config) -> list[CheckResult]:
+    """
+    R9.2/R9.3: the prompts are production content living in config.yaml —
+    check what a typo there would silently break, at validation time:
+
+    1. a hashtag example longer than max_tag_length teaches the model a tag
+       its own filter will discard (B-11's exact mechanism);
+    2. a placeholder the code never fills ({tag_count} instead of
+       {max_tags}) ships the literal braces to the LLM.
+    """
+    results: list[CheckResult] = []
+    try:
+        enricher_sec = cfg.section("enricher")
+    except ConfigError:
+        return results
+
+    max_tag_length = int(enricher_sec.get("max_tag_length", 20))
+
+    for key in _ENRICHER_PROMPT_KEYS:
+        prompt = enricher_sec.get(key)
+        if not isinstance(prompt, str) or not prompt:
+            continue
+        # {{...}} doubles are literal braces in .format() — only single
+        # braces are placeholders.
+        placeholders = set(re.findall(r"(?<!\{)\{([a-z_]+)\}(?!\})", prompt))
+        unknown = sorted(placeholders - _KNOWN_PROMPT_PLACEHOLDERS)
+        if unknown:
+            results.append(
+                CheckResult(
+                    f"enricher.{key}",
+                    f"unknown placeholder(s) {unknown} — the code never fills "
+                    f"these; known: {sorted(_KNOWN_PROMPT_PLACEHOLDERS)}",
+                    "warn",
+                )
+            )
+        long_tags = sorted({t for t in re.findall(r"#(\w+)", prompt) if len(t) > max_tag_length})
+        if long_tags:
+            results.append(
+                CheckResult(
+                    f"enricher.{key}",
+                    f"example hashtag(s) longer than max_tag_length="
+                    f"{max_tag_length} and will be discarded by the filter: "
+                    f"{['#' + t for t in long_tags]}",
+                    "warn",
+                )
+            )
+    return results
+
+
+def _check_audio_normalize(cfg: shared_config.Config) -> list[CheckResult]:
+    """
+    R5: `batch.audio_normalize: true` promises an ffmpeg pass on every
+    finished video. When ffmpeg is missing from PATH the pass is silently
+    skipped at render time — surface that here, where the user is looking at
+    their config, instead.
+    """
+    try:
+        batch_sec = cfg.section("batch")
+    except ConfigError:
+        return []
+    if not batch_sec.get("audio_normalize"):
+        return []
+    if shutil.which("ffmpeg") is None:
+        return [
+            CheckResult(
+                "batch.audio_normalize",
+                "enabled but ffmpeg is not on PATH — the audio pass will be skipped",
+                "warn",
+            )
+        ]
+    return []
 
 
 def _check_file_access(cfg: shared_config.Config) -> list[CheckResult]:
@@ -86,12 +194,14 @@ def _check_file_access(cfg: shared_config.Config) -> list[CheckResult]:
 
     try:
         batch_sec = cfg.section("batch")
-    except (ConfigError, ValueError):
+    except ConfigError:
         batch_sec = {}
 
     seen_dir_str = cfg.paths().get("seen_dir") or "./jobs"
     seen_dir = cfg.resolve(str(seen_dir_str))
-    seen_base = seen_dir / "seen.txt"
+    # seen.resolve() is the same helper the stages use, so the checked path
+    # can never drift from the path a stage would actually open (M-51).
+    seen_base = seen.resolve(seen_dir, "")
 
     seen_checked: set[Path] = set()
 
@@ -103,12 +213,11 @@ def _check_file_access(cfg: shared_config.Config) -> list[CheckResult]:
     # Per-language seen files
     for lang_code in langs:
         file_suffix = langs[lang_code].get("file_suffix", "")
-        slug = file_suffix.lstrip("_")
-        lang_seen = seen_base.parent / f"seen_{slug}.txt" if slug else seen_base
+        lang_seen = seen.resolve(seen_dir, file_suffix)
         if lang_seen in seen_checked:
             continue
         seen_checked.add(lang_seen)
-        label = f"seen ({lang_code})" if slug else "seen"
+        label = f"seen ({lang_code})" if file_suffix else "seen"
         results.append(_check_readable(lang_seen, label))
 
     # Jobs files
@@ -126,7 +235,9 @@ def _check_file_access(cfg: shared_config.Config) -> list[CheckResult]:
 
     for lang_code in langs:
         file_suffix = langs[lang_code].get("file_suffix", "")
-        jobs_file = jobs_dir / f"jobs{file_suffix}.yaml"
+        # jobs.new_path() — the same helper pilot/refill uses to write the file
+        # in the first place (M-51).
+        jobs_file = jobs.new_path(jobs_dir, file_suffix)
         if jobs_file in jobs_checked:
             continue
         jobs_checked.add(jobs_file)
@@ -142,7 +253,7 @@ def _check_path_consistency(cfg: shared_config.Config) -> list[CheckResult]:
 
     try:
         batch_sec = cfg.section("batch")
-    except (ConfigError, ValueError):
+    except ConfigError:
         batch_sec = {}
 
     exports_base_str = batch_sec.get("output_dir") or (
@@ -152,7 +263,7 @@ def _check_path_consistency(cfg: shared_config.Config) -> list[CheckResult]:
 
     try:
         enricher_sec = cfg.section("enricher")
-    except (ConfigError, ValueError):
+    except ConfigError:
         enricher_sec = {}
 
     enrich_videos_raw = enricher_sec.get("videos_dir")
@@ -170,12 +281,10 @@ def _check_path_consistency(cfg: shared_config.Config) -> list[CheckResult]:
     langs = cfg.langs()
 
     for lang_code in langs:
-        file_suffix = langs[lang_code].get("file_suffix", "")
-        expected_dir = (
-            exports_base.parent / f"{exports_base.name}{file_suffix}"
-            if file_suffix
-            else exports_base
-        )
+        # cfg.suffix_dir() — the same derivation exports_dir_for() uses on the
+        # real path, so the check compares against what will actually happen
+        # (M-51).
+        expected_dir = cfg.suffix_dir(exports_base, lang_code)
         if enrich_dir == expected_dir:
             results.append(
                 CheckResult(
@@ -200,7 +309,13 @@ def _check_path_consistency(cfg: shared_config.Config) -> list[CheckResult]:
 
 
 def _check_readable(path: Path, label: str) -> CheckResult:
-    """Return a CheckResult for a file path."""
+    """
+    Return a CheckResult for a file path.
+
+    A missing file is a warn, deliberately: on a fresh install seen.txt and
+    jobs.yaml legitimately do not exist yet — the first run creates them, so
+    failing hard here would make `mpt validate` useless out of the box.
+    """
     if not path.exists():
         return CheckResult(
             label,
@@ -216,14 +331,18 @@ def _check_readable(path: Path, label: str) -> CheckResult:
     return CheckResult(label, str(path), "ok")
 
 
-def _print_results(results: list[CheckResult]) -> None:
-    """Print all check results in a consolidated block."""
+def _print_results(results: list[CheckResult], title: str = "[validate]") -> None:
+    """Print all check results in a consolidated block.
+
+    `title` lets the pipeline reuse this printer for its own pre-flight block
+    without wearing the validate branding.
+    """
     if not results:
-        print("[validate] No checks to run.")
+        print(f"{title} No checks to run.")
         return
 
     print(f"\n{'-' * 60}")
-    print(f"[validate] {len(results)} check(s):")
+    print(f"{title} {len(results)} check(s):")
 
     for r in results:
         tag = {"ok": "[OK]", "warn": "[WARN]", "error": "[ERROR]"}.get(r.status, r.status)
@@ -242,10 +361,24 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=EPILOG,
     )
+    # --config lives here, NOT in add_arguments(): the root `mpt` parser adds
+    # its own --config on top of add_arguments() (with dest="stage_config"),
+    # and a second same-named option here would clash with it. Standalone
+    # `python -m mpt_autopilot.validate --config x` needs the flag — the EPILOG
+    # above has promised exactly that example since the beginning (M-57).
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Config file path (default: config.yaml)",
+    )
     return add_arguments(parser)
 
 
 def main() -> None:
+    # Give the root logger a handler before any stage runs (M-1).
+    configure_root()
     sys.exit(execute(build_parser().parse_args()))
 
 

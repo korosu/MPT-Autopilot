@@ -77,7 +77,7 @@ def test_retries_exhausted_raises(monkeypatch):
     # Always-transient error => retries cap out and raise.
     monkeypatch.setattr(
         "mpt_autopilot.uploader.uploader.subprocess.run",
-        lambda *a, **k: _completed(1, stderr="503 service unavailable"),
+        lambda *a, **k: _completed(1, stderr="serviceUnavailable, try again later"),
     )
     with pytest.raises(UploadFailed) as exc_info:
         upload_video(
@@ -88,7 +88,7 @@ def test_retries_exhausted_raises(monkeypatch):
             Path("t"),
             sleep=lambda *_: None,
         )
-    assert "503" in str(exc_info.value)
+    assert "serviceUnavailable" in str(exc_info.value)
 
 
 def test_empty_output_non_transient_fails_fast(monkeypatch):

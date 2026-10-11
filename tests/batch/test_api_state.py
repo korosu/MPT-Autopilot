@@ -9,6 +9,15 @@ import pytest
 # Test the state transition logic: PROCESSING (4) should continue, FAILED (-1) should raise
 
 
+def _settings() -> MagicMock:
+    return MagicMock(
+        api_url="http://localhost:8080",
+        max_wait_seconds=30,
+        stuck_threshold_seconds=60,
+        poll_interval_seconds=0,
+    )
+
+
 def test_wait_for_task_accepts_state_4_processing():
     """State 4 (PROCESSING) should continue polling, not raise RuntimeError.
 
@@ -18,12 +27,7 @@ def test_wait_for_task_accepts_state_4_processing():
     """
     from mpt_autopilot.batch.api import wait_for_task
 
-    # We need minimal settings for the test
-    settings = MagicMock(
-        api_url="http://localhost:8080",
-        max_wait_seconds=30,
-        stuck_threshold_seconds=60,
-    )
+    settings = _settings()
 
     log_calls = []
 
@@ -40,8 +44,10 @@ def test_wait_for_task_accepts_state_4_processing():
         MagicMock(json=lambda: {"data": {"progress": 100, "state": 1, "task_id": "test-123"}}),
     ]
 
-    with patch("mpt_autopilot.batch.api.httpx.get") as mock_get:
-        mock_get.side_effect = mock_responses
+    with patch("mpt_autopilot.batch.api.get_shared_client") as gsc:
+        client = MagicMock()
+        gsc.return_value = client
+        client.get.side_effect = mock_responses
         result = wait_for_task("test-task", settings, log=mock_log)
 
     assert result["progress"] == 100
@@ -52,26 +58,16 @@ def test_wait_for_task_raises_on_state_minus_1():
     """State -1 (FAILED) should raise RuntimeError."""
     from mpt_autopilot.batch.api import wait_for_task
 
-    settings = MagicMock(
-        api_url="http://localhost:8080",
-        max_wait_seconds=30,
-        stuck_threshold_seconds=60,
-    )
+    settings = _settings()
 
     mock_response = MagicMock(json=lambda: {"data": {"progress": 30, "state": -1}})
 
-    with patch("mpt_autopilot.batch.api.httpx.get") as mock_get:
-        mock_get.return_value = mock_response
+    with patch("mpt_autopilot.batch.api.get_shared_client") as gsc:
+        client = MagicMock()
+        gsc.return_value = client
+        client.get.return_value = mock_response
         with pytest.raises(RuntimeError, match="task failed.*state=-1"):
             wait_for_task("test-task", settings)
-
-
-def _settings() -> MagicMock:
-    return MagicMock(
-        api_url="http://localhost:8080",
-        max_wait_seconds=30,
-        stuck_threshold_seconds=60,
-    )
 
 
 def _respond(body: dict) -> MagicMock:
@@ -88,8 +84,10 @@ def test_wait_for_task_copes_with_string_progress():
     """
     from mpt_autopilot.batch.api import wait_for_task
 
-    with patch("mpt_autopilot.batch.api.httpx.get") as mock_get:
-        mock_get.side_effect = [
+    with patch("mpt_autopilot.batch.api.get_shared_client") as gsc:
+        client = MagicMock()
+        gsc.return_value = client
+        client.get.side_effect = [
             _respond({"progress": "50", "state": 4}),
             _respond({"progress": "100", "state": 1, "task_id": "t"}),
         ]
@@ -102,8 +100,10 @@ def test_wait_for_task_rejects_non_numeric_progress():
     """A non-numeric progress must name the field, not raise a bare TypeError."""
     from mpt_autopilot.batch.api import wait_for_task
 
-    with patch("mpt_autopilot.batch.api.httpx.get") as mock_get:
-        mock_get.return_value = _respond({"progress": "indeterminate", "state": 4})
+    with patch("mpt_autopilot.batch.api.get_shared_client") as gsc:
+        client = MagicMock()
+        gsc.return_value = client
+        client.get.return_value = _respond({"progress": "indeterminate", "state": 4})
         with pytest.raises(ValueError, match="progress"):
             wait_for_task("t", _settings())
 
@@ -118,8 +118,10 @@ def test_wait_for_task_fails_fast_on_string_state():
     settings = _settings()
     settings.max_wait_seconds = 2
 
-    with patch("mpt_autopilot.batch.api.httpx.get") as mock_get:
-        mock_get.return_value = _respond({"progress": 30, "state": "failed"})
+    with patch("mpt_autopilot.batch.api.get_shared_client") as gsc:
+        client = MagicMock()
+        gsc.return_value = client
+        client.get.return_value = _respond({"progress": 30, "state": "failed"})
         with pytest.raises(ValueError, match="state"):
             wait_for_task("t", settings)
 

@@ -18,6 +18,7 @@ from collections.abc import Callable
 
 import httpx
 
+from mpt_autopilot._http_utils import get_shared_client
 from mpt_autopilot.batch.settings import Settings
 
 _logger = logging.getLogger(__name__)
@@ -57,6 +58,55 @@ def validate_task_id(task_id: object) -> str:
     return task_id
 
 
+class PayloadRejected(Exception):
+    """
+    MPT answered 4xx to a submission (R6). A contract error is deterministic:
+    retrying the same payload just burns retry_delay per attempt — B-1 spent
+    3×180 s this way before dying on max_consecutive_failures. The batch
+    stage treats this as "do not retry".
+    """
+
+
+def _auth_headers(settings: Settings) -> dict[str, str]:
+    """
+    x-api-key when MPT is configured to require one (R6): its base controller
+    reads the header on every route, and without it a key-enabled MPT is
+    unusable from Autopilot at all. The secret comes from .env (MPT_API_KEY).
+    """
+    api_key = getattr(settings, "api_key", "")
+    if api_key:
+        return {"x-api-key": api_key}
+    return {}
+
+
+def _error_detail(response: httpx.Response) -> str:
+    """
+    Best-effort extraction of MPT's structured error body (R6).
+
+    MPT's validation handler answers 400 with the pydantic error list in
+    `data` and a short `message` (app/asgi.py) — naming the field turns a
+    bare HTTP code into a diagnosis (the exact B-1 experience, had this
+    existed then).
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return (response.text or "")[:300].replace("\n", " ")
+    if not isinstance(body, dict):
+        return str(body)[:300]
+    parts: list[str] = []
+    if body.get("message"):
+        parts.append(str(body["message"]))
+    data = body.get("data")
+    if isinstance(data, list):
+        for item in data[:5]:
+            if isinstance(item, dict):
+                parts.append(f"{item.get('loc')}: {item.get('msg')}")
+            else:
+                parts.append(str(item))
+    return "; ".join(parts) if parts else str(body)[:300]
+
+
 def health_check(settings: Settings) -> bool:
     """
     Quick GET to verify the MPT API is reachable and answering sanely.
@@ -68,9 +118,16 @@ def health_check(settings: Settings) -> bool:
     object at ``data.tasks``.
     """
     try:
-        r = httpx.get(f"{settings.api_url}/api/v1/tasks", timeout=10)
+        r = get_shared_client().get(
+            f"{settings.api_url}/api/v1/tasks", headers=_auth_headers(settings), timeout=10
+        )
         r.raise_for_status()
         body = r.json()
+        if not isinstance(body, dict):
+            # A gateway error page or a bare JSON array at the top level is not
+            # a task listing; body.get("data") on a list is an AttributeError
+            # that this function's except clauses do not catch.
+            return False
         data = body.get("data")
         # MPT wraps the list in {"data": {"tasks": [...], "total": N, ...}}.
         # Accept either shape so health_check doesn't reject a valid response.
@@ -86,12 +143,23 @@ def health_check(settings: Settings) -> bool:
 def submit_job(payload: dict, settings: Settings) -> str:
     """Submit a video generation job. Returns the task_id."""
     try:
-        r = httpx.post(f"{settings.api_url}/api/v1/videos", json=payload, timeout=60)
+        r = get_shared_client().post(
+            f"{settings.api_url}/api/v1/videos",
+            json=payload,
+            headers=_auth_headers(settings),
+            timeout=60,
+        )
         r.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        raise RuntimeError(
-            f"API rejected job submission (HTTP {exc.response.status_code}): {exc}"
-        ) from exc
+        status = exc.response.status_code
+        detail = _error_detail(exc.response)
+        if 400 <= status < 500 and status != 429:
+            # R6: a 4xx is our payload's fault, not a network blip — fail the
+            # job immediately with the server's own field-level detail.
+            raise PayloadRejected(f"MPT rejected the submission (HTTP {status}): {detail}") from exc
+        # 5xx and 429 stay retryable: the caller's retry loop exists for
+        # exactly this class of transient trouble.
+        raise RuntimeError(f"API rejected job submission (HTTP {status}): {detail or exc}") from exc
     try:
         task_id = r.json()["data"]["task_id"]
     except (KeyError, TypeError, ValueError) as exc:
@@ -133,12 +201,16 @@ def _as_int(value: object, field: str) -> int:
 def wait_for_task(
     task_id: str,
     settings: Settings,
-    log: Callable[[str], None] = print,
+    log: Callable[[str], None] | None = None,
 ) -> dict:
     """
     Poll until the task completes (progress == 100) or fails.
     Returns the full task data dict on success.
     Raises RuntimeError / TimeoutError on failure, stall, or broken progress.
+
+    `log` is optional; the batch run always passes its own line logger, but
+    callers that only want the result (tests, resume tooling) get silence
+    rather than accidental stdout writes.
     """
     start = time.time()
     last_progress = -1
@@ -156,7 +228,11 @@ def wait_for_task(
         data: dict | None = None
         for poll_attempt in range(_POLL_MAX_RETRIES + 1):
             try:
-                r = httpx.get(f"{settings.api_url}/api/v1/tasks/{task_id}", timeout=30)
+                r = get_shared_client().get(
+                    f"{settings.api_url}/api/v1/tasks/{task_id}",
+                    headers=_auth_headers(settings),
+                    timeout=30,
+                )
                 r.raise_for_status()
                 data = r.json()["data"]
                 break  # success
@@ -167,18 +243,23 @@ def wait_for_task(
                         f"{_POLL_MAX_RETRIES + 1} attempts: {exc}"
                     ) from exc
                 delay = _POLL_RETRY_BACKOFF_BASE * (2**poll_attempt)
-                log(
-                    f"  [{task_id}] polling error ({exc.__class__.__name__}), "
-                    f"retrying in {delay:.0f}s"
-                )
+                if log is not None:
+                    log(
+                        f"  [{task_id}] polling error ({exc.__class__.__name__}), "
+                        f"retrying in {delay:.0f}s"
+                    )
                 time.sleep(delay)
             except httpx.HTTPError as exc:
                 raise RuntimeError(f"API error while polling task: {exc}") from exc
 
-        assert data is not None, "polling loop exhausted without data"
+        if data is None:
+            # Unreachable: the inner loop either breaks with data or raises. A
+            # raise rather than an assert, which `python -O` would strip.
+            raise RuntimeError("polling loop exhausted without data")
         progress = _as_int(data.get("progress", 0), "progress")
         state = _as_int(data.get("state", 0), "state")
-        log(f"  [{task_id}] progress={progress}%")
+        if log is not None:
+            log(f"  [{task_id}] progress={progress}%")
 
         # Detect a broken task: progress reset to 0 after it had advanced
         if max_progress_seen > 0 and progress == 0:
@@ -191,7 +272,13 @@ def wait_for_task(
         # MPT states: -1=FAILED, 1=COMPLETE, 4=PROCESSING. Only -1 is terminal failure.
         # State 1 is alive until progress hits 100 (checked below).
         if state == -1:
-            raise RuntimeError(f"task failed (state={state})")
+            # TaskStatusData carries failed_stage/error; naming them turns a
+            # bare "task failed" into a diagnosis (R3).
+            stage = data.get("failed_stage")
+            error = data.get("error")
+            detail = f", stage={stage}" if stage else ""
+            detail += f", error={error}" if error else ""
+            raise RuntimeError(f"task failed (state={state}{detail})")
 
         if progress >= 100:
             return data
@@ -205,4 +292,4 @@ def wait_for_task(
                 f"progress stuck at {progress}% for over {settings.stuck_threshold_seconds}s"
             )
 
-        time.sleep(10)
+        time.sleep(settings.poll_interval_seconds)

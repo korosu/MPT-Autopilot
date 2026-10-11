@@ -26,6 +26,7 @@ from mpt_autopilot.enricher.postprocess import (
     platform_hard_limit,
     validate_and_filter,
 )
+from mpt_autopilot.enricher.reader import sanitise_topic
 from mpt_autopilot.enricher.settings import settings
 from mpt_autopilot.logger import Logger
 
@@ -42,9 +43,6 @@ _RETRY_MAX_DELAY = 20.0
 # 404s under load for a URL/model that succeeds on adjacent calls.
 _TRANSIENT_STATUS_CODES = frozenset({404, 500, 502, 503, 504})
 
-# ── Input limits ──────────────────────────────────────────────────────────────
-_MAX_TOPIC_LEN = 300
-
 # Default max_tokens for non-reasoning requests. When reasoning_enabled: true,
 # this is overridden per-request by settings.reasoning_max_tokens instead,
 # since hidden reasoning tokens are drawn from the same budget as the answer.
@@ -59,22 +57,6 @@ def _get_log() -> Logger:
     if _log is None:
         _log = Logger(settings.log_file, settings.max_log_size, name="mpt_autopilot.enricher")
     return _log
-
-
-def _is_printable(ch: str) -> bool:
-    """
-    str.isprintable() alone is too permissive: it returns True for VT (\x0b),
-    FF (\x0c) and CR (\x0d), which are control characters that must not reach
-    an LLM prompt. Whitespace is kept here (a multi-word topic is legitimate)
-    but normalised by the caller if needed.
-    """
-    return ch.isprintable() and ch not in "\x0b\x0c\x0d"
-
-
-def _sanitise_topic(raw: str) -> str:
-    """Truncate and strip non-printable characters from a user-supplied topic."""
-    cleaned = "".join(ch for ch in raw if _is_printable(ch))
-    return cleaned[:_MAX_TOPIC_LEN]
 
 
 def _check_https(url: str) -> None:
@@ -148,12 +130,23 @@ def _chat(prompt: str) -> str:
         log=lambda msg, *a: _get_log().warn(msg, *a),
     )
     data = response.json()
-    content = data["choices"][0]["message"].get("content") or ""
+    # A 200 with no choices (truncated, gateway-mangled, or an error body with
+    # a success status) must fail with a named error, not a bare KeyError /
+    # IndexError from the middle of parsing (M-38).
+    try:
+        choice = data["choices"][0]
+        message = choice["message"]
+        content = message.get("content") or ""
+    except (KeyError, IndexError, TypeError, AttributeError) as exc:
+        body_preview = str(data)[:300].replace("\n", " ")
+        _get_log().error("LLM response missing choices[0].message.content: %s", body_preview)
+        raise ValueError(
+            f"LLM response did not contain choices[0].message.content "
+            f"(response preview: {body_preview})"
+        ) from exc
     if not content:
-        finish_reason = data["choices"][0].get("finish_reason")
-        reasoning_preview = (data["choices"][0]["message"].get("reasoning_content") or "")[
-            :500
-        ].replace("\n", " ")
+        finish_reason = choice.get("finish_reason")
+        reasoning_preview = (message.get("reasoning_content") or "")[:500].replace("\n", " ")
         _get_log().error(
             f"Empty content (finish_reason={finish_reason}) — "
             f"reasoning_content preview: {reasoning_preview}"
@@ -175,7 +168,7 @@ def detect_language(text: str) -> str:
     Returns a language name string, e.g. "English", "Spanish".
     Falls back to "English" on any error.
     """
-    safe_text = _sanitise_topic(text)
+    safe_text = sanitise_topic(text)
     prompt = settings.prompt_detect_language.format(text=safe_text)
     try:
         result = _chat(prompt)
@@ -187,7 +180,7 @@ def detect_language(text: str) -> str:
 
 def generate_hashtags(topic: str, language: str, platform: str | None = None) -> list[str]:
     """Ask the LLM to generate hashtags for the given topic."""
-    safe_topic = _sanitise_topic(topic)
+    safe_topic = sanitise_topic(topic)
     effective_platform = platform or settings.platform
     excluded = _build_excluded_string()
 
@@ -210,7 +203,7 @@ def detect_and_generate(topic: str, platform: str | None = None) -> tuple[str, l
     Detect the language AND generate hashtags in a SINGLE API call.
     Preferred when language is not known in advance.
     """
-    safe_topic = _sanitise_topic(topic)
+    safe_topic = sanitise_topic(topic)
     effective_platform = platform or settings.platform
     excluded = _build_excluded_string()
 
@@ -252,6 +245,8 @@ def detect_and_generate(topic: str, platform: str | None = None) -> tuple[str, l
 def batch_generate_hashtags(
     topics: list[tuple[str, str]],
     platform: str,
+    *,
+    lang_override: str | None = None,
 ) -> list[dict]:
     """
     Generate hashtags for multiple videos in a single LLM call.
@@ -259,10 +254,16 @@ def batch_generate_hashtags(
     Args:
         topics:   List of (filename, topic_text) pairs.
         platform: Target platform name.
+        lang_override: The `--lang` flag. The batch prompt used to ignore it
+            and always ask the model to detect each video's language, so the
+            documented "force a specific language for all files" only worked
+            with --batch-size 1 (M-34).
 
     Returns:
         List of dicts with keys: filename, language, tags.
-        Each input entry must have exactly one result.
+        Each input entry must have exactly one result. Tags go through the
+        same _finalize_tags filters as the per-file path (M-33), so the
+        configured max_tags/banned/dedup rules apply in batch mode too.
 
     Raises:
         ValueError: if the LLM response is structurally invalid.
@@ -272,22 +273,82 @@ def batch_generate_hashtags(
 
     excluded = _build_excluded_string()
     video_lines = "\n".join(
-        f"{i + 1}. {_quote_fn(fn)} — topic: {_sanitise_topic(topic)}"
+        f"{i + 1}. {_quote_fn(fn)} — topic: {sanitise_topic(topic)}"
         for i, (fn, topic) in enumerate(topics)
     )
 
-    prompt = (
-        f"Generate hashtags for {len(topics)} videos. For each video, detect the "
-        f"language and produce 3–{settings.max_tags} platform-appropriate tags "
-        f"(max {settings.max_tag_length} chars each). "
-        f"Do NOT use any of these banned tags: {excluded}.\n\n"
-        f"VIDEOS:\n{video_lines}\n\n"
-        f"Respond as JSON ONLY: "
-        f'{{"results": [{{"filename": "...", "language": "...", "tags": ["#tag"]}}]}}'
+    # {language} is either the forced --lang value or an instruction to detect
+    # per video — both read naturally inside the configured prompt template,
+    # so one template serves both paths (B-10/R9.1).
+    language_phrase = lang_override or "the language of each video (you detect it)"
+    prompt = settings.prompt_batch.format(
+        count=len(topics),
+        videos=video_lines,
+        platform=platform,
+        language=language_phrase,
+        min_tags=settings.min_tags,
+        max_tags=settings.max_tags,
+        max_tag_length=settings.max_tag_length,
+        excluded_tags=excluded,
     )
 
     raw = _chat(prompt)
-    return _parse_batch_response(raw, len(topics))
+    results = _parse_batch_response(raw, [filename for filename, _topic in topics])
+    # Same quality budget as the per-file path: the prompt's max_tags is only
+    # text the model may ignore, the enforced limit is here (M-33).
+    for entry in results:
+        entry["tags"] = _finalize_tags(entry["tags"], platform=platform)
+    return results
+
+
+def generate_title_description(
+    topic: str,
+    script: str,
+    language: str,
+    platform: str,
+) -> dict[str, str]:
+    """
+    Ask the LLM for a clickable title and a short description (A-4/R2).
+
+    The sidecar's top level carries title/description for the uploader, which
+    until now only ever received a filename-derived lowercase slug and an
+    empty description. Both caps match the uploader's own constants, enforced
+    here so a chatty model cannot push the payload over YouTube's limits.
+    """
+    prompt = settings.prompt_title_description.format(
+        video_subject=sanitise_topic(topic),
+        script=script,
+        platform=platform,
+        language=language,
+    )
+    raw = _chat(prompt)
+    title, description = _parse_title_description(raw)
+    return {"title": title[:100].strip(), "description": description[:5000].strip()}
+
+
+def _parse_title_description(raw: str) -> tuple[str, str]:
+    """
+    Parse {"title": "...", "description": "..."} — fences tolerated, anything
+    else is a named error the per-video guard in run.py can show.
+    """
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        text = "\n".join(line for line in lines if not line.startswith("```")).strip()
+
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"Title/description response was not valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            f"Title/description response was {type(parsed).__name__}, expected a JSON object"
+        )
+    title = str(parsed.get("title", "")).strip()
+    description = str(parsed.get("description", "")).strip()
+    if not title:
+        raise ValueError("Title/description response had an empty 'title'")
+    return title, description
 
 
 def _quote_fn(fn: str) -> str:
@@ -298,12 +359,22 @@ def _quote_fn(fn: str) -> str:
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 
-def _parse_batch_response(raw: str, expected_count: int) -> list[dict]:
+def _parse_batch_response(raw: str, expected_filenames: list[str]) -> list[dict]:
     """
     Parse the LLM batch response and validate structure.
 
-    Returns a list of {"filename": str, "language": str, "tags": list[str]}.
-    Raises ValueError if the response is structurally invalid.
+    Returns a list of {"filename": str, "language": str, "tags": list[str]}
+    **in the order of expected_filenames**, not the order the model answered
+    in. The caller writes each result to a sidecar, so a reordered response
+    would otherwise write one video's hashtags into another's file — the
+    reason the prompt asks for a filename per entry at all.
+
+    A wrong result count is also raised here (M-35): run.py catches it and
+    redoes the chunk per file, so only the failed request's tokens are lost,
+    never the data.
+
+    Raises ValueError if the response is structurally invalid or does not
+    cover exactly the requested filenames.
     """
     text = raw.strip()
     if text.startswith("```"):
@@ -322,10 +393,12 @@ def _parse_batch_response(raw: str, expected_count: int) -> list[dict]:
     if not isinstance(results, list):
         raise ValueError(f"Batch LLM response has no 'results' list (got {type(results).__name__})")
 
-    if len(results) != expected_count:
-        raise ValueError(f"Batch LLM returned {len(results)} results, expected {expected_count}")
+    if len(results) != len(expected_filenames):
+        raise ValueError(
+            f"Batch LLM returned {len(results)} results, expected {len(expected_filenames)}"
+        )
 
-    cleaned: list[dict] = []
+    by_filename: dict[str, dict] = {}
     for entry in results:
         if not isinstance(entry, dict):
             raise ValueError(f"Batch entry is {type(entry).__name__}, expected object")
@@ -338,10 +411,20 @@ def _parse_batch_response(raw: str, expected_count: int) -> list[dict]:
             language = "English"
         if not isinstance(raw_tags, list):
             raw_tags = []
-        tags = _clean_tag_list(raw_tags)
-        cleaned.append({"filename": filename, "language": language, "tags": tags})
+        by_filename[filename] = {
+            "filename": filename,
+            "language": language,
+            "tags": _clean_tag_list(raw_tags),
+        }
 
-    return cleaned
+    missing = [name for name in expected_filenames if name not in by_filename]
+    if missing:
+        raise ValueError(
+            f"Batch LLM response does not cover {len(missing)} requested "
+            f"video(s), first missing: {missing[0]!r}"
+        )
+
+    return [by_filename[name] for name in expected_filenames]
 
 
 def _build_excluded_string() -> str:
@@ -361,14 +444,22 @@ def _finalize_tags(tags: list[str], platform: str | None = None) -> list[str]:
     Apply post-processing filters and merge always_include tags.
 
     Steps:
-      1. validate_and_filter — length, banned, dedup, hard_limit (with room
-         reserved for always_include)
+      1. validate_and_filter — length, banned, dedup (with room reserved for
+         always_include)
       2. Strip any always_include tags the LLM added anyway
       3. Prepend always_include in order
+
+    settings.max_tags is the enforced cap here, not just prompt text (M-33):
+    validate_tag_budget already guaranteed max_tags + always_include fits the
+    platform hard limit at startup (and run.py re-checks for --platform), so
+    min(max_tags, hard_limit - always_include) is the true content budget.
     """
     effective_platform = platform or settings.platform
     effective_hard_limit = platform_hard_limit(effective_platform)
-    content_tag_limit = max(effective_hard_limit - len(settings.always_include), 0)
+    content_tag_limit = min(
+        settings.max_tags,
+        max(effective_hard_limit - len(settings.always_include), 0),
+    )
 
     filtered = validate_and_filter(
         tags,
@@ -376,6 +467,15 @@ def _finalize_tags(tags: list[str], platform: str | None = None) -> list[str]:
         banned_tags=settings.banned_tags,
         hard_limit=content_tag_limit,
     )
+
+    if len(filtered) < settings.min_tags:
+        # Not fatal — the run continues with what the model produced — but
+        # the shortcoming must be visible, not silently written out (M-33).
+        _get_log().warn(
+            "LLM produced %d usable tag(s), below enricher.min_tags=%d",
+            len(filtered),
+            settings.min_tags,
+        )
 
     excluded_lower = {t.lower() for t in settings.always_include}
     filtered = [t for t in filtered if t.lower() not in excluded_lower]

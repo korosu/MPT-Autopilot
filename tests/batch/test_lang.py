@@ -57,6 +57,7 @@ def test_lang_suffix_applied_to_seen_and_output() -> None:
         log_max_bytes=10_000_000,
         max_wait_seconds=2400,
         stuck_threshold_seconds=3600,
+        poll_interval_seconds=10,
         max_retries=3,
         retry_delay_seconds=180,
         max_consecutive_failures=3,
@@ -94,6 +95,7 @@ def test_no_lang_suffix_when_lang_is_empty() -> None:
         log_max_bytes=10_000_000,
         max_wait_seconds=2400,
         stuck_threshold_seconds=3600,
+        poll_interval_seconds=10,
         max_retries=3,
         retry_delay_seconds=180,
         max_consecutive_failures=3,
@@ -168,3 +170,31 @@ def test_empty_suffix_leaves_the_seen_path_alone(tmp_path, capsys) -> None:
     out = capsys.readouterr().out
     assert str(seen) in out
     assert "bare_en.mp4" in out
+
+
+def test_seen_dir_absent_from_config_falls_back_to_the_config_directory(tmp_path, capsys) -> None:
+    """
+    With no seen_dir anywhere, the base must default to config.yaml's directory.
+
+    The fallback chain used to end in `cfg.path_value("paths", "seen_dir")`,
+    and "paths" is not a stage section — so this raised
+    ValueError("unknown config section 'paths'") instead of defaulting.
+    """
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "langs:\n"
+        "  en:\n"
+        '    file_suffix: ""\n'
+        "batch:\n"
+        "  api_url: http://127.0.0.1:8080\n"
+        "  mpt_storage: ./storage\n"
+        "  mpt_songs_dir: ./songs\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "seen.txt").write_text("fallback.mp4\n", encoding="utf-8")
+
+    assert batch_run.execute(_status_args(None), config) == 0
+
+    out = capsys.readouterr().out
+    assert str(tmp_path / "seen.txt") in out
+    assert "fallback.mp4" in out

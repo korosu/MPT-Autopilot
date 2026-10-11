@@ -45,7 +45,7 @@ def test_top_level_must_be_a_mapping(tmp_path):
 
 def test_unknown_section_name_is_a_programming_error(tmp_path):
     cfg = shared_config.load(_write(tmp_path, ""))
-    with pytest.raises(ValueError, match="unknown config section"):
+    with pytest.raises(ConfigError, match="unknown config section"):
         cfg.section("nosuchstage")
 
 

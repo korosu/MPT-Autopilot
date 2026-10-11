@@ -23,6 +23,43 @@ from mpt_autopilot.enricher.postprocess import PLATFORM_HARD_LIMITS, platform_ha
 SECTION = "enricher"
 
 
+def _as_tag_list(value: object, key: str) -> list[str]:
+    """
+    Normalise a tag-list config value: a bare string is wrapped (matching
+    batch/settings._as_platform_list), anything but a list is a named error,
+    and non-string entries are rejected rather than crashing later with an
+    AttributeError from .lower() (M-37).
+    """
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        raise ValueError(
+            f"config.yaml: enricher.{key} must be a list of tags "
+            f"(or a single tag), got {type(value).__name__}"
+        )
+    entries: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError(f"config.yaml: enricher.{key} entries must be strings, got {item!r}")
+        entries.append(item)
+    return entries
+
+
+def _as_bool(value: object, key: str) -> bool:
+    """
+    Coerce a config boolean. YAML gives native bools; a quoted "false" string
+    is truthy in Python and used to silently enable what the user disabled
+    (M-37). Anything else is a named error, matching reasoning_enabled above.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    raise ValueError(
+        f"config.yaml: enricher.{key} must be true or false (or omitted), got {value!r}"
+    )
+
+
 def _require_env(key: str) -> str:
     value = os.getenv(key)
     if not value:
@@ -84,7 +121,13 @@ class Settings:
         self.model: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
 
         # ── Platform ──────────────────────────────────────────────────────────
-        self.platform: str = cfg.get("platform", "youtube").lower()
+        raw_platform: object = cfg.get("platform", "youtube")
+        if not isinstance(raw_platform, str):
+            raise ValueError(
+                f"config.yaml: enricher.platform must be a string, "
+                f"got {type(raw_platform).__name__} {raw_platform!r}"
+            )
+        self.platform: str = raw_platform.lower()
         valid_platforms = set(PLATFORM_HARD_LIMITS.keys())
         if self.platform not in valid_platforms:
             raise ValueError(
@@ -122,11 +165,15 @@ class Settings:
                 f"config.yaml: enricher.max_tag_length ({self.max_tag_length}) must be at least 2."
             )
 
-        raw_banned: list[str] = cfg.get("banned_tags", [])
+        raw_banned = _as_tag_list(cfg.get("banned_tags", []), "banned_tags")
         self.banned_tags: frozenset[str] = frozenset(t.lower() for t in raw_banned)
 
         # ── Always-include tags ───────────────────────────────────────────────
-        self.always_include: list[str] = cfg.get("always_include", ["#shorts"])
+        # A scalar used to be taken as-is, and len("#shorts") == 7 silently
+        # inflated the tag budget math in validate_tag_budget (M-37).
+        self.always_include: list[str] = _as_tag_list(
+            cfg.get("always_include", ["#shorts"]), "always_include"
+        )
 
         # always_include is added by the code on top of max_tags-worth of LLM
         # content tags (never counted *within* min_tags/max_tags), so the two
@@ -139,10 +186,29 @@ class Settings:
         self.prompt_detect_and_generate: str = str(
             shared.require(SECTION, "prompt_detect_and_generate")
         )
+        # Batch mode (B-10/R9.1): used to be an inline string in llm.py with
+        # none of prompt_generate's quality rules — the more automation, the
+        # worse the tags. Now configurable like the other prompts.
+        self.prompt_batch: str = str(shared.require(SECTION, "prompt_batch"))
+
+        # ── Title/description generation (A-4/R2) ─────────────────────────────
+        # Off by default: it adds one LLM call per video, and existing setups
+        # must not start spending tokens silently. The prompt is required only
+        # when the feature is on.
+        self.generate_title_description: bool = _as_bool(
+            cfg.get("generate_title_description", False), "generate_title_description"
+        )
+        self.prompt_title_description: str = (
+            str(shared.require(SECTION, "prompt_title_description"))
+            if self.generate_title_description
+            else ""
+        )
 
         # ── Temperature support ───────────────────────────────────────────────
         # Set to false for reasoning models (o1, o3, o4-mini) that reject temperature.
-        self.supports_temperature: bool = cfg.get("supports_temperature", True)
+        self.supports_temperature: bool = _as_bool(
+            cfg.get("supports_temperature", True), "supports_temperature"
+        )
 
         # ── Reasoning ("thinking") support ──────────────────────────────────────
         # Controls the vLLM/SGLang/NVIDIA-NIM-style `chat_template_kwargs`
@@ -209,8 +275,7 @@ class Settings:
             )
 
         # ── Logging ───────────────────────────────────────────────────────────
-        log_dir = shared.path_value(SECTION, "log_dir", "./logs")
-        assert log_dir is not None  # a default was supplied
+        log_dir = shared.require_path(SECTION, "log_dir", "./logs")
         self.log_dir: Path = log_dir
         self.log_file: Path = self.log_dir / "enricher.log"
         self.max_log_size: int = int(cfg.get("log_max_mb", 5)) * 1024 * 1024
