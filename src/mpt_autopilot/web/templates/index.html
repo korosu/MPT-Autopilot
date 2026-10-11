@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MPT Autopilot</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+
+<header>
+  <h1>MPT Autopilot</h1>
+  <code class="config">{{ config_path }}</code>
+</header>
+
+<nav id="stages" aria-label="Stages"></nav>
+
+<main>
+  <form id="form" autocomplete="off">
+    <p id="stage-help" class="help"></p>
+    <div id="common" class="fields"></div>
+    <details id="advanced-box">
+      <summary>Дополнительно</summary>
+      <div id="advanced" class="fields"></div>
+    </details>
+    <div class="actions">
+      <button type="submit" id="run">Запустить</button>
+      <button type="button" id="cancel" hidden>Отменить</button>
+      <code id="preview" class="preview"></code>
+    </div>
+  </form>
+
+  <div id="banner" hidden></div>
+  <pre id="log" aria-live="polite"></pre>
+</main>
+
+<script id="page-spec" type="application/json">{{ page_spec | safe }}</script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
