@@ -9,22 +9,38 @@
 
 <header>
   <h1>MPT Autopilot</h1>
-  <code class="config">{{ config_path }}</code>
+  <code class="config" title="{{ config_path }}">{{ config_path }}</code>
+  <div id="status-strip">
+    <span id="run-state" data-state="idle">idle</span>
+    <span id="mpt-status" data-state="unknown">MPT API: checking…</span>
+  </div>
 </header>
 
 <nav id="stages" aria-label="Stages"></nav>
+
+<div id="pipeline-map" class="pipeline" aria-label="The pipeline"></div>
+
+<details id="how">
+  <summary>New here? How this page works</summary>
+  <p>Pick a stage tab, set its flags, press <strong>Run</strong> — the log streams live, and <strong>Cancel</strong> stops the run.</p>
+  <p><strong>refill → batch → enrich → upload</strong> is the pipeline; the <strong>run</strong> tab does all four in order.</p>
+  <p>One run at a time. A run you started in a terminal appears below the tabs, read-only.</p>
+  <p>The dots on the right show the current run's state and whether the MoneyPrinterTurbo API is answering.</p>
+</details>
+
+<section id="external-runs" hidden aria-label="Runs started outside this page"></section>
 
 <main>
   <form id="form" autocomplete="off">
     <p id="stage-help" class="help"></p>
     <div id="common" class="fields"></div>
     <details id="advanced-box">
-      <summary>Дополнительно</summary>
+      <summary>Advanced</summary>
       <div id="advanced" class="fields"></div>
     </details>
     <div class="actions">
-      <button type="submit" id="run">Запустить</button>
-      <button type="button" id="cancel" hidden>Отменить</button>
+      <button type="submit" id="run">Run</button>
+      <button type="button" id="cancel" hidden>Cancel</button>
       <code id="preview" class="preview"></code>
     </div>
   </form>
@@ -33,7 +49,7 @@
   <pre id="log" aria-live="polite"></pre>
 </main>
 
-<script id="page-spec" type="application/json">{{ page_spec | safe }}</script>
+<script id="page-spec" type="application/json">{{ page_spec | tojson }}</script>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

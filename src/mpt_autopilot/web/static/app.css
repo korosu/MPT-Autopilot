@@ -26,11 +26,56 @@ header {
   align-items: baseline;
   gap: 1rem;
   padding: 1.25rem 0 0.75rem;
+  flex-wrap: wrap;
 }
 
 h1 { margin: 0; font-size: 1.25rem; }
 
-.config { color: var(--muted); font-size: 0.85em; }
+.config {
+  color: var(--muted);
+  font-size: 0.85em;
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── status strip: run state + MPT health ─────────────────────────────────── */
+
+#status-strip {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+#run-state,
+#mpt-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+
+#run-state::before,
+#mpt-status::before {
+  content: "";
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+#run-state[data-state="running"]::before { background: var(--accent); }
+#run-state[data-state="ok"]::before { background: var(--ok); }
+#run-state[data-state="warn"]::before { background: var(--warn); }
+#run-state[data-state="bad"]::before { background: var(--bad); }
+
+#mpt-status[data-state="up"]::before { background: var(--ok); }
+#mpt-status[data-state="down"]::before { background: var(--bad); }
 
 /* ── stage tabs ─────────────────────────────────────────────────────────── */
 
@@ -59,6 +104,44 @@ nav button[aria-current="true"] {
 }
 
 nav button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ── pipeline map ─────────────────────────────────────────────────────────── */
+
+.pipeline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0.6rem 0 0;
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+.pipeline .arrow { padding: 0 0.1rem; }
+
+.pipeline button {
+  font: inherit;
+  padding: 0.15rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.pipeline button[aria-current="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+/* ── first-time help ──────────────────────────────────────────────────────── */
+
+details#how { margin: 0.6rem 0 0; color: var(--muted); font-size: 0.9em; }
+
+details#how summary { margin-bottom: 0.4rem; }
+
+details#how p { margin: 0.3rem 0; }
 
 /* ── form ───────────────────────────────────────────────────────────────── */
 
@@ -103,7 +186,26 @@ select {
   min-width: 0;
 }
 
-select[multiple] { min-height: 4.5rem; }
+/* Toggle chips: multi-choice flags (run --only/--skip, repeated --lang).
+   Clicking a chip selects it; clicking again deselects it. */
+.chips { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+
+.chip {
+  font: inherit;
+  font-size: 0.9em;
+  padding: 0.2rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.chip[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
 
 .optional-value { display: flex; align-items: center; gap: 0.4rem; }
 .optional-value input[type="text"] { flex: 1; }
@@ -158,6 +260,35 @@ summary { cursor: pointer; color: var(--muted); margin-bottom: 0.6rem; }
   border: 1px solid var(--line);
   border-radius: 5px;
   background: color-mix(in srgb, CanvasText 4%, Canvas);
+  font: 13px/1.45 ui-monospace, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── external runs (started in a terminal, read-only here) ───────────────── */
+
+#external-runs { margin: 0.75rem 0 0; }
+#external-runs[hidden] { display: none; }
+
+.external-run {
+  border: 1px solid var(--warn);
+  border-left-width: 3px;
+  border-radius: 5px;
+  padding: 0.45rem 0.8rem;
+  margin-bottom: 0.5rem;
+  background: color-mix(in srgb, var(--warn) 6%, Canvas);
+}
+
+.external-run summary {
+  cursor: pointer;
+  margin: 0;
+  color: inherit;
+}
+
+.external-tail {
+  margin: 0.5rem 0 0;
+  max-height: 18rem;
+  overflow: auto;
   font: 13px/1.45 ui-monospace, monospace;
   white-space: pre-wrap;
   word-break: break-word;

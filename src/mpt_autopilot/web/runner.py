@@ -37,6 +37,11 @@ from typing import Protocol
 # that a disconnected browser is noticed, long enough to stay quiet.
 KEEPALIVE_SECONDS = 15.0
 
+# W-7: SIGTERM is ignorable (a stuck ffmpeg or youtubeuploader child), and a
+# process that survives it would hold the run slot forever. Escalate to
+# SIGKILL after this grace period.
+KILL_ESCALATION_SECONDS = 10.0
+
 DEFAULT_BUFFER_LINES = 5000
 
 
@@ -69,6 +74,9 @@ class RunState:
     finished: bool = False
     exit_code: int | None = None
     cancelled: bool = False
+    # The child's OS pid, so callers can tell this run apart from an mpt
+    # process someone started in a terminal (external detection).
+    pid: int | None = None
 
 
 class RunnerBusy(RuntimeError):
@@ -123,6 +131,34 @@ def kill_tree(proc: ChildProcess) -> None:
         os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
     except (ProcessLookupError, PermissionError, OSError):
         proc.terminate()
+        return
+    # W-7: escalate from a daemon thread, so cancel() stays instant — the
+    # thread waits out the grace period, then checks whether the child lived.
+    threading.Thread(
+        target=_escalate_to_sigkill,
+        args=(proc,),
+        name=f"mpt-web-kill-{proc.pid}",
+        daemon=True,
+    ).start()
+
+
+def _escalate_to_sigkill(proc: ChildProcess) -> None:
+    """
+    SIGKILL the group if the child outlived the SIGTERM grace period (W-7).
+
+    POSIX only — Windows cancels with `taskkill /F`, which is already forceful.
+    The early return is also what lets type checkers resolve the POSIX-only
+    `os.getpgid` / `signal.SIGKILL` on every platform they analyse.
+    """
+    if sys.platform == "win32":
+        return
+    time.sleep(KILL_ESCALATION_SECONDS)
+    if proc.poll() is not None:
+        return  # it died of SIGTERM after all
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        proc.terminate()
 
 
 class Runner:
@@ -169,16 +205,32 @@ class Runner:
             self._lines.clear()
             self._last_line = 0
             self._proc = proc
-            state = RunState(run_id=self._run_id, stage=stage, started_at=time.time())
+            state = RunState(run_id=self._run_id, stage=stage, started_at=time.time(), pid=proc.pid)
             self._state = state
             self._cond.notify_all()
 
-        threading.Thread(
+        thread = threading.Thread(
             target=self._pump,
             args=(proc,),
             name=f"mpt-web-run-{state.run_id}",
             daemon=True,
-        ).start()
+        )
+        try:
+            thread.start()
+        except BaseException as exc:
+            # W-3: a failed thread start ("can't start new thread") used to
+            # leave the slot held forever with a state that never finished —
+            # every later start returned 409 and the child ran unattended.
+            # The child is killed, the run is closed out, and the caller gets
+            # an OSError, which app.py renders as a clean 500.
+            kill_tree(proc)
+            with self._cond:
+                if self._state is not None:
+                    self._state = replace(self._state, finished=True, exit_code=None)
+                self._proc = None
+                self._cond.notify_all()
+            self._slot.release()
+            raise OSError(f"could not start the run's reader thread: {exc}") from exc
         return state
 
     def cancel(self) -> bool:
@@ -253,7 +305,15 @@ class Runner:
         finally:
             with self._cond:
                 if self._state is not None:
-                    self._state = replace(self._state, finished=True, exit_code=code)
+                    # W-4: cancel() marks the run cancelled before the kill
+                    # lands. A child that had already exited 0 in that window
+                    # succeeded — reporting it as cancelled was a lie.
+                    self._state = replace(
+                        self._state,
+                        finished=True,
+                        exit_code=code,
+                        cancelled=self._state.cancelled and code != 0,
+                    )
                 self._proc = None
                 self._cond.notify_all()
             self._slot.release()

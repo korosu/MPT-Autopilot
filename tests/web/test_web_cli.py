@@ -220,3 +220,169 @@ def test_same_origin_posts_are_allowed(client):
         headers={"Origin": "http://localhost"},
     )
     assert response.status_code == 202
+
+
+# ── MPT health endpoint ───────────────────────────────────────────────────────
+
+
+def test_mpt_status_reports_not_configured_without_a_batch_section(client):
+    body = client.get("/api/mpt-status").get_json()
+    assert body["configured"] is False
+    assert body["up"] is False
+
+
+def test_mpt_status_probes_the_configured_api_url(tmp_path, monkeypatch):
+    from mpt_autopilot.web import status as status_mod
+    from mpt_autopilot.web.app import create_app
+
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "langs:\n  en:\n    label: English\nbatch:\n  api_url: http://127.0.0.1:8080\n",
+        encoding="utf-8",
+    )
+    cfg = shared_config.load(config, env_path=config, reload=True)
+    app = create_app(cfg, config, Runner(spawner=lambda argv: FakeProc(["x"])))
+    app.config.update(TESTING=True)
+
+    calls: list[str] = []
+
+    def fake_probe(api_url, timeout=status_mod.PROBE_TIMEOUT_SECONDS, transport=None):
+        calls.append(api_url)
+        return status_mod.MptStatus(True, True, 200, 7, api_url, "127.0.0.1:8080")
+
+    monkeypatch.setattr(status_mod, "probe", fake_probe)
+    body = app.test_client().get("/api/mpt-status").get_json()
+    assert calls == ["http://127.0.0.1:8080"]
+    assert body == {
+        "configured": True,
+        "up": True,
+        "status_code": 200,
+        "latency_ms": 7,
+        "api_url": "http://127.0.0.1:8080",
+        "host": "127.0.0.1:8080",
+    }
+
+
+# ── external runs (started outside this page) ─────────────────────────────────
+
+
+def _external_client(tmp_path: Path):
+    from mpt_autopilot.web.app import create_app
+
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "langs:\n  en:\n    label: English\nbatch:\n  log_file: ./logs/batch.log\n",
+        encoding="utf-8",
+    )
+    cfg = shared_config.load(config, env_path=config, reload=True)
+    app = create_app(cfg, config, Runner(spawner=lambda argv: FakeProc(["x"])))
+    app.config.update(TESTING=True)
+    return app.test_client()
+
+
+def test_external_endpoint_reports_a_terminal_run(tmp_path, monkeypatch):
+    from mpt_autopilot.web import external as external_mod
+
+    monkeypatch.setattr(
+        external_mod,
+        "psutil_records",
+        lambda: [external_mod.ProcRecord(pid=1234, cmdline=["mpt", "batch"], create_time=100.0)],
+    )
+    monkeypatch.setattr(external_mod, "fill_cwd", lambda runs: runs)
+
+    body = _external_client(tmp_path).get("/api/external").get_json()
+    assert body["scanner"] == "psutil"
+    assert body["runs"][0]["pid"] == 1234
+    assert body["runs"][0]["stage"] == "batch"
+    # The record names no config and cwd was stubbed away, so no log is shown.
+    assert body["runs"][0]["logs"] == []
+
+
+def test_external_endpoint_tails_the_log_of_a_matching_config(tmp_path, monkeypatch):
+    from mpt_autopilot.web import external as external_mod
+
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "batch.log").write_text("working\n", encoding="utf-8")
+    monkeypatch.setattr(
+        external_mod,
+        "psutil_records",
+        lambda: [
+            external_mod.ProcRecord(
+                pid=1234,
+                cmdline=["mpt", "batch", "--config", str(tmp_path / "config.yaml")],
+                create_time=100.0,
+            )
+        ],
+    )
+    monkeypatch.setattr(external_mod, "fill_cwd", lambda runs: runs)
+
+    body = _external_client(tmp_path).get("/api/external").get_json()
+    assert [log["name"] for log in body["runs"][0]["logs"]] == ["batch"]
+    assert body["runs"][0]["logs"][0]["tail"] == "working"
+
+
+def test_external_endpoint_without_psutil_is_honest(tmp_path, monkeypatch):
+    from mpt_autopilot.web import external as external_mod
+
+    monkeypatch.setattr(external_mod, "psutil_records", lambda: None)
+    assert _external_client(tmp_path).get("/api/external").get_json() == {
+        "scanner": "unavailable",
+        "runs": [],
+    }
+
+
+# ── audit findings W-1, W-2, W-5 ──────────────────────────────────────────────
+
+
+def test_dns_rebinding_hosts_are_refused(client):
+    """W-1: an attacker's domain resolving to 127.0.0.1 sends a Host+Origin
+    pair that matches itself — the origin comparison alone lets it through."""
+    response = client.post(
+        "/api/run",
+        json={"stage": "validate", "flags": {}},
+        headers={"Host": "evil.example:8765", "Origin": "http://evil.example:8765"},
+    )
+    assert response.status_code == 403
+
+
+def test_the_configured_bind_host_is_allowed(tmp_path):
+    from mpt_autopilot.web.app import create_app
+
+    config = tmp_path / "config.yaml"
+    config.write_text("langs:\n  en:\n    label: English\n", encoding="utf-8")
+    cfg = shared_config.load(config, env_path=config, reload=True)
+    app = create_app(cfg, config, Runner(spawner=lambda argv: FakeProc(["x"])), host="mpt.local")
+    app.config.update(TESTING=True)
+
+    response = app.test_client().post(
+        "/api/run",
+        json={"stage": "validate", "flags": {}},
+        headers={"Host": "mpt.local:9000"},
+    )
+    assert response.status_code == 202
+
+
+def test_a_label_cannot_break_out_of_the_spec_script(tmp_path):
+    """W-2: `| safe` let a `</script>` in any spec string close the tag and
+    inject markup; `| tojson` escapes it instead."""
+    from mpt_autopilot.web.app import create_app
+
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "langs:\n  en:\n    label: '</script><script>alert(1)</script>'\n",
+        encoding="utf-8",
+    )
+    cfg = shared_config.load(config, env_path=config, reload=True)
+    app = create_app(cfg, config, Runner(spawner=lambda argv: FakeProc(["x"])))
+    app.config.update(TESTING=True)
+
+    body = app.test_client().get("/").get_data(as_text=True)
+    payload = body.split('type="application/json">')[1].split("</script>")[0]
+    assert "<script>alert" not in payload
+    assert json.loads(payload)["langs"][0]["label"] == "</script><script>alert(1)</script>"
+
+
+def test_the_idle_status_payload_carries_started_at(client):
+    """W-5: docs/web.md promised the key on every response, idle included."""
+    body = client.get("/api/status").get_json()
+    assert body["started_at"] is None

@@ -19,6 +19,7 @@ resumes mid-run instead of starting from a blank pane.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -26,14 +27,24 @@ from urllib.parse import urlsplit
 from flask import Flask, Response, render_template, request
 
 from mpt_autopilot import config as shared_config
+from mpt_autopilot.web import external as external_mod
 from mpt_autopilot.web import spec as spec_mod
+from mpt_autopilot.web import status as status_mod
 from mpt_autopilot.web.argv import FormError, command_argv, flag_argv
+from mpt_autopilot.web.cli import DEFAULT_HOST
 from mpt_autopilot.web.runner import Runner, RunnerBusy, RunState
 
 
 def _state_payload(state: RunState | None) -> dict[str, object]:
     if state is None:
-        return {"busy": False, "run_id": None, "stage": None, "exit_code": None, "cancelled": False}
+        return {
+            "busy": False,
+            "run_id": None,
+            "stage": None,
+            "started_at": None,
+            "exit_code": None,
+            "cancelled": False,
+        }
     return {
         "busy": not state.finished,
         "run_id": state.run_id,
@@ -60,6 +71,7 @@ def create_app(
     cfg: shared_config.Config,
     config_path: Path | None = None,
     runner: Runner | None = None,
+    host: str = DEFAULT_HOST,
 ) -> Flask:
     app = Flask(__name__)
     runner = runner or Runner(cwd=cfg.dir)
@@ -70,10 +82,20 @@ def create_app(
     # would be re-resolved against the config's own directory and vanish.
     child_config = (config_path or cfg.path).resolve()
 
+    # The MPT health dot probes the same server a real render would use; a
+    # missing `batch:` section means the dot reports "not configured".
+    mpt_api_url = str(cfg.section("batch").get("api_url") or "") or None
+
+    # W-1: the Hosts this server answers. Loopback in every spelling, plus
+    # whatever --host was bound to. Without the check, DNS rebinding — an
+    # attacker's domain resolving to 127.0.0.1 — sends a Host+Origin pair
+    # that matches itself and slips past the origin comparison below.
+    allowed_hosts = {"127.0.0.1", "localhost", "::1", host.lower()}
+
     @app.before_request
     def _same_origin_only():
         """
-        Reject cross-site posts.
+        Reject cross-site posts and rebound hosts.
 
         There is no login here, so without this any page the user has open
         could POST to localhost and start an upload. A same-origin fetch sends
@@ -82,6 +104,10 @@ def create_app(
         origin = request.headers.get("Origin")
         if origin and urlsplit(origin).netloc != request.host:
             return Response("cross-origin requests are not accepted", status=403)
+        # request.host carries the port; urlsplit strips it and unwraps IPv6.
+        hostname = (urlsplit(f"//{request.host}").hostname or "").lower()
+        if hostname not in allowed_hosts:
+            return Response("requests to an unexpected host are refused", status=403)
         return None
 
     @app.get("/")
@@ -89,15 +115,54 @@ def create_app(
         return render_template(
             "index.html",
             config_path=str(cfg.path),
-            page_spec=json.dumps(
-                {**page_spec, "state": _state_payload(runner.state())}, ensure_ascii=False
-            ),
+            # | tojson in the template escapes <, >, & and ', so no spec
+            # string (argparse help, a config label) can close the script
+            # tag and inject markup (W-2).
+            page_spec={**page_spec, "state": _state_payload(runner.state())},
         )
 
     @app.get("/api/status")
     def status() -> Response:
         return Response(
             json.dumps(_state_payload(runner.state()), ensure_ascii=False),
+            mimetype="application/json",
+        )
+
+    @app.get("/api/mpt-status")
+    def mpt_status() -> Response:
+        # One probe per request on purpose: one user polls every ~15 s, so a
+        # cache would only make the dot lag behind reality.
+        return Response(
+            json.dumps(status_mod.probe(mpt_api_url).as_dict(), ensure_ascii=False),
+            mimetype="application/json",
+        )
+
+    @app.get("/api/external")
+    def external() -> Response:
+        # Read-only view of mpt runs started outside this page (a terminal, a
+        # cron job): which stage runs, its PID, and the tail of that stage's
+        # file log when the run provably uses this page's own config.
+        records = external_mod.psutil_records()
+        if records is None:
+            return Response(
+                json.dumps({"scanner": "unavailable", "runs": []}, ensure_ascii=False),
+                mimetype="application/json",
+            )
+        state = runner.state()
+        exclude: set[int] = set()
+        if state is not None and not state.finished and state.pid is not None:
+            exclude.add(state.pid)
+        runs = external_mod.fill_cwd(
+            external_mod.scan(records, exclude_pids=exclude, self_pid=os.getpid())
+        )
+        return Response(
+            json.dumps(
+                {
+                    "scanner": "psutil",
+                    "runs": [external_mod.run_payload(run, cfg, child_config) for run in runs],
+                },
+                ensure_ascii=False,
+            ),
             mimetype="application/json",
         )
 

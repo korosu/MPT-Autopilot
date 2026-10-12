@@ -105,7 +105,9 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
         print(f"[ERROR] {exc}")
         return 1
 
-    app = create_app(cfg, config_path)
+    # host is passed on so the page can answer its own --host (and only that)
+    # — see the Host allowlist in app.create_app (W-1).
+    app = create_app(cfg, config_path, host=args.host)
     url = f"http://{args.host}:{args.port}/"
     print(f"[web] serving {url} (config: {cfg.path})")
     print("[web] one run at a time, no authentication — Ctrl+C to stop")

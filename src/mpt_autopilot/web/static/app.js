@@ -19,6 +19,10 @@ const el = {
   preview: document.getElementById("preview"),
   banner: document.getElementById("banner"),
   log: document.getElementById("log"),
+  mptStatus: document.getElementById("mpt-status"),
+  externalRuns: document.getElementById("external-runs"),
+  runState: document.getElementById("run-state"),
+  pipeline: document.getElementById("pipeline-map"),
 };
 
 let current = STAGES[0];
@@ -55,7 +59,7 @@ function field(flag) {
     const text = document.createElement("input");
     text.type = "text";
     text.id = "f-" + flag.dest;
-    text.placeholder = "без значения";
+    text.placeholder = "no value";
     text.addEventListener("input", () => {
       if (text.value.trim()) row.querySelector("input[type=checkbox]").checked = true;
       refreshPreview();
@@ -77,12 +81,37 @@ function checkbox(flag) {
   return box;
 }
 
+function chips(flag) {
+  // A native <select multiple> was the whole bug: once a value was picked,
+  // the only way back was ctrl+click, and nobody finds that. Chips toggle
+  // by plain clicking — pick, unpick, no hidden modifier keys.
+  const box = document.createElement("div");
+  box.className = "chips";
+  const options = flag.kind === "lang"
+    ? LANGS.map((l) => [l.code, `${l.code} — ${l.label}`])
+    : flag.choices.map((c) => [c, c]);
+  for (const [value, text] of options) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "chip";
+    chip.textContent = text;
+    chip.dataset.value = value;
+    chip.setAttribute("aria-pressed", "false");
+    chip.addEventListener("click", () => {
+      chip.setAttribute("aria-pressed", String(chip.getAttribute("aria-pressed") !== "true"));
+      refreshPreview();
+    });
+    box.append(chip);
+  }
+  return box;
+}
+
 function control(flag) {
   if (flag.kind === "choice" || flag.kind === "lang") {
+    if (flag.multi) return chips(flag);
     const select = document.createElement("select");
     select.id = "f-" + flag.dest;
-    select.multiple = flag.multi;
-    if (!flag.multi) select.append(new Option("—", ""));
+    select.append(new Option("—", ""));
     const options = flag.kind === "lang"
       ? LANGS.map((l) => [l.code, `${l.code} — ${l.label}`])
       : flag.choices.map((c) => [c, c]);
@@ -95,7 +124,7 @@ function control(flag) {
   input.type = flag.kind === "int" ? "number" : "text";
   input.id = "f-" + flag.dest;
   if (flag.default) input.placeholder = flag.default;
-  if (flag.multi) input.placeholder = "через запятую";
+  if (flag.multi) input.placeholder = "comma-separated";
   input.addEventListener("input", refreshPreview);
   return input;
 }
@@ -116,6 +145,37 @@ function renderStage(stage) {
     button.setAttribute("aria-current", String(button.dataset.stage === stage.name));
   }
   refreshPreview();
+  renderPipelineMap();
+}
+
+// ── pipeline map ─────────────────────────────────────────────────────────────
+
+// The one place the page states the pipeline outright: refill → batch →
+// enrich → upload, the order pipeline.py enforces. Orientation, not
+// configuration — every flag control still comes from the argparse spec.
+
+const PIPELINE = ["refill", "batch", "enrich", "upload"];
+
+function renderPipelineMap() {
+  el.pipeline.replaceChildren();
+  PIPELINE.forEach((stage, index) => {
+    if (index > 0) {
+      const arrow = document.createElement("span");
+      arrow.className = "arrow";
+      arrow.textContent = "→";
+      el.pipeline.append(arrow);
+    }
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.textContent = stage;
+    const spec = STAGES.find((s) => s.name === stage);
+    chip.title = spec ? spec.help : stage;
+    chip.setAttribute("aria-current", String(stage === current.name));
+    chip.addEventListener("click", () => {
+      if (spec) renderStage(spec);
+    });
+    el.pipeline.append(chip);
+  });
 }
 
 // ── form → flags ────────────────────────────────────────────────────────────
@@ -138,13 +198,15 @@ function collect() {
       continue;
     }
 
-    const input = wrap.querySelector("input, select");
-    if (input.multiple) {
-      const picked = [...input.selectedOptions].map((o) => o.value).filter(Boolean);
+    const chipsBox = wrap.querySelector(".chips");
+    if (chipsBox) {
+      const picked = [...chipsBox.querySelectorAll(".chip[aria-pressed=true]")]
+        .map((chip) => chip.dataset.value);
       if (picked.length) flags[dest] = picked;
       continue;
     }
 
+    const input = wrap.querySelector("input, select");
     const value = input.value.trim();
     if (!value) continue;
     flags[dest] = flag.multi ? value.split(",").map((v) => v.trim()).filter(Boolean) : value;
@@ -175,6 +237,43 @@ function setBusy(busy) {
   for (const button of el.nav.children) button.disabled = busy;
 }
 
+// ── run-state strip: what the header dot is telling you ──────────────────────
+
+let runStage = null;
+let runStartedAt = null;
+let runClock = null;
+
+function setRunState(state, text) {
+  el.runState.dataset.state = state;
+  el.runState.textContent = text;
+}
+
+function formatElapsed(seconds) {
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return minutes ? `${minutes}m ${rest}s` : `${rest}s`;
+}
+
+function startRunClock(stage, startedAt) {
+  stopRunClock();
+  runStage = stage;
+  runStartedAt = startedAt;
+  tickRunClock();
+  runClock = setInterval(tickRunClock, 1000);
+}
+
+function stopRunClock() {
+  if (runClock) clearInterval(runClock);
+  runClock = null;
+  runStartedAt = null;
+}
+
+function tickRunClock() {
+  if (runStartedAt == null) return;
+  const seconds = Math.max(0, Math.round(Date.now() / 1000 - runStartedAt));
+  setRunState("running", `running: ${runStage} — ${formatElapsed(seconds)}`);
+}
+
 function banner(text, tone) {
   el.banner.textContent = text;
   el.banner.className = tone || "";
@@ -188,10 +287,10 @@ function append(line) {
 }
 
 function endTone(state) {
-  if (state.cancelled) return ["отменено", ""];
-  if (state.exit_code === 0) return [`${state.stage}: готово (код 0)`, "ok"];
-  if (state.exit_code === 2) return [`${state.stage}: остановлено по квоте (код 2)`, "warn"];
-  return [`${state.stage}: ошибка (код ${state.exit_code})`, "bad"];
+  if (state.cancelled) return ["cancelled", ""];
+  if (state.exit_code === 0) return [`${state.stage}: done (exit code 0)`, "ok"];
+  if (state.exit_code === 2) return [`${state.stage}: quota stop (exit code 2)`, "warn"];
+  return [`${state.stage}: failed (exit code ${state.exit_code})`, "bad"];
 }
 
 function watch(runId) {
@@ -208,14 +307,20 @@ function watch(runId) {
     stream.close();
     stream = null;
     setBusy(false);
-    banner(...endTone(state));
+    const seconds = runStartedAt != null ? Math.round(Date.now() / 1000 - runStartedAt) : null;
+    stopRunClock();
+    const [text, tone] = endTone(state);
+    setRunState(tone || "idle", text);
+    banner(seconds != null ? `${text} in ${formatElapsed(seconds)}` : text, tone);
   });
 
   stream.onerror = () => {
     if (stream && stream.readyState === EventSource.CLOSED) {
       stream = null;
       setBusy(false);
-      banner("соединение с сервером потеряно", "bad");
+      stopRunClock();
+      setRunState("idle", "run state unknown");
+      banner("lost connection to the server", "bad");
     }
   };
 }
@@ -228,27 +333,121 @@ el.form.addEventListener("submit", async (event) => {
   el.log.textContent = "";
   el.run.disabled = true;
 
-  const response = await fetch("/api/run", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ stage: current.name, flags: collect() }),
-  });
+  // W-6: a rejected fetch used to escape the handler right after disabling
+  // Run, leaving the page stuck until a reload.
+  let response;
+  try {
+    response = await fetch("/api/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stage: current.name, flags: collect() }),
+    });
+  } catch {
+    el.run.disabled = false;
+    banner("could not reach the server — is mpt web still running?", "bad");
+    return;
+  }
   const body = await response.json().catch(() => ({}));
 
   if (!response.ok) {
     el.run.disabled = false;
-    banner(body.error || `не удалось запустить (HTTP ${response.status})`, "bad");
+    banner(body.error || `could not start (HTTP ${response.status})`, "bad");
     return;
   }
   append(`$ mpt ${body.command.join(" ")}`);
+  startRunClock(current.name, Date.now() / 1000);
   watch(body.run_id);
 });
 
 el.cancel.addEventListener("click", async () => {
   el.cancel.disabled = true;
-  const response = await fetch("/api/cancel", { method: "POST" });
-  if (!response.ok) el.cancel.disabled = false;
+  // Same W-6 shape: whatever the network does, the button comes back unless
+  // the cancel itself was accepted (the end event re-enables it anyway).
+  try {
+    const response = await fetch("/api/cancel", { method: "POST" });
+    if (!response.ok) el.cancel.disabled = false;
+  } catch {
+    el.cancel.disabled = false;
+  }
 });
+
+// ── MPT status dot ──────────────────────────────────────────────────────────
+
+const MPT_POLL_SECONDS = 15;
+
+async function refreshMptStatus() {
+  let text = "MPT API: unknown";
+  let state = "unknown";
+  try {
+    const body = await (await fetch("/api/mpt-status")).json();
+    if (!body.configured) {
+      text = "MPT API: not configured";
+    } else if (body.up) {
+      // 200 = /ping answered "pong"; anything else still proves the server
+      // exists (e.g. a fork that guards /ping behind its API key).
+      state = "up";
+      text = body.status_code === 200
+        ? `MPT API: up (${body.host ?? "?"}${body.latency_ms != null ? `, ${body.latency_ms} ms` : ""})`
+        : `MPT API: reachable, HTTP ${body.status_code} (${body.host ?? "?"})`;
+    } else {
+      state = "down";
+      text = `MPT API: down (${body.host ?? "?"})`;
+    }
+  } catch {
+    // The mpt web server itself stopped answering; keep the grey dot.
+  }
+  el.mptStatus.dataset.state = state;
+  el.mptStatus.textContent = text;
+}
+
+// ── external runs (started in a terminal, not here) ──────────────────────────
+
+const EXTERNAL_POLL_SECONDS = 10;
+
+async function refreshExternalRuns() {
+  let runs = [];
+  try {
+    const body = await (await fetch("/api/external")).json();
+    runs = body.runs || [];
+  } catch {
+    return; // the web server itself stopped answering; keep what is shown
+  }
+  if (!runs.length) {
+    el.externalRuns.hidden = true;
+    el.externalRuns.replaceChildren();
+    return;
+  }
+  el.externalRuns.hidden = false;
+  el.externalRuns.replaceChildren(...runs.map(renderExternalRun));
+}
+
+function renderExternalRun(run) {
+  // Read-only by design: the run belongs to the terminal that started it, so
+  // this shows what it is doing instead of pretending it can be controlled.
+  const box = document.createElement("details");
+  box.className = "external-run";
+  const summary = document.createElement("summary");
+  const since = run.started
+    ? `, started ${new Date(run.started * 1000).toLocaleTimeString()}`
+    : "";
+  summary.textContent = `mpt ${run.command || run.stage} — PID ${run.pid}${since}`;
+  box.append(summary);
+  if (run.logs.length) {
+    for (const log of run.logs) {
+      const pre = document.createElement("pre");
+      pre.className = "external-tail";
+      pre.textContent = `── ${log.name} log ──\n${log.tail}`;
+      box.append(pre);
+    }
+  } else {
+    const note = document.createElement("p");
+    note.className = "help";
+    note.textContent =
+      "No live log: this stage keeps no file log, or it uses a different config.";
+    box.append(note);
+  }
+  return box;
+}
 
 // ── boot ────────────────────────────────────────────────────────────────────
 
@@ -263,10 +462,17 @@ for (const stage of STAGES) {
 
 renderStage(STAGES[0]);
 
+refreshMptStatus();
+setInterval(refreshMptStatus, MPT_POLL_SECONDS * 1000);
+
+refreshExternalRuns();
+setInterval(refreshExternalRuns, EXTERNAL_POLL_SECONDS * 1000);
+
 // A reload mid-run reattaches instead of showing an idle page.
 if (PAGE.state.busy) {
   const running = STAGES.find((s) => s.name === PAGE.state.stage);
   if (running) renderStage(running);
-  banner(`${PAGE.state.stage} уже выполняется — подключаюсь к логу`);
+  banner(`${PAGE.state.stage} is already running — attaching to its log`);
+  startRunClock(PAGE.state.stage, PAGE.state.started_at);
   watch(PAGE.state.run_id);
 }

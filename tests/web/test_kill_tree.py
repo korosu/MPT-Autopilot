@@ -41,8 +41,15 @@ def test_kill_tree_on_posix_signals_the_process_group(monkeypatch):
         lambda pgid, sig: kills.append((pgid, sig)),
         raising=False,
     )
+    # The SIGTERM branch now schedules a SIGKILL escalation thread (W-7). This
+    # child reports itself already dead, and the escalation's sleep is patched
+    # out, so the thread returns without a second signal — no lingering
+    # daemon and no unhandled thread exception in later tests.
+    monkeypatch.setattr("mpt_autopilot.web.runner.time.sleep", lambda seconds: None)
     proc = SimpleNamespace(
-        pid=99, terminate=lambda: (_ for _ in ()).throw(AssertionError("terminate before killpg"))
+        pid=99,
+        poll=lambda: 0,
+        terminate=lambda: (_ for _ in ()).throw(AssertionError("terminate before killpg")),
     )
 
     kill_tree(proc)  # type: ignore[arg-type]

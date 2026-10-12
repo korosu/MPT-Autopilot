@@ -1,6 +1,6 @@
 [project]
 name = "mpt-autopilot"
-version = "1.8.2"
+version = "1.9.0"
 description = "End-to-end automation for MoneyPrinterTurbo: idea generation, batch rendering, hashtag enrichment, and YouTube upload behind one `mpt` command"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -56,4 +56,6 @@ venv = ".venv"
 [project.optional-dependencies]
 dev = ["ruff>=0.15.20", "pytest>=8.0", "pyright>=1.1"]
 # `mpt web` only. Kept out of the core deps so the CLI stays four packages.
-web = ["flask>=3.0"]
+# psutil: the status page lists mpt processes started outside the browser
+# (stdlib has no cross-platform process enumeration).
+web = ["flask>=3.0", "psutil>=5.9"]
