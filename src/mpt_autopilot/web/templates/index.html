@@ -10,6 +10,10 @@
 <header>
   <h1>MPT Autopilot</h1>
   <code class="config" title="{{ config_path }}">{{ config_path }}</code>
+  <div class="header-actions">
+    <button type="button" id="fill-config" title="Fill every field this config.yaml provides a value for, and clear the rest">Fill from config</button>
+    <button type="button" id="reset-form" title="Clear every field back to the blank page state">Reset</button>
+  </div>
   <div id="status-strip">
     <span id="run-state" data-state="idle">idle</span>
     <span id="mpt-status" data-state="unknown">MPT API: checking…</span>
@@ -40,6 +44,8 @@
           <div id="advanced" class="fields"></div>
         </details>
         <div class="actions">
+          <button type="button" id="fill-stage" class="ghost" title="Fill this stage's fields from config.yaml, clear the rest">Fill from config</button>
+          <button type="button" id="reset-stage" class="ghost" title="Clear this stage's fields">Reset</button>
           <button type="submit" id="run">Run</button>
           <button type="button" id="cancel" hidden>Cancel</button>
           <code id="preview" class="preview"></code>

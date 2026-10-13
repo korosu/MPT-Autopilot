@@ -51,6 +51,28 @@ h1 { margin: 0; font-size: 1.25rem; }
   white-space: nowrap;
 }
 
+/* ── fill from config / reset ─────────────────────────────────────────────── */
+
+/* Quiet on purpose: the accent-filled Run button is the primary action, these
+   two only move existing values around. */
+
+.header-actions { display: flex; gap: 0.4rem; }
+
+.header-actions button,
+.actions button.ghost {
+  font: inherit;
+  font-size: 0.85em;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.header-actions button:hover,
+.actions button.ghost:hover { color: var(--fg); border-color: var(--accent); }
+
 /* ── status strip: run state + MPT health ─────────────────────────────────── */
 
 #status-strip {

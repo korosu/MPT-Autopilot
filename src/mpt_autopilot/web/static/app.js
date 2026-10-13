@@ -17,6 +17,10 @@ const el = {
   run: document.getElementById("run"),
   cancel: document.getElementById("cancel"),
   preview: document.getElementById("preview"),
+  fillConfig: document.getElementById("fill-config"),
+  resetForm: document.getElementById("reset-form"),
+  fillStage: document.getElementById("fill-stage"),
+  resetStage: document.getElementById("reset-stage"),
   banner: document.getElementById("banner"),
   log: document.getElementById("log"),
   mptStatus: document.getElementById("mpt-status"),
@@ -227,6 +231,91 @@ function refreshPreview() {
 function quote(value) {
   return /[\s"']/.test(value) ? JSON.stringify(value) : value;
 }
+
+// ── fill from config / reset ─────────────────────────────────────────────────
+
+// Two pairs of buttons, one behaviour: the pair in the header works on
+// whichever stage is open, the pair in the form's action row sits inside that
+// stage. "Fill" writes the values config.yaml implies (flag.config_default,
+// computed server-side — see web/config_defaults.py) and clears everything
+// else, so the result is exactly the stage as the config describes it, never
+// today's leftovers. "Reset" is the same pass with nothing to write, which
+// lands on the blank page state where each input's placeholder still shows the
+// argparse default.
+
+function applyValues(values) {
+  for (const wrap of el.form.querySelectorAll(".field")) {
+    const { dest, kind } = wrap.dataset;
+    if (Object.prototype.hasOwnProperty.call(values, dest)) {
+      setControl(wrap, kind, values[dest]);
+    } else {
+      clearControl(wrap, kind);
+    }
+  }
+  refreshPreview();
+}
+
+function setControl(wrap, kind, value) {
+  if (kind === "bool") {
+    wrap.querySelector("input").checked = /^(true|1|yes)$/i.test(String(value));
+    return;
+  }
+
+  if (kind === "optional_value") {
+    // Three states: absent (switch off), bare flag, flag with a value.
+    const box = wrap.querySelector("input[type=checkbox]");
+    const text = wrap.querySelector("input[type=text]");
+    box.checked = true;
+    text.value = value === true ? "" : String(value);
+    return;
+  }
+
+  const chipsBox = wrap.querySelector(".chips");
+  if (chipsBox) {
+    const picked = new Set(String(value).split(",").map((v) => v.trim()));
+    for (const chip of chipsBox.querySelectorAll(".chip")) {
+      chip.setAttribute("aria-pressed", String(picked.has(chip.dataset.value)));
+    }
+    return;
+  }
+
+  // A value the control cannot represent (a choice the config invented) leaves
+  // the select blank rather than inventing an option.
+  const input = wrap.querySelector("input, select");
+  input.value = String(value);
+}
+
+function clearControl(wrap, kind) {
+  if (kind === "bool" || kind === "optional_value") {
+    for (const box of wrap.querySelectorAll("input")) {
+      if (box.type === "checkbox") box.checked = false;
+      else box.value = "";
+    }
+    return;
+  }
+  for (const chip of wrap.querySelectorAll(".chip")) {
+    chip.setAttribute("aria-pressed", "false");
+  }
+  const input = wrap.querySelector("input, select");
+  if (input) input.value = "";
+}
+
+function fillFromConfig() {
+  const values = {};
+  for (const flag of current.flags) {
+    if (flag.config_default != null) values[flag.dest] = flag.config_default;
+  }
+  applyValues(values);
+}
+
+function resetFields() {
+  applyValues({});
+}
+
+el.fillConfig.addEventListener("click", fillFromConfig);
+el.fillStage.addEventListener("click", fillFromConfig);
+el.resetForm.addEventListener("click", resetFields);
+el.resetStage.addEventListener("click", resetFields);
 
 // ── run state ───────────────────────────────────────────────────────────────
 

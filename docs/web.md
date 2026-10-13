@@ -74,6 +74,19 @@ name (`English`, `ru`), not a `config.yaml` language code.
 
 A live preview under the buttons shows the exact command that will run.
 
+**Fill from config** (in the header, and again in the form's action row) writes
+into the open stage's fields the values your `config.yaml` implies for them,
+and clears the rest — the result is that stage exactly as the config describes
+it, never a mix with what was typed before. **Reset** is the same pass with
+nothing to write, which lands on the blank page state.
+
+Only keys the config actually sets are filled, and each is resolved the way the
+stage itself resolves it: the stage's own section first, then the shared
+`paths:` block, then the stage's own fallback (so `batch` shows
+`jobs_dir/jobs.yaml` when no `batch.jobs` is set). A key the config never
+sets leaves its field empty — the input's placeholder already shows the
+argparse default, so nothing is filled in twice.
+
 `batch` also takes a **video count** (`--limit N`): how many videos to generate
 before the run stops. Jobs already seen or disabled never consume the count, a
 video recovered from an interrupted run does, and whatever is left stays queued
@@ -220,6 +233,7 @@ browser                  Flask (threaded)              child process
 | Module | Responsibility |
 |---|---|
 | `web/spec.py` | argparse introspection → flag spec. Pure; loads no settings. |
+| `web/config_defaults.py` | config.yaml → the per-stage values "Fill from config" writes. Mirrors the stages' own resolution order; never raises. |
 | `web/argv.py` | form + spec → `list[str]`. The only place input becomes a command. |
 | `web/runner.py` | the run slot, the pipe reader, the line buffer, cancellation. |
 | `web/status.py` | the MPT `/ping` probe. Pure httpx; no Flask. |

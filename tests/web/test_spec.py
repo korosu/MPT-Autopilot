@@ -156,3 +156,26 @@ def test_as_dict_is_json_shaped():
     ]
     # Round-trips without a custom encoder: no tuples, no dataclasses, no Paths.
     assert json.loads(json.dumps(payload)) == payload
+
+
+def _flags_by_stage(payload: dict) -> dict[str, dict[str, dict]]:
+    stages = payload["stages"]
+    assert isinstance(stages, list)
+    return {s["name"]: {f["dest"]: f for f in s["flags"]} for s in stages}
+
+
+def test_as_dict_carries_the_config_defaults_onto_their_flags():
+    defaults = {"batch": {"jobs": "/tmp/jobs.yaml"}}
+    flags = _flags_by_stage(spec.as_dict(spec.stage_specs(), {}, defaults))
+
+    assert flags["batch"]["jobs"]["config_default"] == "/tmp/jobs.yaml"
+    # A stage with no entry, and a flag with no entry, both read as unfilled.
+    assert flags["batch"]["seen"]["config_default"] is None
+    assert flags["refill"]["lang"]["config_default"] is None
+
+
+def test_as_dict_without_defaults_leaves_every_flag_unfilled():
+    payload = spec.as_dict(spec.stage_specs(), {})
+    stages = payload["stages"]
+    assert isinstance(stages, list)
+    assert all(f["config_default"] is None for s in stages for f in s["flags"])

@@ -27,6 +27,7 @@ from urllib.parse import urlsplit
 from flask import Flask, Response, render_template, request
 
 from mpt_autopilot import config as shared_config
+from mpt_autopilot.web import config_defaults
 from mpt_autopilot.web import external as external_mod
 from mpt_autopilot.web import spec as spec_mod
 from mpt_autopilot.web import status as status_mod
@@ -76,7 +77,11 @@ def create_app(
     app = Flask(__name__)
     runner = runner or Runner(cwd=cfg.dir)
     specs = {s.name: s for s in spec_mod.stage_specs() if s.name != "web"}
-    page_spec = spec_mod.as_dict(list(specs.values()), cfg.langs())
+    # config_defaults answers "what would this config.yaml actually use" for
+    # the fields the form can fill from it; see web/config_defaults.py.
+    page_spec = spec_mod.as_dict(
+        list(specs.values()), cfg.langs(), config_defaults.stage_defaults(cfg)
+    )
 
     # Absolute, because the child runs with cwd=cfg.dir: a relative --config
     # would be re-resolved against the config's own directory and vanish.

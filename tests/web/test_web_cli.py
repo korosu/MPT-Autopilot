@@ -141,6 +141,45 @@ def test_web_does_not_offer_to_launch_itself(client):
     assert "web" not in {s["name"] for s in payload["stages"]}
 
 
+def test_the_page_offers_fill_from_config_and_reset(client):
+    """Both pairs: the header's (any stage) and the form's (this stage)."""
+    body = client.get("/").get_data(as_text=True)
+    for button_id in ("fill-config", "reset-form", "fill-stage", "reset-stage"):
+        assert f'id="{button_id}"' in body, button_id
+
+
+def test_the_page_carries_the_config_defaults(tmp_path):
+    """
+    "Fill from config" reads flag.config_default, computed server-side from
+    config.yaml — so the page has to ship the values, not the button.
+    """
+    from mpt_autopilot.web.app import create_app
+
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "langs:\n"
+        "  en:\n"
+        "    label: English\n"
+        "paths:\n"
+        "  jobs_dir: ./jobs\n"
+        "enricher:\n"
+        "  platform: tiktok\n",
+        encoding="utf-8",
+    )
+    cfg = shared_config.load(config, env_path=config, reload=True)
+    app = create_app(cfg, config, Runner(spawner=lambda argv: FakeProc(["x"])))
+    app.config.update(TESTING=True)
+
+    body = app.test_client().get("/").get_data(as_text=True)
+    payload = json.loads(body.split('type="application/json">')[1].split("</script>")[0])
+    flags = {s["name"]: {f["dest"]: f for f in s["flags"]} for s in payload["stages"]}
+
+    assert flags["batch"]["jobs"]["config_default"] == str(tmp_path / "jobs" / "jobs.yaml")
+    assert flags["enrich"]["platform"]["config_default"] == "tiktok"
+    # A flag the config says nothing about stays unfilled.
+    assert flags["batch"]["limit"]["config_default"] is None
+
+
 def test_an_invalid_form_is_rejected_before_anything_starts(client):
     response = client.post("/api/run", json={"stage": "refill", "flags": {}})
     assert response.status_code == 400

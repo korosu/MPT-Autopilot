@@ -221,8 +221,16 @@ def stage_specs() -> tuple[StageSpec, ...]:
 def as_dict(
     specs: Sequence[StageSpec],
     langs: Mapping[str, Mapping[str, object]],
+    defaults: Mapping[str, Mapping[str, str]] | None = None,
 ) -> dict[str, object]:
-    """The JSON the page renders its controls from."""
+    """
+    The JSON the page renders its controls from.
+
+    `defaults` maps stage → flag dest → the value config.yaml implies for that
+    flag; it is what "Fill from config" writes into the fields (see
+    web/config_defaults.py). Omitted — the spec tests build the page's shape
+    with no config at all — every flag simply carries None.
+    """
     return {
         "langs": [
             {"code": code, "label": str(entry.get("label", code))} for code, entry in langs.items()
@@ -240,6 +248,7 @@ def as_dict(
                         "required": flag.required,
                         "choices": list(flag.choices) if flag.choices else None,
                         "default": flag.default,
+                        "config_default": (defaults or {}).get(spec.name, {}).get(flag.dest),
                         "help": flag.help,
                         "advanced": flag.advanced,
                     }
