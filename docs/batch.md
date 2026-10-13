@@ -116,7 +116,8 @@ installed console script being on `PATH`.
 | `--jobs PATH` | Jobs file path. Default: `batch.jobs` from `config.yaml`, else `jobs.yaml` (or `jobs_<suffix>.yaml` with `--lang`) inside `batch.jobs_dir` / `paths.jobs_dir`, else the current directory. |
 | `--lang CODE` | A key from the shared `langs:` section. Derives the jobs file, the seen file, and the output directory from that language's `file_suffix` — `--lang es` → `jobs_es.yaml`, `seen_es.txt`, `exports_es/`. The derived seen file takes its *name* from `batch.seen_file` but is looked for **beside `config.yaml`**; pass `--seen` explicitly if yours lives in a subdirectory. |
 | `--seen PATH` | Override `batch.seen_file` (e.g. `--seen seen_es.txt`). A relative path resolves against `config.yaml`'s directory. |
-| `--dry-run` | Preview which jobs would run, and validate every voice alias, without generating anything. |
+| `--dry-run` | Preview which jobs would run, and validate every voice alias, without generating anything. With `--limit N` the preview marks the jobs past the cap. |
+| `--limit N` | Stop after N videos are generated this run. Already-seen and disabled jobs never consume the count; a video recovered from an interrupted run does. Whatever is left stays queued for the next run — the summary prints how many. Default: no limit. |
 | `--status` | Print the seen registry path, its entry count, and every registered filename, then exit. |
 | `--list-voices [FILTER]` | List voice aliases (all bundled Edge TTS voices plus your `batch.voices:` presets) and exit. Optional substring filter. |
 | `--list-bgm [FILTER]` | List `.mp3` files in MoneyPrinterTurbo's `resource/songs/` and exit. Optional filename-substring filter. |

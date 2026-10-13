@@ -126,8 +126,16 @@ def test_choice_flags_carry_their_choices():
 def test_advanced_split_keeps_the_everyday_flags_up_front():
     stage = _spec("batch")
     everyday = {f.dest for f in stage.flags if not f.advanced}
-    assert everyday == {"lang", "dry_run"}
+    assert everyday == {"lang", "dry_run", "limit"}
     assert {"jobs", "seen", "status", "list_voices"} <= {f.dest for f in stage.flags if f.advanced}
+
+
+def test_batch_limit_flag_is_an_int_on_the_form():
+    stage = _spec("batch")
+    limit = stage.flag("limit")
+    assert limit is not None
+    assert limit.kind == "int"
+    assert limit.advanced is False
 
 
 def test_required_group_members_are_never_hidden():

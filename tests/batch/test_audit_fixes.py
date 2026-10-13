@@ -164,6 +164,7 @@ def _run_settings(tmp_path: Path) -> SimpleNamespace:
         upload_post_enabled=False,
         cache_cleanup_enabled=False,
         cache_cleanup_interval=0,
+        audio_normalize=False,
         max_consecutive_failures=3,
         telegram_token="",
         telegram_chat_id="",
@@ -206,6 +207,218 @@ def test_dry_run_reports_job_without_output_file(tmp_path: Path, capsys):
     )
     assert code == 0
     assert "error     broken - no output_file" in capsys.readouterr().out
+
+
+# ── --limit (generate at most N videos this run) ─────────────────────────────
+
+
+def _limit_jobs(tmp_path: Path, count: int) -> Path:
+    jobs_path = tmp_path / "jobs.yaml"
+    lines = ["jobs:"]
+    for i in range(1, count + 1):
+        lines += [
+            f"  - name: job{i}",
+            f"    output_file: video{i}.mp4",
+            "    enabled: true",
+        ]
+    jobs_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return jobs_path
+
+
+def test_limit_rejects_values_below_one(tmp_path: Path, capsys):
+    """argparse's type=int proves only wholeness; 0 or -1 would turn the run
+    into a silent no-op with a cheerful summary."""
+    code = run(
+        _limit_jobs(tmp_path, 2),
+        _run_settings(tmp_path),  # type: ignore[arg-type]
+        dry_run=False,
+        seen_override=tmp_path / "seen.txt",
+        limit=0,
+    )
+    assert code == 1
+    assert "must be 1 or greater" in capsys.readouterr().out
+
+
+def test_limit_stops_the_main_loop_after_n_successes(tmp_path: Path, monkeypatch):
+    """Jobs past the cap must not be attempted at all — not even submitted
+    and failed — or the run would burn API quota the user never approved."""
+    jobs_path = _limit_jobs(tmp_path, 5)
+
+    produced: list[str] = []
+
+    def fake_run_job(job, *args, **kwargs):
+        produced.append(job["name"])
+        return True
+
+    with patch("mpt_autopilot.batch.run.health_check", return_value=True):
+        with patch("mpt_autopilot.batch.run.notify.alert"):
+            with patch("mpt_autopilot.batch.run.run_job", side_effect=fake_run_job):
+                code = run(
+                    jobs_path,
+                    _run_settings(tmp_path),  # type: ignore[arg-type]
+                    dry_run=False,
+                    seen_override=tmp_path / "seen.txt",
+                    limit=2,
+                )
+
+    assert code == 0
+    assert produced == ["job1", "job2"]
+
+
+def test_limit_marks_the_unattempted_jobs_in_the_summary(tmp_path: Path, capsys):
+    jobs_path = _limit_jobs(tmp_path, 4)
+
+    with patch("mpt_autopilot.batch.run.health_check", return_value=True):
+        with patch("mpt_autopilot.batch.run.notify.alert"):
+            with patch("mpt_autopilot.batch.run.run_job", return_value=True):
+                code = run(
+                    jobs_path,
+                    _run_settings(tmp_path),  # type: ignore[arg-type]
+                    dry_run=False,
+                    seen_override=tmp_path / "seen.txt",
+                    limit=1,
+                )
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "limit: 1 video(s) generated — 3 job(s) left for the next run" in out
+    # _print_summary counts skipped entries by design (names only for ok/failed);
+    # the count is the user-visible trace of the jobs left behind.
+    assert "skipped=3" in out
+
+
+def test_limit_preview_counts_only_runnable_jobs(tmp_path: Path, capsys):
+    """The dry-run preview must honour --limit the same way the real run
+    does, and its "(only K available)" line counts what would actually run."""
+    jobs_path = tmp_path / "jobs.yaml"
+    jobs_path.write_text(
+        # Not "on"/"off" — YAML 1.1 parses those as booleans (the assertion
+        # below once compared against the string True).
+        "jobs:\n"
+        "  - name: runnable\n    output_file: a.mp4\n    enabled: true\n"
+        "  - name: turned_off\n    output_file: b.mp4\n    enabled: false\n"
+        "  - name: seen\n    output_file: c.mp4\n    enabled: true\n",
+        encoding="utf-8",
+    )
+    seen_path = tmp_path / "seen.txt"
+    seen_path.write_text("c.mp4\n", encoding="utf-8")
+
+    code = run(
+        jobs_path,
+        _run_settings(tmp_path),  # type: ignore[arg-type]
+        dry_run=True,
+        seen_override=seen_path,
+        limit=5,
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "run       runnable" in out
+    assert "skipped" not in out  # never reached the cap
+    assert "(--limit 5: only 1 job(s) available)" in out
+
+
+def test_limit_preview_marks_jobs_past_the_cap(tmp_path: Path, capsys):
+    jobs_path = _limit_jobs(tmp_path, 3)
+
+    code = run(
+        jobs_path,
+        _run_settings(tmp_path),  # type: ignore[arg-type]
+        dry_run=True,
+        seen_override=tmp_path / "seen.txt",
+        limit=2,
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "run       job1" in out
+    assert "run       job2" in out
+    assert "skipped   job3 (--limit reached)" in out
+
+
+def test_limit_counts_resumed_videos(tmp_path: Path, capsys):
+    """A resumed in-progress task produces a video, so it consumes the cap:
+    limit=1 with one resumable task must not also submit a fresh job."""
+    jobs_path = _limit_jobs(tmp_path, 3)
+
+    submitted: list[str] = []
+    task_data = {"status": "completed", "video_url": "http://x/v.mp4"}
+
+    def fake_copy_result(_data, pending_file, _settings):
+        out = tmp_path / "exports" / pending_file
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x")
+        return out, out
+
+    def fake_run_job(job, *args, **kwargs):
+        submitted.append(job["name"])
+        return True
+
+    with patch("mpt_autopilot.batch.run.health_check", return_value=True):
+        with patch("mpt_autopilot.batch.run.notify.alert"):
+            with patch(
+                "mpt_autopilot.batch.run.state.list_all",
+                return_value=[{"output_file": "video1.mp4", "task_id": "task-1", "lang": "en"}],
+            ):
+                with patch("mpt_autopilot.batch.run.wait_for_task", return_value=task_data):
+                    with patch("mpt_autopilot.batch.run.cleanup_task"):
+                        with patch(
+                            "mpt_autopilot.batch.run.copy_result", side_effect=fake_copy_result
+                        ):
+                            with patch("mpt_autopilot.batch.run.run_job", side_effect=fake_run_job):
+                                code = run(
+                                    jobs_path,
+                                    _run_settings(tmp_path),  # type: ignore[arg-type]
+                                    dry_run=False,
+                                    seen_override=tmp_path / "seen.txt",
+                                    limit=1,
+                                )
+
+    assert code == 0
+    assert submitted == []  # the resume consumed the single allowed video
+    # The main loop announces the exhausted budget (the resume-branch message
+    # only fires when there are more pending tasks than the cap — covered by
+    # the next test).
+    assert "limit: 1 video(s) generated" in capsys.readouterr().out
+
+
+def test_limit_leaves_extra_resumes_for_the_next_run(tmp_path: Path, capsys):
+    """With 2 resumable tasks and limit=1, the second must stay in the registry
+    for the next run — not be dropped, and not be re-submitted."""
+    jobs_path = _limit_jobs(tmp_path, 3)
+    task_data = {"status": "completed", "video_url": "http://x/v.mp4"}
+
+    def fake_copy_result(_data, pending_file, _settings):
+        out = tmp_path / "exports" / pending_file
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x")
+        return out, out
+
+    entries = [
+        {"output_file": "video1.mp4", "task_id": "t1", "lang": "en"},
+        {"output_file": "video2.mp4", "task_id": "t2", "lang": "en"},
+    ]
+
+    with patch("mpt_autopilot.batch.run.health_check", return_value=True):
+        with patch("mpt_autopilot.batch.run.notify.alert"):
+            with patch("mpt_autopilot.batch.run.state.list_all", return_value=entries):
+                with patch("mpt_autopilot.batch.run.wait_for_task", return_value=task_data):
+                    with patch("mpt_autopilot.batch.run.cleanup_task"):
+                        with patch(
+                            "mpt_autopilot.batch.run.copy_result", side_effect=fake_copy_result
+                        ):
+                            with patch("mpt_autopilot.batch.run.run_job", return_value=True):
+                                code = run(
+                                    jobs_path,
+                                    _run_settings(tmp_path),  # type: ignore[arg-type]
+                                    dry_run=False,
+                                    seen_override=tmp_path / "seen.txt",
+                                    limit=1,
+                                )
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "resumed and done: video1.mp4" in out
+    assert "limit: 1 video(s) already produced by resume — 1 task(s) left for the next run" in out
+    assert "video2.mp4" not in out.split("limit:")[0]  # second resume never started
 
 
 # ── log() through the shared Logger (M-31) ───────────────────────────────────

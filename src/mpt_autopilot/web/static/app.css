@@ -15,11 +15,22 @@
 body {
   margin: 0;
   padding: 0 1.5rem 3rem;
-  max-width: 68rem;
   font: 15px/1.5 system-ui, sans-serif;
   color: var(--fg);
   background: var(--bg);
 }
+
+/* Two columns: a fixed stage sidebar and a fluid content area. No max-width —
+   the page used to cap itself at 68rem, which left the right half of a wide
+   window empty while the log crammed into a narrow column. */
+.layout {
+  display: grid;
+  grid-template-columns: 11rem minmax(0, 1fr);
+  gap: 0 1.5rem;
+  align-items: start;
+}
+
+.content { min-width: 0; }
 
 header {
   display: flex;
@@ -77,33 +88,38 @@ h1 { margin: 0; font-size: 1.25rem; }
 #mpt-status[data-state="up"]::before { background: var(--ok); }
 #mpt-status[data-state="down"]::before { background: var(--bad); }
 
-/* ── stage tabs ─────────────────────────────────────────────────────────── */
+/* ── stages sidebar ─────────────────────────────────────────────────────────── */
 
-nav {
+/* Vertical buttons: eight stages in a horizontal bar became a wall of text
+   that pushed the log below the fold; as a rail they read as a list of
+   choices and stay out of the log's way. */
+nav#stages {
+  position: sticky;
+  top: 1rem;
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 0.6rem;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding-top: 1.25rem;
 }
 
-nav button {
+nav#stages button {
   font: inherit;
+  text-align: left;
   padding: 0.35rem 0.8rem;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: 0.5rem;
   background: transparent;
   color: inherit;
   cursor: pointer;
 }
 
-nav button[aria-current="true"] {
+nav#stages button[aria-current="true"] {
   background: var(--accent);
   border-color: var(--accent);
   color: white;
 }
 
-nav button:disabled { opacity: 0.45; cursor: not-allowed; }
+nav#stages button:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* ── pipeline map ─────────────────────────────────────────────────────────── */
 
@@ -292,4 +308,27 @@ summary { cursor: pointer; color: var(--muted); margin-bottom: 0.6rem; }
   font: 13px/1.45 ui-monospace, monospace;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ── narrow screens ─────────────────────────────────────────────────────────── */
+
+/* Below the sidebar's resting width, collapse it to a horizontal strip so the
+   content gets the full width again instead of squeezing into a 2rem column. */
+@media (max-width: 40rem) {
+  body { padding: 0 1rem 2rem; }
+
+  .layout {
+    display: block;
+  }
+
+  nav#stages {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding-top: 0.5rem;
+  }
+
+  nav#stages button { width: auto; }
+
+  #log { min-height: 12rem; }
 }

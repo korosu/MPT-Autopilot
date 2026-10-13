@@ -49,8 +49,10 @@ _ACTION_BEHAVIOURS: dict[str, str] = {
 _SKIP_DESTS = frozenset({"stage_config", "help", "version"})
 
 # Flags shown up front; everything else goes under "Advanced". Presentation
-# only — the spec itself still carries every flag.
-COMMON_DESTS = frozenset({"lang", "langs", "all_langs", "dry_run", "force"})
+# only — the spec itself still carries every flag. `limit` is here because
+# "how many videos right now" is the dial people reach for most, not a
+# specialist setting.
+COMMON_DESTS = frozenset({"lang", "langs", "all_langs", "dry_run", "force", "limit"})
 
 # Stages whose `--lang` means "a key in config.yaml's langs:" and can therefore
 # be a picker. `mpt enrich --lang` uses metavar LANGUAGE for a free-text LLM

@@ -209,6 +209,61 @@ def test_enrich_stage_args_carry_every_field_enricher_reads(tmp_path):
         assert field in passed
 
 
+def test_batch_limit_reaches_batch_through_a_dedicated_flag():
+    """`mpt run --batch-limit N` must cap generation; `--limit` stays the
+    uploader's flag. pipeline._run_batch builds its Namespace by hand, so the
+    wiring is only proven by capturing what batch.execute() receives.
+    """
+    from mpt_autopilot.batch import run as batch_run
+
+    captured: dict = {}
+
+    def fake_execute(stage_args, config_path):
+        captured["limit"] = stage_args.limit
+        return 0
+
+    original_execute = batch_run.execute
+    batch_run.execute = fake_execute
+    try:
+        code = pipeline._run_batch("en", None, argparse.Namespace(dry_run=False, batch_limit=3))
+    finally:
+        batch_run.execute = original_execute
+
+    assert code == 0
+    assert captured["limit"] == 3
+
+
+def test_batch_limit_defaults_to_none_for_hand_built_namespaces():
+    """Namespaces that predate --batch-limit (older callers, tests) must not
+    crash _run_batch — getattr keeps the field optional.
+    """
+    from mpt_autopilot.batch import run as batch_run
+
+    captured: dict = {}
+
+    def fake_execute(stage_args, config_path):
+        captured["limit"] = stage_args.limit
+        return 0
+
+    original_execute = batch_run.execute
+    batch_run.execute = fake_execute
+    try:
+        code = pipeline._run_batch("en", None, argparse.Namespace(dry_run=False))
+    finally:
+        batch_run.execute = original_execute
+
+    assert code == 0
+    assert captured["limit"] is None
+
+
+def test_run_parser_keeps_limit_and_batch_limit_distinct():
+    parser = pipeline.build_parser()
+    # --limit stays the uploader's cap; --batch-limit is the new generation cap.
+    args = parser.parse_args(["--limit", "5", "--batch-limit", "3"])
+    assert args.limit == 5
+    assert args.batch_limit == 3
+
+
 def test_failure_stops_the_language_by_default(tmp_path, monkeypatch):
     calls: list[tuple[str, str]] = []
     _fake_stages(monkeypatch, {"batch": EXIT_FAILURES}, calls)

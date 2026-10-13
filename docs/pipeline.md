@@ -33,7 +33,7 @@ of having one command:
 | Stage | What `mpt run` passes |
 |---|---|
 | `refill` | the language; config defaults for count/threshold, plus `--refill-force` / `--refill-count` / `--refill-threshold` when given |
-| `batch` | the language (so jobs/seen/output all get its suffix), `--dry-run` |
+| `batch` | the language (so jobs/seen/output all get its suffix), `--dry-run`, `--batch-limit` when given |
 | `enrich` | the language's exports directory, `--dry-run` |
 | `upload` | the account for the language, `--dry-run`, `--limit` |
 
@@ -112,6 +112,10 @@ mpt run --skip upload                   # produce everything, upload later
 `--only` and `--skip` are both repeatable and combine (`--only` first, then
 `--skip` removes from that set). Order does not matter: stages always execute in
 pipeline order, so `--only upload --only batch` still runs batch before upload.
+
+`--batch-limit N` caps how many videos the batch stage generates this run — the
+same flag `mpt batch --limit N` takes, per language. `--limit` alone stays the
+uploader's.
 
 ## `--dry-run`
 

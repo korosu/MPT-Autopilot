@@ -453,7 +453,14 @@ def run(
     dry_run: bool,
     config_path: Path | None = None,
     seen_override: Path | None = None,
+    limit: int | None = None,
 ) -> int:
+    if limit is not None and limit < 1:
+        # argparse's type=int only proves it is a whole number; 0 and negatives
+        # would silently make the run a no-op with a "0 videos" summary.
+        log(f"ERROR: --limit must be 1 or greater, got {limit}", settings)
+        return 1
+
     with open(jobs_path, encoding="utf-8") as f:
         jobs_cfg = yaml.safe_load(f) or {}
 
@@ -463,6 +470,9 @@ def run(
     already_seen = seen.load(seen_file)
     voice_pool = settings.voice_pool
     in_progress_path = seen_file.with_name(seen_file.stem + ".in_progress.txt")
+    # Declared here (not inside `if pending:`) so the main loop's --limit check
+    # can read it on runs with nothing to resume.
+    resumed_produced = 0
 
     # Resume in-progress tasks from a previous interrupted run
     try:
@@ -480,7 +490,16 @@ def run(
         return 1
     if pending:
         log(f"{len(pending)} in-progress task(s) found — attempting resume", settings)
+        # --limit counts videos *produced*, and a resumed task produces one —
+        # the cap belongs here too, or the main loop would double the budget.
         for entry in pending:
+            if limit is not None and resumed_produced >= limit:
+                log(
+                    f"limit: {limit} video(s) already produced by resume — "
+                    f"{len(pending) - resumed_produced} task(s) left for the next run",
+                    settings,
+                )
+                break
             # Named `pending_file` (not `output_file`) so it cannot collide
             # with the main loop's own variable of that name — pyright treats
             # the two same-named declarations as one and mixes their types.
@@ -508,6 +527,7 @@ def run(
                 seen.add(seen_file, pending_file)
                 state.remove(in_progress_path, pending_file)
                 log(f"resumed and done: {pending_file}", settings)
+                resumed_produced += 1
             except Exception as exc:
                 log(
                     f"resume failed for '{pending_file}' (task_id={task_id}): {exc} — "
@@ -558,6 +578,9 @@ def run(
 
     if dry_run:
         print("\n[DRY RUN] Jobs that would run:\n")
+        # A preview that ignored --limit would describe work the real run
+        # refuses to do — the same contract as the uploader's --limit.
+        remaining = limit
         for job in jobs:
             name = job.get("name", job.get("output_file", "?"))
             if not job.get("enabled", True):
@@ -569,11 +592,18 @@ def run(
             if job["output_file"] in already_seen:
                 print(f"  done      {name} (already done)")
                 continue
+            if remaining is not None and remaining <= 0:
+                print(f"  skipped   {name} (--limit reached)")
+                continue
             try:
                 build_payload(job, defaults, voice_pool)
                 print(f"  run       {name}")
+                if remaining is not None:
+                    remaining -= 1
             except KeyError as exc:
                 print(f"  error     {name} - {exc}")
+        if limit is not None and remaining is not None and remaining > 0:
+            print(f"\n  (--limit {limit}: only {limit - remaining} job(s) available)")
         return 0
 
     # ── Pre-flight checks ───────────────────────────────────────────────────
@@ -607,7 +637,8 @@ def run(
             notify.alert(
                 f"Batch started: {jobs_path.name}\n"
                 f"Total jobs: {len(jobs)}  To run: {to_run_count}  "
-                f"Already done: {already_done_count}  Disabled: {disabled_count}",
+                f"Already done: {already_done_count}  Disabled: {disabled_count}"
+                + (f"  Limit: {limit}" if limit is not None else ""),
                 settings,
             )
 
@@ -619,6 +650,23 @@ def run(
 
             for index, job in enumerate(jobs, start=1):
                 name = job.get("name", job.get("output_file", "?"))
+
+                # --limit counts videos produced (resume included — see the
+                # resume loop). Checked *before* submitting, not after: a
+                # post-success check lets one job past the cap submit, and
+                # only the *next* one discovers the budget is gone.
+                if limit is not None and len(ok) + resumed_produced >= limit:
+                    log(
+                        f"limit: {limit} video(s) generated — "
+                        f"{len(jobs) - index + 1} job(s) left for the next run",
+                        settings,
+                    )
+                    for remaining_job in jobs[index - 1 :]:
+                        remaining_name = remaining_job.get(
+                            "name", remaining_job.get("output_file", "?")
+                        )
+                        skipped.append(f"{remaining_name} (not attempted — --limit reached)")
+                    break
 
                 if not job.get("enabled", True):
                     skipped.append(f"{name} (disabled)")
@@ -762,6 +810,17 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         help="Jobs file path (default: jobs.yaml, or jobs_{suffix}.yaml with --lang)",
     )
     parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Generate at most N videos this run, then stop. Disabled jobs, "
+            "already-seen files and failures do not count toward N; a video "
+            "resumed from an interrupted run does. Default: no limit."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Preview which jobs would run without generating anything",
@@ -846,6 +905,7 @@ Examples:
     mpt batch --status
     mpt batch --list-voices es
     mpt batch --list-bgm
+    mpt batch --limit 3                  # generate at most 3 videos this run
 
     # Multi-language: override the seen file to match per-language seen files
     mpt batch --jobs jobs_es.yaml --seen seen_es.txt
@@ -1021,6 +1081,7 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
         dry_run=args.dry_run,
         config_path=config_path,
         seen_override=seen_override,
+        limit=getattr(args, "limit", None),
     )
 
 

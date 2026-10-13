@@ -110,6 +110,17 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         metavar="N",
         help="Passed to the upload stage: only process the first N videos per account.",
     )
+    # ── batch override ────────────────────────────────────────────────────
+    # Deliberately not `--limit`: that name is the uploader's (above). A
+    # separate flag keeps `mpt run --limit 5` meaning upload-only, exactly as
+    # before, instead of silently capping generation too.
+    parser.add_argument(
+        "--batch-limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Passed to batch: generate at most N videos this run, then stop.",
+    )
     # ── refill overrides (M-55) ────────────────────────────────────────────
     # _run_refill used to hard-code force=False / count=None / threshold=None,
     # so forcing a refill meant dropping out of the pipeline entirely.
@@ -144,6 +155,7 @@ Examples:
   mpt run --only batch --only enrich   # a slice of the pipeline
   mpt run --skip upload                # produce everything, upload later
   mpt run --continue-on-error          # don't stop a language on the first failure
+  mpt run --batch-limit 3              # generate at most 3 videos per language
 
   # From cron, with a config elsewhere
   mpt --config /srv/mpt/config.yaml run
@@ -249,6 +261,10 @@ def _run_batch(lang: str, config_path: Path | None, args: argparse.Namespace) ->
         upload_bgm=None,
         seen=None,
         lang=lang,
+        # getattr because execute() is also called with hand-built Namespaces
+        # (tests, embedding code) that predate the flag — same shape as
+        # _run_refill's (M-55).
+        limit=getattr(args, "batch_limit", None),
     )
     return batch_run.execute(stage_args, config_path)
 
