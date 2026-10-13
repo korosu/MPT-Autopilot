@@ -75,7 +75,9 @@ def _match(cmdline: list[str]) -> tuple[str, int] | None:
     """
     if not cmdline:
         return None
-    argv0 = Path(cmdline[0]).name.lower()
+    # Split on both separators: a Windows install (`C:\...\mpt.exe`) scanned
+    # from a Linux server must still reduce to `mpt.exe`, and vice versa.
+    argv0 = cmdline[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
     if argv0 in _MPT:
         marker = 0
     else:
