@@ -108,6 +108,9 @@ h1 { margin: 0; font-size: 1.25rem; }
 #run-state[data-state="bad"]::before { background: var(--bad); }
 
 #mpt-status[data-state="up"]::before { background: var(--ok); }
+/* Something answered, but not MoneyPrinterTurbo's /ping — the port is taken
+   by another server, which a render would fail against. */
+#mpt-status[data-state="warn"]::before { background: var(--warn); }
 #mpt-status[data-state="down"]::before { background: var(--bad); }
 
 /* ── stages sidebar ─────────────────────────────────────────────────────────── */

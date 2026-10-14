@@ -74,11 +74,17 @@ name (`English`, `ru`), not a `config.yaml` language code.
 
 A live preview under the buttons shows the exact command that will run.
 
-**Fill from config** (in the header, and again in the form's action row) writes
-into the open stage's fields the values your `config.yaml` implies for them,
-and clears the rest — the result is that stage exactly as the config describes
-it, never a mix with what was typed before. **Reset** is the same pass with
-nothing to write, which lands on the blank page state.
+**Fill from config** writes into every stage's fields the values your
+`config.yaml` implies for them, and clears the rest — the result is each stage
+exactly as the config describes it, never a mix with what was typed before.
+**Reset** is the same pass with nothing to write, which lands on the blank page
+state.
+
+There are two pairs, with two scopes. The pair in the header works on **every
+stage at once**: press it once, then switch tabs — the fields are already
+filled, because what survives a tab switch is the fill, not the fields (the form
+is rebuilt per stage). The pair in the form's action row works on **the open
+stage only**, for when you want just that tab from the config.
 
 Only keys the config actually sets are filled, and each is resolved the way the
 stage itself resolves it: the stage's own section first, then the shared
@@ -96,8 +102,9 @@ for the next run. `mpt run` carries the same knob as `--batch-limit N` — its o
 Above the form, a one-line map — **refill → batch → enrich → upload** — doubles
 as navigation and shows where the selected stage sits in the pipeline. The dots
 on the right of the header report the current run's state (idle, running with
-elapsed time, or how the last run ended) and whether the MoneyPrinterTurbo API
-answers. A first-time explainer sits under the map; ignore it after that.
+elapsed time, or how the last run ended) and the MoneyPrinterTurbo API's state
+(green `/ping`, amber "not MPT", red "nothing there"). A first-time explainer
+sits under the map; ignore it after that.
 
 ---
 
@@ -163,9 +170,21 @@ probes `{batch.api_url}/ping` with a 2 s timeout.
 MPT ships that endpoint itself: `GET /ping` answers `pong`
 (`app/controllers/ping.py`, upstream and in local installs alike; it sits
 outside the `x-api-key` protection, which covers only `/api/v1` and `/tasks`).
-Any HTTP answer counts as up — a fork that guards `/ping` behind its key still
-proves the server is alive — and only a refused or timed-out connection means
-down. A config with no `batch:` section reads "not configured".
+The dot has three states, because "something answered" and "MoneyPrinterTurbo
+answered" are different facts:
+
+| Answer | Dot | Text |
+|---|---|---|
+| `200 pong` | green | `MPT API: up (host, latency)` |
+| any other HTTP code | amber | `MPT API: no /ping, HTTP 404 — not MoneyPrinterTurbo? (host)` |
+| refused / timed out | red | `MPT API: down (host)` |
+| no `batch:` section | grey | `MPT API: not configured` |
+
+The amber state is the one worth reading twice: the port is taken by a server
+that is not MoneyPrinterTurbo — a hardened fork guarding `/ping`, or another
+service on the same port — so `mpt batch` would fail against it no matter how
+healthy that server is. A config with no `batch:` section reads "not
+configured".
 
 How MPT runs is irrelevant to the check: tmux, systemd or a bare terminal all
 expose the same HTTP port, and `mpt batch` reaches the same URL from the same
@@ -184,6 +203,7 @@ config — if a render could reach it, the probe can too.
 | second run | `409` — a run is already in progress |
 | server died mid-submit | red banner, the Run button is usable again |
 | MPT API unreachable | the header dot turns red — `mpt batch` would fail the same way |
+| MPT API answers, but not `/ping` | the header dot turns amber — that port is not MoneyPrinterTurbo |
 | request to an unexpected Host | `403` — the DNS-rebinding guard |
 | Flask missing | `[ERROR] mpt web needs Flask — run: uv sync --extra web` |
 | `config.yaml` missing | the same `[ERROR]` every other stage prints |
@@ -252,7 +272,7 @@ Arguments are always passed as a list with `shell=False`, so a value like
 |---|---|
 | `GET /` | the page, with the flag spec and current state embedded |
 | `GET /api/status` | `{busy, run_id, stage, exit_code, cancelled, started_at}` |
-| `GET /api/mpt-status` | `{configured, up, status_code, latency_ms, api_url, host}` |
+| `GET /api/mpt-status` | `{configured, up, reachable, status_code, latency_ms, api_url, host}` |
 | `GET /api/external` | `{scanner: "psutil"\|"unavailable", runs: [{pid, stage, started, command, logs}]}` |
 | `POST /api/run` | `{stage, flags}` → `202 {run_id, command}` / `400` / `409` |
 | `GET /api/stream/<run_id>` | `text/event-stream`: `line`, `end`, keepalive comments |

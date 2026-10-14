@@ -148,7 +148,9 @@ function renderStage(stage) {
   for (const button of el.nav.children) {
     button.setAttribute("aria-current", String(button.dataset.stage === stage.name));
   }
-  refreshPreview();
+  // A fill written before the switch has to survive it: the fields were just
+  // rebuilt empty, so re-seat them from `filled` (see the fill/reset block).
+  applyValues(filled.get(stage.name) || {});
   renderPipelineMap();
 }
 
@@ -234,14 +236,51 @@ function quote(value) {
 
 // ── fill from config / reset ─────────────────────────────────────────────────
 
-// Two pairs of buttons, one behaviour: the pair in the header works on
-// whichever stage is open, the pair in the form's action row sits inside that
-// stage. "Fill" writes the values config.yaml implies (flag.config_default,
-// computed server-side — see web/config_defaults.py) and clears everything
-// else, so the result is exactly the stage as the config describes it, never
-// today's leftovers. "Reset" is the same pass with nothing to write, which
-// lands on the blank page state where each input's placeholder still shows the
+// Two pairs of buttons, two scopes: the pair in the header works on every
+// stage at once, the pair in the form's action row on the open one. "Fill"
+// writes the values config.yaml implies (flag.config_default, computed
+// server-side — see web/config_defaults.py) and clears everything else, so
+// the result is exactly the stage as the config describes it, never today's
+// leftovers. "Reset" is the same pass with nothing to write, which lands on
+// the blank page state where each input's placeholder still shows the
 // argparse default.
+
+// Stage name to dest to value. The fields themselves are rebuilt on every tab
+// switch, so what makes a fill survive the switch is this map, not the DOM.
+const filled = new Map();
+
+function stageValues(stage) {
+  const values = {};
+  for (const flag of stage.flags) {
+    if (flag.config_default != null) values[flag.dest] = flag.config_default;
+  }
+  return values;
+}
+
+function fillEveryStage() {
+  for (const stage of STAGES) filled.set(stage.name, stageValues(stage));
+  applyValues(filled.get(current.name) || {});
+}
+
+function fillThisStage() {
+  filled.set(current.name, stageValues(current));
+  applyValues(filled.get(current.name) || {});
+}
+
+function resetEveryStage() {
+  filled.clear();
+  applyValues({});
+}
+
+function resetThisStage() {
+  filled.delete(current.name);
+  applyValues({});
+}
+
+el.fillConfig.addEventListener("click", fillEveryStage);
+el.fillStage.addEventListener("click", fillThisStage);
+el.resetForm.addEventListener("click", resetEveryStage);
+el.resetStage.addEventListener("click", resetThisStage);
 
 function applyValues(values) {
   for (const wrap of el.form.querySelectorAll(".field")) {
@@ -299,23 +338,6 @@ function clearControl(wrap, kind) {
   const input = wrap.querySelector("input, select");
   if (input) input.value = "";
 }
-
-function fillFromConfig() {
-  const values = {};
-  for (const flag of current.flags) {
-    if (flag.config_default != null) values[flag.dest] = flag.config_default;
-  }
-  applyValues(values);
-}
-
-function resetFields() {
-  applyValues({});
-}
-
-el.fillConfig.addEventListener("click", fillFromConfig);
-el.fillStage.addEventListener("click", fillFromConfig);
-el.resetForm.addEventListener("click", resetFields);
-el.resetStage.addEventListener("click", resetFields);
 
 // ── run state ───────────────────────────────────────────────────────────────
 
@@ -472,12 +494,14 @@ async function refreshMptStatus() {
     if (!body.configured) {
       text = "MPT API: not configured";
     } else if (body.up) {
-      // 200 = /ping answered "pong"; anything else still proves the server
-      // exists (e.g. a fork that guards /ping behind its API key).
       state = "up";
-      text = body.status_code === 200
-        ? `MPT API: up (${body.host ?? "?"}${body.latency_ms != null ? `, ${body.latency_ms} ms` : ""})`
-        : `MPT API: reachable, HTTP ${body.status_code} (${body.host ?? "?"})`;
+      text = `MPT API: up (${body.host ?? "?"}${body.latency_ms != null ? `, ${body.latency_ms} ms` : ""})`;
+    } else if (body.reachable) {
+      // Something answered, but not with 200 /ping — the port belongs to a
+      // server that is not MoneyPrinterTurbo, so a render would fail. Amber,
+      // and the text says so: green here would read as "all is well".
+      state = "warn";
+      text = `MPT API: no /ping, HTTP ${body.status_code ?? "?"} — not MoneyPrinterTurbo? (${body.host ?? "?"})`;
     } else {
       state = "down";
       text = `MPT API: down (${body.host ?? "?"})`;

@@ -180,6 +180,44 @@ def test_the_page_carries_the_config_defaults(tmp_path):
     assert flags["batch"]["limit"]["config_default"] is None
 
 
+def test_one_payload_carries_every_stages_defaults(tmp_path):
+    """
+    The header's "Fill from config" fills every tab at once, so a single page
+    payload has to hold each stage's values — the button must not be limited to
+    whatever the spec happened to build for the tab that is open.
+    """
+    from mpt_autopilot.web.app import create_app
+
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "langs:\n"
+        "  en:\n"
+        "    label: English\n"
+        "paths:\n"
+        "  jobs_dir: ./jobs\n"
+        "pilot:\n"
+        "  generation:\n"
+        "    count: 5\n"
+        "enricher:\n"
+        "  platform: tiktok\n",
+        encoding="utf-8",
+    )
+    cfg = shared_config.load(config, env_path=config, reload=True)
+    app = create_app(cfg, config, Runner(spawner=lambda argv: FakeProc(["x"])))
+    app.config.update(TESTING=True)
+
+    body = app.test_client().get("/").get_data(as_text=True)
+    payload = json.loads(body.split('type="application/json">')[1].split("</script>")[0])
+    flags = {s["name"]: {f["dest"]: f for f in s["flags"]} for s in payload["stages"]}
+
+    # Two stages that read different config sections, from one payload.
+    assert flags["refill"]["count"]["config_default"] == "5"
+    assert flags["enrich"]["platform"]["config_default"] == "tiktok"
+    assert flags["run"]["refill_count"]["config_default"] == "5"
+    # And every flag of every stage offers the key, filled or not.
+    assert all("config_default" in f for s in payload["stages"] for f in s["flags"])
+
+
 def test_an_invalid_form_is_rejected_before_anything_starts(client):
     response = client.post("/api/run", json={"stage": "refill", "flags": {}})
     assert response.status_code == 400
@@ -287,7 +325,7 @@ def test_mpt_status_probes_the_configured_api_url(tmp_path, monkeypatch):
 
     def fake_probe(api_url, timeout=status_mod.PROBE_TIMEOUT_SECONDS, transport=None):
         calls.append(api_url)
-        return status_mod.MptStatus(True, True, 200, 7, api_url, "127.0.0.1:8080")
+        return status_mod.MptStatus(True, True, True, 200, 7, api_url, "127.0.0.1:8080")
 
     monkeypatch.setattr(status_mod, "probe", fake_probe)
     body = app.test_client().get("/api/mpt-status").get_json()
@@ -295,6 +333,7 @@ def test_mpt_status_probes_the_configured_api_url(tmp_path, monkeypatch):
     assert body == {
         "configured": True,
         "up": True,
+        "reachable": True,
         "status_code": 200,
         "latency_ms": 7,
         "api_url": "http://127.0.0.1:8080",
