@@ -463,11 +463,16 @@ def test_refill_flags_reach_the_refill_stage(monkeypatch):
     seen_args: list[argparse.Namespace] = []
     monkeypatch.setattr(refill, "execute", lambda a, c: seen_args.append(a) or 0)
 
-    pipeline._run_refill("en", None, _args(refill_force=True, refill_count=7, refill_threshold=3))
+    pipeline._run_refill(
+        "en",
+        None,
+        _args(refill_force=True, refill_count=7, refill_threshold=3, refill_duration_range="120+"),
+    )
 
     assert seen_args[0].force is True
     assert seen_args[0].count == 7
     assert seen_args[0].threshold == 3
+    assert seen_args[0].duration_range == "120+"
 
 
 def test_refill_defaults_stay_false_for_old_namespaces(monkeypatch):
@@ -483,3 +488,11 @@ def test_refill_defaults_stay_false_for_old_namespaces(monkeypatch):
     assert seen_args[0].force is False
     assert seen_args[0].count is None
     assert seen_args[0].threshold is None
+    assert seen_args[0].duration_range is None
+
+
+def test_run_parser_accepts_refill_duration_range():
+    """`mpt run --refill-duration-range` must parse into the refill namespace."""
+    parser = pipeline.build_parser()
+    args = parser.parse_args(["--refill-duration-range", "90-120"])
+    assert args.refill_duration_range == "90-120"

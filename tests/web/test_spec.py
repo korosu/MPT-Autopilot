@@ -138,6 +138,16 @@ def test_batch_limit_flag_is_an_int_on_the_form():
     assert limit.advanced is False
 
 
+def test_refill_duration_range_is_not_hidden_as_advanced():
+    """Video length is a primary dial — the flag must sit up front, not under
+    Advanced, or the web page buries the one control it was added for."""
+    stage = _spec("refill")
+    flag = stage.flag("duration_range")
+    assert flag is not None
+    assert flag.kind == "text"
+    assert flag.advanced is False
+
+
 def test_required_group_members_are_never_hidden():
     stage = _spec("upload")
     for dest in ("account", "all_accounts"):

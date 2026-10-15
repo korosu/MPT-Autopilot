@@ -456,6 +456,12 @@ job's `video_script_prompt`, and it may nudge `paragraph_number` **up** (never d
 script has somewhere to go. An invalid value is rejected before any LLM call is made, naming the
 expected format. Omit the key for no length constraint.
 
+`mpt refill --duration-range` overrides the per-language config value for one run without editing
+`config.yaml` — same format (`"30-60"`, `"120+"`), accepted in every refill mode (LLM, `--theme`,
+`--topic`/`--topics`). The pipeline spelling is `mpt run --refill-duration-range`; `mpt web`'s
+refill form shows the flag up front, next to the everyday controls. The flag never changes what
+lands in `config.yaml` — the config value is what runs without it.
+
 Every generated job gets a hook instruction in `video_script_prompt` whether or not
 `duration_range` is set: the first sentence must grab the viewer in 3–5 seconds, with no
 greetings or throat-clearing.

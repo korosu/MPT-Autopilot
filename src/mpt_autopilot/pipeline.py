@@ -143,6 +143,14 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         metavar="N",
         help="Passed to refill: top the queue back up to N pending jobs.",
     )
+    parser.add_argument(
+        "--refill-duration-range",
+        type=str,
+        default=None,
+        metavar="RANGE",
+        help="Passed to refill: narration target in seconds, 'MIN-MAX' or 'MIN+' "
+        "(overrides langs.<code>.job_defaults.duration_range).",
+    )
     return parser
 
 
@@ -242,6 +250,7 @@ def _run_refill(lang: str, config_path: Path | None, args: argparse.Namespace) -
         force=getattr(args, "refill_force", False),
         count=getattr(args, "refill_count", None),
         threshold=getattr(args, "refill_threshold", None),
+        duration_range=getattr(args, "refill_duration_range", None),
         topic=None,
         topics_file=None,
         theme=None,

@@ -29,6 +29,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import logging
 import math
 import re
@@ -715,6 +716,7 @@ def run(
     topics: list[str] | None = None,
     themes: list[str] | None = None,
     config_path: Path | None = None,
+    duration_range: str | None = None,
 ) -> int:
     settings = load_settings(config_path, require_llm=topics is None)
 
@@ -732,6 +734,19 @@ def run(
         raise FileNotFoundError(f"jobs directory not found: {jobs_dir}")
 
     lang_cfg = settings.lang(lang)
+
+    # CLI --duration-range overrides the per-language job_defaults value.
+    # Rebasing lang_cfg once here covers every downstream reader (the system
+    # prompt's duration claim, _validate_against_config's word-count guidance,
+    # paragraph_number floor) without threading a new parameter through
+    # _run_topics/_deduplicate/_normalise. Direct run() callers bypass
+    # execute()'s early check, but the unconditional parse below still rejects
+    # a bad value before any LLM call.
+    if duration_range is not None:
+        lang_cfg = dataclasses.replace(
+            lang_cfg,
+            job_defaults={**lang_cfg.job_defaults, "duration_range": duration_range},
+        )
     suffix = lang_cfg.file_suffix
 
     # ponytail: validate duration_range before LLM call (topics mode uses _validate later).
@@ -990,6 +1005,15 @@ def add_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         help="Override pilot.generation.threshold from config.yaml.",
     )
     parser.add_argument(
+        "--duration-range",
+        type=str,
+        default=None,
+        metavar="RANGE",
+        help="Narration target in seconds, 'MIN-MAX' or 'MIN+'. Overrides "
+        "langs.<code>.job_defaults.duration_range from config.yaml. Applies to "
+        "--topic/--topics and --theme modes too.",
+    )
+    parser.add_argument(
         "--topic",
         action="append",
         dest="topic",
@@ -1073,6 +1097,15 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
     if args.threshold is not None and args.threshold < 0:
         print("[ERROR] --threshold must be a non-negative integer")
         return 1
+    # getattr: execute() is also called with hand-built Namespaces (pipeline,
+    # tests) that predate the flag — same shape as pipeline's M-55 pattern.
+    duration_flag = getattr(args, "duration_range", None)
+    if duration_flag is not None:
+        try:
+            parse_duration_range(duration_flag)
+        except ValueError as e:
+            print(f"[ERROR] --duration-range: {e}")
+            return 1
 
     # Topics mode: build list from --topic (repeatable) + --topics (file).
     topic_file_lines: list[str] = []
@@ -1114,6 +1147,7 @@ def execute(args: argparse.Namespace, config_path: Path | None = None) -> int:
             topics=topics,
             themes=theme_list,
             config_path=config_path,
+            duration_range=duration_flag,
         )
     except Exception as e:
         try:
