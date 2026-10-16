@@ -114,9 +114,11 @@ The Run buttons lock while a stage is in flight, and a second start returns
 `409`. Two concurrent stages would deadlock on the same `seen.txt` file lock,
 race each other's jobs files, and queue against one MoneyPrinterTurbo server.
 
-The lock lives inside the web process. It does not stop a `mpt batch` you start
-by hand in a terminal — the stages' own file locks still cover that — but the
-page now *sees* such a run, read-only, under the form (see below).
+The lock lives inside the web process. A `mpt batch` you start by hand in a
+terminal is not killed by it — but the page sees such a run (see below) and
+**refuses to start its own while it lives**: two concurrent stages would fight
+over the same jobs files and ledgers. The Run button stays disabled and the
+log pane says why.
 
 ## Runs started outside this page
 
@@ -126,6 +128,13 @@ stage, PID, start time, and — when it provably uses this page's `config.yaml`
 the tail of that stage's file log. `batch` writes `logs/batch.log` and `enrich`
 writes `logs/enricher.log`; `refill`, `upload` and `init-seen` keep no file log,
 and a `mpt run` shows both. The list refreshes every 10 s.
+
+While such a run lives, the Run button is disabled: a terminal run and a web
+run would race each other's `jobs.yaml`, `seen.txt` and ledgers. The page says
+so in the log pane (the standard place, not a popup) the moment it notices —
+and again, once, when the run exits and Run comes back. The server enforces
+the same rule on its own: `POST /api/run` returns `409` with the terminal
+run's command and PID, so even a stale tab cannot sneak a second run in.
 
 Detection, not control: the page cannot cancel a run it did not start, and the
 run has to be on the same machine as `mpt web`. A process whose command line
@@ -201,6 +210,7 @@ config — if a render could reach it, the probe can too.
 | cancelled | grey banner |
 | invalid form | red banner with the reason; **no process was started** |
 | second run | `409` — a run is already in progress |
+| terminal run alive | Run disabled; a line in the log pane names it; a forced start gets `409` |
 | server died mid-submit | red banner, the Run button is usable again |
 | MPT API unreachable | the header dot turns red — `mpt batch` would fail the same way |
 | MPT API answers, but not `/ping` | the header dot turns amber — that port is not MoneyPrinterTurbo |
@@ -274,7 +284,7 @@ Arguments are always passed as a list with `shell=False`, so a value like
 | `GET /api/status` | `{busy, run_id, stage, exit_code, cancelled, started_at}` |
 | `GET /api/mpt-status` | `{configured, up, reachable, status_code, latency_ms, api_url, host}` |
 | `GET /api/external` | `{scanner: "psutil"\|"unavailable", runs: [{pid, stage, started, command, logs}]}` |
-| `POST /api/run` | `{stage, flags}` → `202 {run_id, command}` / `400` / `409` |
+| `POST /api/run` | `{stage, flags}` → `202 {run_id, command}` / `400` / `409` (own slot busy **or** a terminal mpt run alive) |
 | `GET /api/stream/<run_id>` | `text/event-stream`: `line`, `end`, keepalive comments |
 | `POST /api/cancel` | `202`, or `409` when nothing is running |
 
@@ -290,5 +300,5 @@ cache would only make the dot lag behind reality.
 - No run history — each start clears the pane; past runs live in the stage logs.
 - The "runs started outside this page" list is read-only and same-machine only;
   without psutil in the `[web]` extra it reports `unavailable` rather than
-  guessing.
+  guessing — and the run gate opens with it, since there is nothing to see.
 - `mpt web` does not appear as one of its own buttons.

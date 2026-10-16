@@ -32,6 +32,18 @@ const el = {
 let current = STAGES[0];
 let stream = null;
 
+// True while a terminal mpt run holds the pipeline (refreshExternalRuns
+// tracks it): setBusy() keeps Run disabled until the terminal run exits.
+let externalBusy = false;
+
+// The Advanced box is one <details> shared by every stage tab, and the tabs
+// rebuild the fields — so the open/closed choice has to live outside the DOM,
+// exactly like `filled` below, or each switch would snap it shut again.
+let advancedOpen = false;
+el.advancedBox.addEventListener("toggle", () => {
+  advancedOpen = el.advancedBox.open;
+});
+
 // ── controls ────────────────────────────────────────────────────────────────
 
 function field(flag) {
@@ -143,7 +155,7 @@ function renderStage(stage) {
     (flag.advanced ? el.advanced : el.common).append(field(flag));
   }
   el.advancedBox.hidden = !el.advanced.childElementCount;
-  el.advancedBox.open = false;
+  el.advancedBox.open = advancedOpen;
 
   for (const button of el.nav.children) {
     button.setAttribute("aria-current", String(button.dataset.stage === stage.name));
@@ -342,7 +354,9 @@ function clearControl(wrap, kind) {
 // ── run state ───────────────────────────────────────────────────────────────
 
 function setBusy(busy) {
-  el.run.disabled = busy;
+  // Run is off while this page streams a run OR while a terminal run holds
+  // the pipeline: two mpt processes would fight over jobs.yaml and seen.txt.
+  el.run.disabled = busy || externalBusy;
   el.cancel.hidden = !busy;
   el.cancel.disabled = false;
   for (const button of el.nav.children) button.disabled = busy;
@@ -445,7 +459,8 @@ el.form.addEventListener("submit", async (event) => {
   el.run.disabled = true;
 
   // W-6: a rejected fetch used to escape the handler right after disabling
-  // Run, leaving the page stuck until a reload.
+  // Run, leaving the page stuck until a reload. setBusy, not a bare flag, so
+  // an external run that appeared meanwhile keeps Run disabled.
   let response;
   try {
     response = await fetch("/api/run", {
@@ -454,14 +469,14 @@ el.form.addEventListener("submit", async (event) => {
       body: JSON.stringify({ stage: current.name, flags: collect() }),
     });
   } catch {
-    el.run.disabled = false;
+    setBusy(false);
     banner("could not reach the server — is mpt web still running?", "bad");
     return;
   }
   const body = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    el.run.disabled = false;
+    setBusy(false);
     banner(body.error || `could not start (HTTP ${response.status})`, "bad");
     return;
   }
@@ -525,13 +540,23 @@ async function refreshExternalRuns() {
   } catch {
     return; // the web server itself stopped answering; keep what is shown
   }
-  if (!runs.length) {
-    el.externalRuns.hidden = true;
-    el.externalRuns.replaceChildren();
-    return;
-  }
-  el.externalRuns.hidden = false;
+  el.externalRuns.hidden = !runs.length;
   el.externalRuns.replaceChildren(...runs.map(renderExternalRun));
+
+  const busy = runs.length > 0;
+  if (busy === externalBusy) return;
+  externalBusy = busy;
+  // Re-apply the lock: Run comes back only if this page is not mid-run too.
+  setBusy(stream != null);
+  if (busy) {
+    const first = runs[0];
+    append(
+      `mpt is already running outside this page: mpt ${first.command || first.stage} ` +
+        `— PID ${first.pid}. Run is disabled until it exits.`
+    );
+  } else if (stream == null) {
+    append("the run outside this page has exited — Run is enabled again");
+  }
 }
 
 function renderExternalRun(run) {

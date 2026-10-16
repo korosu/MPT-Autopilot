@@ -232,7 +232,9 @@ What is in the screenshot, left to right:
 
 A run started in a *terminal* is listed under the form too, read-only — stage,
 PID, start time, and the tail of that stage's log file when it provably uses
-this page's `config.yaml`.
+this page's `config.yaml`. While it lives, the page's Run button is disabled
+(a line in the log pane says why) and the server refuses to start a second
+run over it — the two would fight over the same jobs files and ledgers.
 
 Screenshots live in [`assets/`](assets). To add or replace one, see
 [assets/README.md](assets/README.md) for what each file must show.

@@ -103,10 +103,15 @@ class FakeProc:
 
 
 @pytest.fixture
-def client(tmp_path):
+def client(tmp_path, monkeypatch):
     # Imported here, not at module scope, for the same reason web/cli.py does:
     # this is the first point that genuinely needs Flask.
+    from mpt_autopilot.web import external as external_mod
     from mpt_autopilot.web.app import create_app
+
+    # POST /api/run scans for terminal mpt runs before starting one; a real
+    # mpt process on this machine must not turn the 202 tests flaky.
+    monkeypatch.setattr(external_mod, "psutil_records", lambda: [])
 
     config = tmp_path / "config.yaml"
     config.write_text("langs:\n  en:\n    label: English\n", encoding="utf-8")
@@ -249,7 +254,7 @@ def test_the_echoed_command_carries_the_flags(client):
     assert body["command"] == ["refill", "--lang", "en"]
 
 
-def test_the_child_gets_an_absolute_config_path(tmp_path):
+def test_the_child_gets_an_absolute_config_path(tmp_path, monkeypatch):
     """
     The child runs with cwd set to the config's own directory, so a relative
     --config would resolve against that directory and disappear. This is the
@@ -268,6 +273,9 @@ def test_the_child_gets_an_absolute_config_path(tmp_path):
         seen.append(argv)
         return FakeProc([])
 
+    from mpt_autopilot.web import external as external_mod
+
+    monkeypatch.setattr(external_mod, "psutil_records", lambda: [])
     app = create_app(cfg, Path("config.yaml"), Runner(spawner=spy))
     app.config.update(TESTING=True)
     app.test_client().post("/api/run", json={"stage": "validate", "flags": {}})
@@ -409,6 +417,35 @@ def test_external_endpoint_without_psutil_is_honest(tmp_path, monkeypatch):
     }
 
 
+def test_a_terminal_run_blocks_starting_one_here(tmp_path, monkeypatch):
+    """The run gate: a terminal mpt and a web mpt would fight over the same
+    jobs.yaml / seen.txt / ledger, so POST /api/run refuses to race it."""
+    from mpt_autopilot.web import external as external_mod
+
+    monkeypatch.setattr(
+        external_mod,
+        "psutil_records",
+        lambda: [external_mod.ProcRecord(pid=1234, cmdline=["mpt", "batch"], create_time=100.0)],
+    )
+    monkeypatch.setattr(external_mod, "fill_cwd", lambda runs: runs)
+
+    response = _external_client(tmp_path).post("/api/run", json={"stage": "validate", "flags": {}})
+    assert response.status_code == 409
+    error = response.get_json()["error"]
+    assert "mpt is already running outside this page" in error
+    assert "PID 1234" in error
+
+
+def test_the_run_gate_is_open_without_psutil(tmp_path, monkeypatch):
+    """Without psutil the scanner sees nothing by design, so the gate degrades
+    to open rather than locking the page on a scanner it does not have."""
+    from mpt_autopilot.web import external as external_mod
+
+    monkeypatch.setattr(external_mod, "psutil_records", lambda: None)
+    response = _external_client(tmp_path).post("/api/run", json={"stage": "validate", "flags": {}})
+    assert response.status_code == 202
+
+
 # ── audit findings W-1, W-2, W-5 ──────────────────────────────────────────────
 
 
@@ -423,9 +460,11 @@ def test_dns_rebinding_hosts_are_refused(client):
     assert response.status_code == 403
 
 
-def test_the_configured_bind_host_is_allowed(tmp_path):
+def test_the_configured_bind_host_is_allowed(tmp_path, monkeypatch):
+    from mpt_autopilot.web import external as external_mod
     from mpt_autopilot.web.app import create_app
 
+    monkeypatch.setattr(external_mod, "psutil_records", lambda: [])
     config = tmp_path / "config.yaml"
     config.write_text("langs:\n  en:\n    label: English\n", encoding="utf-8")
     cfg = shared_config.load(config, env_path=config, reload=True)

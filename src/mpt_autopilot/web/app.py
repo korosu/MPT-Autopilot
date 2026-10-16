@@ -142,24 +142,35 @@ def create_app(
             mimetype="application/json",
         )
 
+    def _scan_external() -> list[external_mod.ExternalRun] | None:
+        """Runs started outside this page, or None when psutil is missing.
+
+        Shared by the read-only list and the run gate below: both must
+        exclude this server's own child, or the page would list (and then
+        refuse to restart) the very run it is streaming.
+        """
+        records = external_mod.psutil_records()
+        if records is None:
+            return None
+        state = runner.state()
+        exclude: set[int] = set()
+        if state is not None and not state.finished and state.pid is not None:
+            exclude.add(state.pid)
+        return external_mod.fill_cwd(
+            external_mod.scan(records, exclude_pids=exclude, self_pid=os.getpid())
+        )
+
     @app.get("/api/external")
     def external() -> Response:
         # Read-only view of mpt runs started outside this page (a terminal, a
         # cron job): which stage runs, its PID, and the tail of that stage's
         # file log when the run provably uses this page's own config.
-        records = external_mod.psutil_records()
-        if records is None:
+        runs = _scan_external()
+        if runs is None:
             return Response(
                 json.dumps({"scanner": "unavailable", "runs": []}, ensure_ascii=False),
                 mimetype="application/json",
             )
-        state = runner.state()
-        exclude: set[int] = set()
-        if state is not None and not state.finished and state.pid is not None:
-            exclude.add(state.pid)
-        runs = external_mod.fill_cwd(
-            external_mod.scan(records, exclude_pids=exclude, self_pid=os.getpid())
-        )
         return Response(
             json.dumps(
                 {
@@ -186,6 +197,18 @@ def create_app(
         except FormError as exc:
             return _error(str(exc), 400)
         argv = command_argv(stage, flag_args, child_config)
+
+        # A terminal run and a web run would fight over the same jobs.yaml,
+        # seen.txt and ledgers. The terminal wins — it was here first — so
+        # the page refuses to start instead of racing it.
+        external_runs = _scan_external()
+        if external_runs:
+            first = external_runs[0]
+            return _error(
+                f"mpt is already running outside this page: {first.command} "
+                f"(PID {first.pid}, stage {first.stage})",
+                409,
+            )
 
         try:
             state = runner.start(stage, argv)
