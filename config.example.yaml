@@ -62,6 +62,8 @@ paths:
 #
 # Only `pilot` reads voices / job_defaults / theme_list; `batch`, `enrich`, and
 # `run` only need file_suffix. Delete a language you don't produce.
+# voices is REQUIRED per language since 1.15.0: pilot assigns voice_name from
+# this pool mechanically and refuses to run without it.
 langs:
   en:
     label: English
@@ -72,12 +74,15 @@ langs:
     voice_rate_min: 1.05
     voice_rate_max: 1.20
 
-    # Allowed voice aliases — pilot rejects any LLM-suggested voice not here.
-    # Omit for "any voice is fine" (pilot won't filter by name).
-    # voices:
-    #   - gemini:aoede
-    #   - gemini:charon
-    #   - gemini:puck
+    # REQUIRED voice pool — pilot assigns every job's voice_name from this
+    # list deterministically (crc32(job name) % pool size), so no LLM ever
+    # picks a voice again. Every entry must be a voice MPT's dispatcher
+    # recognizes; refill refuses to start otherwise. Verify a live config
+    # with: python scripts/update_voice_data.py --verify-config config.yaml
+    voices:
+      - gemini:aoede
+      - gemini:charon
+      - gemini:puck
 
     # Optional theme mode for `mpt refill`: when non-empty, generated topics are
     # constrained to these themes. Omit for free-topic generation.
@@ -106,10 +111,10 @@ langs:
     voice_rate_min: 1.05
     voice_rate_max: 1.15
 
-    # voices:
-    #   - gemini:aoede
-    #   - gemini:kore
-    #   - gemini:puck
+    voices:
+      - gemini:aoede
+      - gemini:kore
+      - gemini:puck
 
     job_defaults:
       video_clip_duration: 4

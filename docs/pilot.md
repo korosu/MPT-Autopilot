@@ -289,11 +289,18 @@ lock is held across the read-and-replace cycle, so two refills (two languages, o
 a previous run) cannot lose each other's jobs.
 
 Everything the LLM returns is validated against the language's config before it is written:
-`voice_name` must be one of the configured `voices`, `voice_rate` must sit between
-`voice_rate_min` and `voice_rate_max`, and `video_concat_mode` / `bgm_type` must be values
-MoneyPrinterTurbo recognises. Anything missing, mistyped, or out of range is replaced with the
-configured default rather than written through, and a job with no usable `video_subject` is
-skipped with a `[skip]` line instead of taking the batch down.
+`voice_name` is **not** taken from the LLM at all — pilot assigns it deterministically from the
+language's `voices` pool (`crc32(job name) % pool size`), so a hallucinated voice name can never
+reach jobs.yaml. `voice_rate` must sit between `voice_rate_min` and `voice_rate_max`, and
+`video_concat_mode` / `bgm_type` must be values MoneyPrinterTurbo recognises. Anything missing,
+mistyped, or out of range is replaced with the configured default rather than written through,
+and a job with no usable `video_subject` is skipped with a `[skip]` line instead of taking the
+batch down.
+
+`refill` refuses to start when a language's `voices` pool is empty or contains a name MPT's
+dispatcher would not recognize (verified against the bundled reference data — see
+`scripts/update_voice_data.py --verify-config`). This pre-flight runs in every mode — LLM,
+`--theme`, and `--topics` — before any LLM call.
 
 The prompt's "already used topics" list covers both rendered videos (from the seen file) **and**
 topics already queued in the jobs yaml but not yet rendered, so a refill can't propose
@@ -400,6 +407,8 @@ langs:
       - gemini:puck
       - gemini:orus
       # ... (all 8 voices listed in config.example.yaml)
+    # REQUIRED: pilot assigns every job's voice_name from this pool and
+    # refuses to run if it's empty or holds a name MPT doesn't recognize.
 
     # Optional: constrain the LLM to specific themes for this language
     theme_list:
@@ -434,7 +443,7 @@ langs:
 | `langs.<code>.label` | `<CODE>` | Language name used in the prompt ("in Spanish"). |
 | `langs.<code>.file_suffix` | `_<code>` | Derives `jobs`, `seen`, and `exports` names. |
 | `langs.<code>.voice_rate_min` / `_max` | `1.05` / `1.20` | Accepted range for the LLM's `voice_rate`; out-of-range values fall back to the minimum. |
-| `langs.<code>.voices` | `[]` | The `voice_name` values the LLM may pick from. A value outside the list is replaced with the first entry. |
+| `langs.<code>.voices` | *(required)* | The pool pilot assigns `voice_name` from, deterministically per job name. Refuse-to-start when empty or holding unknown names. |
 | `langs.<code>.theme_list` | `[]` | Optional theme mode; empty means free-topic generation. |
 | `langs.<code>.job_defaults` | `{}` | Written into every generated job entry. |
 

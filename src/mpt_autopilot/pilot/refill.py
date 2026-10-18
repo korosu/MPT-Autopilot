@@ -35,6 +35,7 @@ import math
 import re
 import sys
 import time
+import zlib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -225,9 +226,18 @@ def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
     defaults = lang_cfg.job_defaults
     out = dict(job)
 
+    # Voice assignment is mechanical, not prompt-begged: whatever the LLM
+    # (or a hand-built payload) put in voice_name is overwritten from the
+    # config pool by a stable hash of the job's name. crc32 instead of
+    # hash() — the builtin is salted per process (PYTHONHASHSEED), which
+    # would make the assignment change between runs. Same topic → same
+    # voice forever; pool covered roughly uniformly. An empty pool is NOT
+    # handled here (a job without a voice would silently fall back to MPT's
+    # Edge default) — run()'s pre-flight rejects it before any LLM call.
     voices = lang_cfg.voices
-    if voices and out.get("voice_name") not in voices:
-        out["voice_name"] = voices[0]
+    if voices:
+        job_name = str(out.get("name") or out.get("output_file") or "")
+        out["voice_name"] = voices[zlib.crc32(job_name.encode("utf-8")) % len(voices)]
 
     rate = out.get("voice_rate")
     if (
@@ -706,6 +716,18 @@ def _request_valid_jobs(
     return left_jobs + right_jobs, left_failed + right_failed
 
 
+def _lang_voice_errors(lang: str, lang_cfg: LangSettings) -> list[str]:
+    """
+    Pre-flight voice-pool validation for one language: the pool must be
+    non-empty and every entry must be a voice MPT's dispatcher recognizes.
+    Returns error lines (empty = fine). Testable on its own so execute()'s
+    fail-fast and the verifier script share one implementation.
+    """
+    from mpt_autopilot.data import voice_data
+
+    return voice_data.validate_pool(lang, lang_cfg.voices)
+
+
 def run(
     lang: str,
     jobs_dir: Path | None,
@@ -734,6 +756,15 @@ def run(
         raise FileNotFoundError(f"jobs directory not found: {jobs_dir}")
 
     lang_cfg = settings.lang(lang)
+
+    # Voice pre-flight, before any LLM call: an empty or unknown-populated
+    # langs.<lang>.voices is a config error, not something to half-handle
+    # mid-generation (the voice assignment in _validate_against_config
+    # silently skips empty pools, which is how hallucinated names once
+    # reached jobs.yaml — see scripts/update_voice_data.py --verify-config).
+    voice_errors = _lang_voice_errors(lang, lang_cfg)
+    if voice_errors:
+        raise ValueError("voice allowlist failed validation:\n  - " + "\n  - ".join(voice_errors))
 
     # CLI --duration-range overrides the per-language job_defaults value.
     # Rebasing lang_cfg once here covers every downstream reader (the system

@@ -36,11 +36,12 @@ Then in jobs.yaml:
       voice: "gemini_puck"
 
 On top of whatever you define in config.yaml, this module also auto-loads
-every free Edge TTS voice (314 of them, all languages) from the bundled
-data/edge_voices.json, so they're usable as aliases without any config.yaml
-edits — e.g. "es_es_elvira" for es-ES-ElviraNeural (Female). Run
-`mpt batch --list-voices es` to browse/search them. config.yaml aliases
-win if a name collides with a bundled one.
+every free Edge TTS voice (314 of them, all languages) from the shared
+reference data (mpt_autopilot/data/edge_voices.json), so they're usable as
+aliases without any config.yaml edits — e.g. "es_es_elvira" for
+es-ES-ElviraNeural (Female). Run `mpt batch --list-voices es` to
+browse/search them. config.yaml aliases win if a name collides with a
+bundled one.
 
 This module only resolves the alias to the underlying field(s) — it has no
 opinion about which provider is "best" and does not validate that a paid
@@ -50,27 +51,12 @@ docs/batch.md).
 
 from __future__ import annotations
 
-import json
 import re
-from pathlib import Path
+
+from mpt_autopilot.data import voice_data
 
 # Fields a voice preset is allowed to set on the API payload.
 _ALLOWED_FIELDS = {"tts_server", "voice_name", "voice_rate", "voice_volume"}
-
-# The data file ships inside this subpackage (src/mpt_autopilot/batch/data/).
-_EDGE_VOICES_DATA_FILE = Path(__file__).parent / "data" / "edge_voices.json"
-_edge_voices_cache: list[dict] = []
-
-
-def _load_edge_voices() -> list[dict]:
-    """Load the bundled {name, gender} list, generated from MoneyPrinterTurbo's
-    own Edge TTS voice list (docs/voice-list.txt). Cached after first read."""
-    global _edge_voices_cache
-    if not _edge_voices_cache:
-        with open(_EDGE_VOICES_DATA_FILE, encoding="utf-8") as f:
-            loaded = json.load(f)
-            _edge_voices_cache = loaded if isinstance(loaded, list) else []
-    return _edge_voices_cache
 
 
 def alias_for_edge_voice(name: str) -> str:
@@ -91,7 +77,10 @@ def build_edge_pool() -> dict[str, dict]:
     own parse_voice_name() expects and strips before calling edge_tts.
     """
     pool: dict[str, dict] = {}
-    for voice in _load_edge_voices():
+    # Shared reference data (src/mpt_autopilot/data/), kept in step with MPT's
+    # own lists by scripts/update_voice_data.py.
+    for voice in voice_data.edge_voice_entries():
+        alias = alias_for_edge_voice(voice["name"])
         alias = alias_for_edge_voice(voice["name"])
         pool[alias] = {
             "tts_server": "edge",

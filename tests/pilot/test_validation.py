@@ -15,6 +15,7 @@ from mpt_autopilot.pilot.refill import (
     _VALID_DISPLAY_MODES,
     _VALID_FIT_MODES,
     _VALID_TRANSITION_MODES,
+    _lang_voice_errors,
     _validate_against_config,
 )
 from mpt_autopilot.pilot.settings import LangSettings
@@ -36,7 +37,7 @@ def _lang(**overrides) -> LangSettings:
         file_suffix="",
         voice_rate_min=1.05,
         voice_rate_max=1.20,
-        voices=["gemini:puck", "gemini:kore"],
+        voices=overrides.pop("voices", ["gemini:puck", "gemini:kore"]),
         job_defaults=defaults,
         theme_list=[],
         **overrides,
@@ -85,11 +86,93 @@ def test_invented_bgm_type_falls_back_to_the_configured_default():
     assert result["bgm_type"] == "random"
 
 
-def test_unlisted_voice_falls_back_to_the_first_configured_one():
+def test_voice_is_assigned_deterministically_from_the_job_name():
+    """Hash assignment: same job name → same voice, no LLM say in it."""
+    result = _validate_against_config({"video_subject": "x", "name": "fact_one_en"}, _lang())
+    again = _validate_against_config({"video_subject": "x", "name": "fact_one_en"}, _lang())
+    assert result["voice_name"] == again["voice_name"]
+    assert result["voice_name"] in {"gemini:puck", "gemini:kore"}
+
+
+def test_llm_supplied_voice_name_is_overwritten_by_the_hash_assignment():
+    """Even a valid-looking LLM voice is overwritten — validity is mechanical."""
     result = _validate_against_config(
-        {"video_subject": "x", "voice_name": "gemini:nonexistent"}, _lang()
+        {"video_subject": "x", "name": "fact_two_en", "voice_name": "gemini:kore"}, _lang()
     )
-    assert result["voice_name"] == "gemini:puck"
+    expected = _validate_against_config({"video_subject": "x", "name": "fact_two_en"}, _lang())
+    assert result["voice_name"] == expected["voice_name"]
+
+
+def test_hash_assignment_covers_the_whole_pool():
+    """Across many job names every pool entry is reachable (no dead voices)."""
+    voices = ["gemini:puck", "gemini:kore", "gemini:fenrir", "gemini:leda"]
+    seen = set()
+    for i in range(40):
+        result = _validate_against_config(
+            {"video_subject": "x", "name": f"fact_{i}_en"}, _lang(voices=voices)
+        )
+        seen.add(result["voice_name"])
+    assert seen == set(voices)
+
+
+def test_empty_voice_pool_skips_assignment():
+    """An empty pool skips assignment; run()'s pre-flight is the gate."""
+    result = _validate_against_config(
+        {"video_subject": "x", "name": "fact_one_en"}, _lang(voices=[])
+    )
+    assert "voice_name" not in result
+
+
+def test_lang_voice_errors_reports_empty_and_unknown_pools():
+    assert _lang_voice_errors("en", _lang()) == []
+    assert "langs.en.voices is empty" in _lang_voice_errors("en", _lang(voices=[]))[0]
+    errors = _lang_voice_errors("en", _lang(voices=["gemini:puck", "espeak:en"]))
+    assert len(errors) == 1
+    assert "espeak:en" in errors[0]
+
+
+def test_run_refuses_an_invalid_voice_pool_before_any_llm_call():
+    """run()'s pre-flight fires before the LLM is touched, no matter the mode."""
+    from pathlib import Path
+    from unittest.mock import MagicMock, patch
+
+    from mpt_autopilot.pilot import refill
+    from mpt_autopilot.pilot.settings import Settings
+
+    settings = Settings(
+        api_key="",
+        base_url="",
+        model="",
+        telegram_token="",
+        telegram_chat_id="",
+        telegram_prefix="p",
+        generate_count=3,
+        refill_threshold=10,
+        scan_dirs=[],
+        langs={"en": _lang(voices=[])},
+        jobs_dir=None,
+        seen_dir=None,
+        seen_max_mb=64,
+    )
+    llm = MagicMock()
+    with patch.object(refill, "load_settings", return_value=settings):
+        with patch.object(refill, "call_llm", llm):
+            try:
+                refill.run(
+                    lang="en",
+                    jobs_dir=Path("."),
+                    seen_dir=None,
+                    force=False,
+                    count_override=None,
+                    threshold_override=None,
+                    topics=["a topic that must never reach the LLM"],
+                    themes=None,
+                )
+            except ValueError as exc:
+                assert "voice allowlist failed validation" in str(exc)
+            else:
+                raise AssertionError("run() should have refused the empty pool")
+    llm.assert_not_called()
 
 
 def test_out_of_range_voice_rate_falls_back_to_the_minimum():

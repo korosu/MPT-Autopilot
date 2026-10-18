@@ -45,7 +45,6 @@ def _prompt_defaults(lang_cfg: LangSettings) -> dict:
     defaults = lang_cfg.job_defaults
     return {
         "suffix": lang_cfg.file_suffix,
-        "voices_json": json.dumps(lang_cfg.voices),
         "clip_duration": defaults.get("video_clip_duration", 3),
         "bgm_volume": defaults.get("bgm_volume", 0.15),
         "paragraph_number": defaults.get("paragraph_number", 2),
@@ -92,7 +91,6 @@ def build(
         "video_clip_duration": d["clip_duration"],
         "video_concat_mode": d["concat_mode"],
         "voice_rate": 1.15,
-        "voice_name": lang_cfg.voices[0] if lang_cfg.voices else "gemini:puck",
         "video_script": "",
         "bgm_type": d["bgm_type"],
         "bgm_volume": d["bgm_volume"],
@@ -141,8 +139,7 @@ surprising fact and explain WHY. End with a memorable kicker. No hashtags, no em
 Maximum {VIDEO_SUBJECT_MAX_CHARS} characters — be concise.
 - name and output_file: snake_case, max {NAME_MAX_CHARS} chars. \
 output_file must end with "{d["suffix"]}.mp4" (e.g. "fact_water_memory{d["suffix"]}.mp4").
-- voice_rate: float between {lang_cfg.voice_rate_min} and {lang_cfg.voice_rate_max}, vary across jobs.
-- voice_name: pick from {d["voices_json"]}, vary across jobs."""
+- voice_rate: float between {lang_cfg.voice_rate_min} and {lang_cfg.voice_rate_max}, vary across jobs."""
     if visual_terms_rules:
         user += f"""- video_terms: a JSON array of stock-search keywords. Rules:
 {visual_terms_rules}
@@ -186,7 +183,6 @@ def build_themes(
         "video_clip_duration": d["clip_duration"],
         "video_concat_mode": d["concat_mode"],
         "voice_rate": 1.15,
-        "voice_name": lang_cfg.voices[0] if lang_cfg.voices else "gemini:puck",
         "video_script": "",
         "bgm_type": d["bgm_type"],
         "bgm_volume": d["bgm_volume"],
@@ -222,7 +218,6 @@ Rules:
 - name and output_file: snake_case, max {NAME_MAX_CHARS} chars.
   output_file must end with "{d["suffix"]}.mp4" (e.g. "fact_water_memory{d["suffix"]}.mp4").
 - voice_rate: float between {lang_cfg.voice_rate_min} and {lang_cfg.voice_rate_max}, vary across jobs.
-- voice_name: pick from {d["voices_json"]}, vary across jobs.
 - video_clip_duration: {d["clip_duration"]} or {d["clip_duration"] + 1}.
 - paragraph_number: 1 or {d["paragraph_number"]}.
 - bgm_volume: {d["bgm_volume"]}.
