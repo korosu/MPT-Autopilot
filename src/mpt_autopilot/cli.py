@@ -207,7 +207,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     stage_config = getattr(args, "stage_config", None)
     config_path: Path | None = stage_config if stage_config is not None else args.config
 
-    return _stage_hooks(args.stage).execute(args, config_path)
+    try:
+        return _stage_hooks(args.stage).execute(args, config_path)
+    except KeyboardInterrupt:
+        # Ctrl+C, or web Cancel's SIGINT (web/runner.py:interrupt_group). Any
+        # `with file_lock(...)` the stage held has already unwound and released
+        # its marker by the time the interrupt reaches here; what is left is
+        # honouring the stage contract — a clean line and exit code instead of
+        # a raw traceback. Persisted state (in_progress.txt, seen) is exactly
+        # what the stage last wrote, so the next run resumes rather than
+        # duplicating work.
+        print("\n[ERROR] interrupted — progress kept; run the stage again to resume")
+        return 1
 
 
 if __name__ == "__main__":

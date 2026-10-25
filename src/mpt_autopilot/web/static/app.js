@@ -510,13 +510,22 @@ async function refreshMptStatus() {
       text = "MPT API: not configured";
     } else if (body.up) {
       state = "up";
-      text = `MPT API: up (${body.host ?? "?"}${body.latency_ms != null ? `, ${body.latency_ms} ms` : ""})`;
+      // via names the endpoint that proved it: /api/v1/tasks is what batch
+      // really calls; /ping is a fallback for forks that lock the API down.
+      const via = body.via === "tasks" ? "/api/v1/tasks" : body.via === "ping" ? "/ping" : "";
+      text =
+        `MPT API: up (${body.host ?? "?"}` +
+        `${via ? `, ${via}` : ""}${body.latency_ms != null ? `, ${body.latency_ms} ms` : ""})`;
     } else if (body.reachable) {
-      // Something answered, but not with 200 /ping — the port belongs to a
-      // server that is not MoneyPrinterTurbo, so a render would fail. Amber,
-      // and the text says so: green here would read as "all is well".
+      // Something answered, but neither endpoint proved MoneyPrinterTurbo —
+      // a render would fail. Amber, and the text says why: green here would
+      // read as "all is well".
       state = "warn";
-      text = `MPT API: no /ping, HTTP ${body.status_code ?? "?"} — not MoneyPrinterTurbo? (${body.host ?? "?"})`;
+      const why =
+        body.status_code === 401 || body.status_code === 403
+          ? "needs x-api-key"
+          : "not MoneyPrinterTurbo";
+      text = `MPT API: ${why} — HTTP ${body.status_code ?? "?"} (${body.host ?? "?"})`;
     } else {
       state = "down";
       text = `MPT API: down (${body.host ?? "?"})`;

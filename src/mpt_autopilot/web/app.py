@@ -27,7 +27,7 @@ from urllib.parse import urlsplit
 from flask import Flask, Response, render_template, request
 
 from mpt_autopilot import config as shared_config
-from mpt_autopilot.web import config_defaults
+from mpt_autopilot.web import config_defaults, mpt_control
 from mpt_autopilot.web import external as external_mod
 from mpt_autopilot.web import spec as spec_mod
 from mpt_autopilot.web import status as status_mod
@@ -68,6 +68,37 @@ def _last_event_id(raw: str | None) -> int:
         return 0
 
 
+def _lock_sweep_dirs(cfg: shared_config.Config) -> list[Path]:
+    """
+    Directories whose `*.lock` markers mpt web may sweep after killing a run.
+
+    Stage locks sit next to their target files: `<seen stem>.run.lock` and
+    `seen.txt.lock` live in the seen dir, jobs locks in the jobs dir. Both
+    stage sections are consulted because a config may point pilot at a
+    different seen_dir than batch; each path_value call falls back to the
+    shared `paths:` block on its own. The sweep only removes markers whose
+    recorded holder is the child it just killed, so a wider net cannot touch
+    a live run's lock.
+    """
+    dirs: list[Path] = []
+    for section, key in (
+        ("pilot", "seen_dir"),
+        ("pilot", "jobs_dir"),
+        ("batch", "seen_dir"),
+        ("batch", "jobs_dir"),
+    ):
+        try:
+            value = cfg.path_value(section, key)
+        # A malformed section (a scalar `pilot:`) must not take the page down
+        # with it — the sweep is an optional convenience, not a dependency.
+        except (shared_config.ConfigError, OSError):
+            continue
+        if value is not None:
+            dirs.append(Path(value))
+    # Keep the first occurrence of each directory, in discovery order.
+    return list(dict.fromkeys(dirs))
+
+
 def create_app(
     cfg: shared_config.Config,
     config_path: Path | None = None,
@@ -75,7 +106,7 @@ def create_app(
     host: str = DEFAULT_HOST,
 ) -> Flask:
     app = Flask(__name__)
-    runner = runner or Runner(cwd=cfg.dir)
+    runner = runner or Runner(cwd=cfg.dir, lock_dirs=_lock_sweep_dirs(cfg))
     specs = {s.name: s for s in spec_mod.stage_specs() if s.name != "web"}
     # config_defaults answers "what would this config.yaml actually use" for
     # the fields the form can fill from it; see web/config_defaults.py.
@@ -140,6 +171,171 @@ def create_app(
         return Response(
             json.dumps(status_mod.probe(mpt_api_url).as_dict(), ensure_ascii=False),
             mimetype="application/json",
+        )
+
+    # ── Settings page: MPT facts + the two narrow commands ─────────────────
+    # Restart and logs run ONLY what config.yaml spelled out
+    # (web.mpt_restart_command / web.mpt_logs_command); see mpt_control.py
+    # for why nothing about the deployment is hardcoded.
+
+    # The one logs stream the app may hold. Replaced — not reused — by every
+    # Start: a finished journalctl follow is a dead pipe, and "start" means a
+    # fresh command. TmuxPollStream rides the same slot: a pane poller and a
+    # follow command answer the same subscribe contract.
+    logs_stream: mpt_control.CommandStream | mpt_control.TmuxPollStream | None = None
+
+    @app.get("/settings")
+    def settings_page() -> str:
+        resolved = mpt_control.resolve_commands(cfg)
+        return render_template(
+            "settings.html",
+            config_path=str(cfg.path),
+            restart_cmd=resolved.restart,
+            # Which sentence the card shows: "from web.mpt_restart_command"
+            # vs "derived from your wizard answer".
+            restart_manual=mpt_control.restart_command(cfg) is not None,
+            logs_cmd=resolved.logs,
+            logs_manual=mpt_control.logs_command(cfg) is not None,
+            logs_kind=resolved.logs_kind,
+            deployment=resolved.deployment,
+        )
+
+    @app.get("/api/mpt/details")
+    def mpt_details() -> Response:
+        status = status_mod.probe(mpt_api_url)
+        payload: dict[str, object] = {
+            **status.as_dict(),
+            "deployment": mpt_control.deployment(mpt_api_url),
+            "version": None,
+            "title": None,
+            # A page that reloads mid-stream re-attaches instead of starting
+            # a second copy of the command.
+            "logs_live": logs_stream is not None and logs_stream.is_live(),
+        }
+        # Only an answering server can have an OpenAPI document — asking a
+        # dead port would just double the button's wait.
+        if status.reachable:
+            payload.update(mpt_control.openapi_version(mpt_api_url) or {})
+        return Response(json.dumps(payload, ensure_ascii=False), mimetype="application/json")
+
+    # ── the setup wizard: pick how MPT runs, commands derive ──────────────
+
+    def _setup_view(resolved: mpt_control.ResolvedMptCommands) -> dict[str, object]:
+        """The wizard form's whole world: the saved choice plus the commands
+        it resolves to (manual config.yaml keys included), so the UI can
+        show what Save did without a second round trip."""
+        dep = resolved.deployment
+        choice: dict[str, str] | None = None
+        if dep is not None:
+            choice = {"type": dep.type, "name": dep.name}
+            if dep.start_command is not None:
+                choice["start_command"] = dep.start_command
+        return {
+            "deployment": choice,
+            "restart": resolved.restart,
+            "logs": resolved.logs,
+            "logs_kind": resolved.logs_kind,
+        }
+
+    @app.get("/api/mpt/setup")
+    def mpt_setup_get() -> Response:
+        return Response(
+            json.dumps(_setup_view(mpt_control.resolve_commands(cfg)), ensure_ascii=False),
+            mimetype="application/json",
+        )
+
+    @app.post("/api/mpt/setup")
+    def mpt_setup_post() -> Response:
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return _error("the setup must be a JSON object", 400)
+        try:
+            deployment = mpt_control.validate_deployment(payload)
+        except ValueError as exc:
+            return _error(str(exc), 400)
+        mpt_control.save_deployment(cfg, deployment)
+        return Response(
+            json.dumps(_setup_view(mpt_control.resolve_commands(cfg)), ensure_ascii=False),
+            mimetype="application/json",
+        )
+
+    @app.post("/api/mpt/restart")
+    def mpt_restart() -> Response:
+        command = mpt_control.resolve_commands(cfg).restart
+        if command is None:
+            return _error(
+                "web.mpt_restart_command is not set in config.yaml and the "
+                "setup wizard has no saved deployment — set one of the two",
+                400,
+            )
+        result = mpt_control.run_restart(command, cfg.dir)
+        return Response(json.dumps(result, ensure_ascii=False), mimetype="application/json")
+
+    @app.post("/api/mpt/logs/start")
+    def mpt_logs_start() -> Response:
+        nonlocal logs_stream
+        resolved = mpt_control.resolve_commands(cfg)
+        command = resolved.logs
+        # kind "tmux" implies a saved deployment (resolve_commands' shape);
+        # the and-clause keeps pyright's narrow without an assert.
+        session = (
+            resolved.deployment.name
+            if resolved.logs_kind == "tmux" and resolved.deployment is not None
+            else None
+        )
+        if logs_stream is not None and logs_stream.is_live():
+            return _error("the MPT log stream is already running", 409)
+        if session is not None:
+            # A pane has no follow mode; the poller answers the same
+            # subscribe contract the SSE route already speaks.
+            stream = mpt_control.TmuxPollStream(session)
+            stream.start()
+        elif command is not None:
+            stream = mpt_control.CommandStream(command, cfg.dir)
+            try:
+                stream.start()
+            except OSError as exc:
+                return _error(f"could not start the log command: {exc}", 500)
+        else:
+            return _error(
+                "web.mpt_logs_command is not set in config.yaml and the "
+                "setup wizard has no saved deployment — set one of the two",
+                400,
+            )
+        logs_stream = stream
+        return Response(status=202)
+
+    @app.post("/api/mpt/logs/stop")
+    def mpt_logs_stop() -> Response:
+        if logs_stream is None or not logs_stream.stop():
+            return _error("the log stream is not running", 409)
+        return Response(status=202)
+
+    @app.get("/api/mpt/logs/stream")
+    def mpt_logs_stream() -> Response:
+        if logs_stream is None:
+            return _error("no log stream has been started yet", 404)
+        # Read before building the generator: outside the request context
+        # there are no headers to read. The stream is captured because a
+        # Start racing this response replaces the app-level reference.
+        last_id = _last_event_id(request.headers.get("Last-Event-ID"))
+        stream = logs_stream
+
+        def events() -> Iterator[str]:
+            for item in stream.subscribe(last_id):
+                if item is None:
+                    yield ": keepalive\n\n"
+                else:
+                    yield _sse("line", item[1], line_id=item[0])
+            yield _sse("end", {})
+
+        return Response(
+            events(),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",  # in case anyone proxies this
+            },
         )
 
     def _scan_external() -> list[external_mod.ExternalRun] | None:

@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Iterable
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -56,6 +57,74 @@ def lock_path_for(target: Path) -> Path:
     return Path(str(target) + ".lock")
 
 
+def _write_holder_pid(lock_path: Path) -> None:
+    """
+    Record the holder's PID inside the marker file.
+
+    This is what lets a *different* process tell a live lock from an orphaned
+    one: a run killed hard (web Cancel on Windows — no graceful console signal
+    exists there, see web/runner.py:interrupt_group) never unlinks its marker,
+    and the recorded PID is then the only proof that nobody owns it. A marker
+    with no readable PID counts as "not ours" and is never swept.
+    """
+    try:
+        lock_path.write_text(f"{os.getpid()}\n", encoding="ascii")
+    except OSError:
+        # A read-only filesystem must not break lock acquisition; the sweep
+        # treats an unreadable marker as "not ours" and leaves it alone.
+        pass
+
+
+def holder_pid(target: Path) -> int | None:
+    """
+    The PID recorded in `target`'s lock marker, or None when the marker holds
+    no readable PID (missing, truncated, or written before this recording
+    existed).
+    """
+    return _marker_pid(lock_path_for(Path(target)))
+
+
+def _marker_pid(marker: Path) -> int | None:
+    """The PID written inside a marker file, or None when there is none."""
+    try:
+        text = marker.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def sweep_orphan_locks(dirs: Iterable[Path], dead_pid: int) -> list[Path]:
+    """
+    Remove `*.lock` markers in `dirs` whose recorded holder is `dead_pid`.
+
+    Used by `mpt web` after it hard-killed a stage child: the child died
+    without running its `finally`, so `<seen stem>.run.lock` (and any
+    short-lived `seen.txt.lock`) would otherwise block the next batch until
+    stale_after expired — half an hour for a run lock. Only markers that NAME
+    the dead process are removed; a live run's marker holds a different PID
+    and stays untouched. Returns the removed paths so the caller can report
+    them.
+    """
+    removed: list[Path] = []
+    for directory in dirs:
+        try:
+            markers = list(Path(directory).glob("*.lock"))
+        except OSError:
+            continue
+        for marker in markers:
+            if _marker_pid(marker) != dead_pid:
+                continue
+            try:
+                marker.unlink()
+            except OSError:
+                continue
+            removed.append(marker)
+    return removed
+
+
 @contextmanager
 def file_lock(
     target: Path,
@@ -94,6 +163,7 @@ def file_lock(
             try:
                 fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 os.close(fd)
+                _write_holder_pid(lock_path)
                 acquired = True
                 break
             except FileExistsError:

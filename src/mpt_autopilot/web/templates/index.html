@@ -13,6 +13,7 @@
   <div class="header-actions">
     <button type="button" id="fill-config" title="Fill every stage's fields from this config.yaml — switch tabs and they stay filled">Fill from config</button>
     <button type="button" id="reset-form" title="Clear every stage's fields back to the blank page state">Reset</button>
+    <a href="/settings" title="MPT status, restart, and live logs">Settings</a>
   </div>
   <div id="status-strip">
     <span id="run-state" data-state="idle">idle</span>
@@ -30,7 +31,7 @@
       <p>Pick a stage in the sidebar, set its flags, press <strong>Run</strong> — the log streams live, and <strong>Cancel</strong> stops the run.</p>
       <p><strong>refill → batch → enrich → upload</strong> is the pipeline; the <strong>run</strong> tab does all four in order.</p>
       <p>One run at a time. A run you started in a terminal appears below the form, read-only.</p>
-      <p>The dots on the right show the current run's state and the MoneyPrinterTurbo API: green answers <code>/ping</code>, amber means something else owns that port, red means nothing is listening.</p>
+      <p>The dots on the right show the current run's state and the MoneyPrinterTurbo API: green means its task list answers (the endpoint batch really calls), amber means something else owns that port, red means nothing is listening.</p>
     </details>
 
     <section id="external-runs" hidden aria-label="Runs started outside this page"></section>

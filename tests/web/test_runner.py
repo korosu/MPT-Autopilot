@@ -197,6 +197,9 @@ def test_a_failed_reader_thread_releases_the_slot(monkeypatch):
 def test_cancel_kills_the_tree_and_marks_the_run(monkeypatch):
     killed: list[int] = []
     hold = threading.Event()
+    # Windows is the hard-kill platform; pin it so the test does not depend
+    # on the host OS (POSIX cancels with a graceful SIGINT instead).
+    monkeypatch.setattr("mpt_autopilot.web.runner.sys.platform", "win32")
     # code=1: a child that exits 0 in the cancel window counts as success
     # (W-4), so this run has to die with a failure for "cancelled" to hold.
     proc = FakeProc(["rendering"], code=1, hold=hold)
@@ -224,6 +227,7 @@ def test_a_child_that_finished_successfully_is_not_reported_as_cancelled(monkeyp
     already exited 0 in that window succeeded — the page must say so."""
     hold = threading.Event()
     proc = FakeProc(["working"], hold=hold)  # exits 0 when the pipe closes
+    monkeypatch.setattr("mpt_autopilot.web.runner.sys.platform", "win32")
     monkeypatch.setattr(runner_mod, "kill_tree", lambda target: hold.set())
 
     runner = _runner(proc)
@@ -248,6 +252,70 @@ def test_cancel_after_the_run_finished_is_a_no_op(monkeypatch):
     state = runner.start("validate", ["mpt", "validate"])
     _drain(runner, state.run_id)
     assert runner.cancel() is False
+
+
+# ── graceful cancel + orphan-lock sweep (problem 2) ───────────────────────────
+
+
+def test_posix_cancel_signals_the_group_first(monkeypatch):
+    """POSIX gets a graceful SIGINT — the child unwinds through its `finally`
+    blocks and releases its own file locks; kill_tree is only the escalation
+    for a child that ignores it, never the first move."""
+    hold = threading.Event()
+    proc = FakeProc(["rendering"], code=1, hold=hold)
+    sent: list[tuple[int, object]] = []
+    monkeypatch.setattr("mpt_autopilot.web.runner.sys.platform", "linux")
+    monkeypatch.setattr(runner_mod, "_escalate_after_grace", lambda proc: None)
+    monkeypatch.setattr(runner_mod, "kill_tree", lambda target: pytest.fail("SIGINT comes first"))
+    monkeypatch.setattr("mpt_autopilot.web.runner.os.getpgid", lambda pid: pid, raising=False)
+    monkeypatch.setattr(
+        "mpt_autopilot.web.runner.os.killpg",
+        lambda pgid, sig: sent.append((pgid, sig)),
+        raising=False,
+    )
+
+    runner = _runner(proc)
+    state = runner.start("batch", ["mpt", "batch"])
+    _wait(runner.busy)
+    assert runner.cancel() is True
+    assert sent == [(4242, signal.SIGINT)]
+
+    hold.set()  # the child "unwound" on its own; the pipe closes
+    _drain(runner, state.run_id)
+    final = runner.state()
+    assert final is not None
+    assert (final.cancelled, final.finished) == (True, True)
+
+
+def test_a_hard_killed_childs_lock_markers_are_swept(monkeypatch, tmp_path):
+    """A Windows cancel kills hard, so the child never unlinks its own
+    markers — the runner sweeps them once the child is reaped, and says so in
+    the log the user is watching. A different holder's marker must survive."""
+    monkeypatch.setattr("mpt_autopilot.web.runner.sys.platform", "win32")
+    hold = threading.Event()
+    proc = FakeProc(["rendering"], code=1, hold=hold)
+    marker = tmp_path / "seen.en.run.lock"
+    marker.write_text(f"{proc.pid}\n", encoding="ascii")
+    foreign = tmp_path / "seen.en.txt.lock"
+    foreign.write_text("9999\n", encoding="ascii")
+
+    def fake_kill(target):
+        hold.set()  # a real kill closes the pipe; this stands in for that
+
+    monkeypatch.setattr(runner_mod, "kill_tree", fake_kill)
+
+    runner = Runner(spawner=lambda argv: proc, lock_dirs=[tmp_path])
+    state = runner.start("batch", ["mpt", "batch"])
+    _wait(runner.busy)
+    assert runner.cancel() is True
+
+    lines = _drain(runner, state.run_id)
+    final = runner.state()
+    assert final is not None
+    assert (final.cancelled, final.finished) == (True, True)
+    assert not marker.exists()
+    assert foreign.exists()
+    assert any("removed seen.en.run.lock" in line for line in lines)
 
 
 # ── SIGKILL escalation (W-7) ───────────────────────────────────────────────────

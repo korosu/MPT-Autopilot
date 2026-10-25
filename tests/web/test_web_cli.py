@@ -333,7 +333,7 @@ def test_mpt_status_probes_the_configured_api_url(tmp_path, monkeypatch):
 
     def fake_probe(api_url, timeout=status_mod.PROBE_TIMEOUT_SECONDS, transport=None):
         calls.append(api_url)
-        return status_mod.MptStatus(True, True, True, 200, 7, api_url, "127.0.0.1:8080")
+        return status_mod.MptStatus(True, True, True, 200, 7, api_url, "127.0.0.1:8080", "tasks")
 
     monkeypatch.setattr(status_mod, "probe", fake_probe)
     body = app.test_client().get("/api/mpt-status").get_json()
@@ -346,6 +346,7 @@ def test_mpt_status_probes_the_configured_api_url(tmp_path, monkeypatch):
         "latency_ms": 7,
         "api_url": "http://127.0.0.1:8080",
         "host": "127.0.0.1:8080",
+        "via": "tasks",
     }
 
 
@@ -503,3 +504,334 @@ def test_the_idle_status_payload_carries_started_at(client):
     """W-5: docs/web.md promised the key on every response, idle included."""
     body = client.get("/api/status").get_json()
     assert body["started_at"] is None
+
+
+# ── the cancel lock sweep (problem 2) ────────────────────────────────────────
+
+
+def test_lock_sweep_dirs_derive_from_the_config(tmp_path):
+    """The sweep must look at the dirs the config actually uses — a stage
+    override first, then the shared `paths:` fallback — and survive a
+    malformed section instead of taking the page down."""
+    from mpt_autopilot.web import app as app_mod
+
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "paths:\n"
+        "  seen_dir: ./seen\n"
+        "  jobs_dir: ./jobs\n"
+        "batch:\n"
+        "  api_url: http://127.0.0.1:8080\n"
+        "  seen_dir: ./batch_seen\n"
+        "pilot: 5\n",  # a scalar section is malformed — skipped, not fatal
+        encoding="utf-8",
+    )
+    cfg = shared_config.load(config, env_path=config, reload=True)
+
+    dirs = app_mod._lock_sweep_dirs(cfg)
+
+    # batch's own seen_dir wins over the shared one; jobs_dir falls back to
+    # paths:, and the broken pilot section contributes nothing.
+    assert dirs == [tmp_path / "batch_seen", tmp_path / "jobs"]
+
+
+def test_lock_sweep_dirs_empty_for_a_bare_config(tmp_path):
+    from mpt_autopilot.web import app as app_mod
+
+    config = tmp_path / "config.yaml"
+    config.write_text("langs:\n  en:\n    label: English\n", encoding="utf-8")
+    cfg = shared_config.load(config, env_path=config, reload=True)
+    assert app_mod._lock_sweep_dirs(cfg) == []
+
+
+# ── the Settings page (problem 3) ───────────────────────────────────────────
+
+
+def test_the_header_links_to_the_settings_page(client):
+    assert 'href="/settings"' in client.get("/").get_data(as_text=True)
+
+
+def test_the_settings_page_renders_without_commands(tmp_path):
+    from mpt_autopilot.web.app import create_app
+
+    config = tmp_path / "config.yaml"
+    config.write_text("langs:\n  en:\n    label: English\n", encoding="utf-8")
+    cfg = shared_config.load(config, env_path=config, reload=True)
+    app = create_app(cfg, config, Runner(spawner=lambda argv: FakeProc(["x"])))
+    app.config.update(TESTING=True)
+
+    body = app.test_client().get("/settings").get_data(as_text=True)
+    assert "MoneyPrinterTurbo" in body
+    # The two unconfigured cards must name the key that turns them on —
+    # "not configured" without the how is a dead end.
+    assert "mpt_restart_command" in body
+    assert "mpt_logs_command" in body
+    # The buttons only exist once the keys are configured.
+    assert 'id="restart-mpt"' not in body
+    assert 'id="logs-start"' not in body
+
+
+def test_the_settings_page_shows_the_configured_commands(tmp_path):
+    from mpt_autopilot.web.app import create_app
+
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "web:\n"
+        "  mpt_restart_command: 'sudo systemctl restart mpt'\n"
+        '  mpt_logs_command: "journalctl -u mpt -f"\n',
+        encoding="utf-8",
+    )
+    cfg = shared_config.load(config, env_path=config, reload=True)
+    app = create_app(cfg, config, Runner(spawner=lambda argv: FakeProc(["x"])))
+    app.config.update(TESTING=True)
+
+    body = app.test_client().get("/settings").get_data(as_text=True)
+    # Autoescaped quotes make exact-match brittle; assert the payloads.
+    assert "systemctl restart mpt" in body
+    assert "journalctl -u mpt -f" in body
+    assert 'id="restart-mpt"' in body
+    assert 'id="logs-start"' in body
+
+
+def _web_client(tmp_path, extra: str = ""):
+    from mpt_autopilot.web.app import create_app
+
+    config = tmp_path / "config.yaml"
+    config.write_text("langs:\n  en:\n    label: English\n" + extra, encoding="utf-8")
+    cfg = shared_config.load(config, env_path=config, reload=True)
+    app = create_app(cfg, config, Runner(spawner=lambda argv: FakeProc(["x"])))
+    app.config.update(TESTING=True)
+    return app.test_client()
+
+
+def test_details_joins_probe_version_and_deployment(client, monkeypatch):
+    from mpt_autopilot.web import mpt_control as control_mod
+    from mpt_autopilot.web import status as status_mod
+
+    monkeypatch.setattr(
+        status_mod,
+        "probe",
+        lambda url: status_mod.MptStatus(
+            True, True, True, 200, 41, "http://127.0.0.1:8080", "127.0.0.1:8080", "tasks"
+        ),
+    )
+    monkeypatch.setattr(control_mod, "deployment", lambda url: "local")
+    monkeypatch.setattr(
+        control_mod,
+        "openapi_version",
+        lambda url: {"version": "1.3.3", "title": "MoneyPrinterTurbo"},
+    )
+
+    body = client.get("/api/mpt/details").get_json()
+    assert body["up"] is True
+    assert body["via"] == "tasks"
+    assert body["version"] == "1.3.3"
+    assert body["deployment"] == "local"
+    assert body["logs_live"] is False
+
+
+def test_restart_and_logs_refuse_when_not_configured(client):
+    restart = client.post("/api/mpt/restart")
+    assert restart.status_code == 400
+    assert "web.mpt_restart_command" in restart.get_json()["error"]
+
+    start = client.post("/api/mpt/logs/start")
+    assert start.status_code == 400
+    assert "web.mpt_logs_command" in start.get_json()["error"]
+
+    # And the stream endpoint has nothing to serve yet.
+    assert client.get("/api/mpt/logs/stream").status_code == 404
+
+
+def test_restart_runs_the_configured_command_and_reports_it(tmp_path, monkeypatch):
+    from mpt_autopilot.web import mpt_control as control_mod
+
+    calls: list[tuple[str, Path]] = []
+    monkeypatch.setattr(
+        control_mod,
+        "run_restart",
+        lambda command, cwd: (
+            calls.append((command, cwd)) or {"ok": True, "exit_code": 0, "output": ["restarted"]}
+        ),
+    )
+    client = _web_client(tmp_path, 'web:\n  mpt_restart_command: "systemctl restart mpt"\n')
+
+    body = client.post("/api/mpt/restart").get_json()
+    assert body == {"ok": True, "exit_code": 0, "output": ["restarted"]}
+    # cfg.dir resolves against the config file, so compare resolved paths.
+    assert calls == [("systemctl restart mpt", tmp_path.resolve())]
+
+
+def test_the_log_stream_lifecycle_start_attach_stop(tmp_path, monkeypatch):
+    from mpt_autopilot.web import mpt_control as control_mod
+
+    class FakeCommandStream:
+        def __init__(self, command: str, cwd: Path):
+            self.command = command
+            self.started = False
+            self.stopped = False
+
+        def start(self) -> None:
+            self.started = True
+
+        def is_live(self) -> bool:
+            return self.started and not self.stopped
+
+        def stop(self) -> bool:
+            if self.is_live():
+                self.stopped = True
+                return True
+            return False
+
+        def subscribe(self, last_id: int = 0):
+            yield (1, "log line one")
+            yield (2, "log line two")
+
+    streams: list[FakeCommandStream] = []
+    monkeypatch.setattr(
+        control_mod,
+        "CommandStream",
+        lambda command, cwd: streams.append(FakeCommandStream(command, cwd)) or streams[-1],
+    )
+    client = _web_client(tmp_path, 'web:\n  mpt_logs_command: "journalctl -u mpt -f"\n')
+
+    assert client.post("/api/mpt/logs/start").status_code == 202
+    assert streams[-1].command == "journalctl -u mpt -f"
+    assert streams[-1].started
+
+    # A second Start is refused — one follow-command at a time.
+    assert client.post("/api/mpt/logs/start").status_code == 409
+
+    body = client.get("/api/mpt/logs/stream").get_data(as_text=True)
+    assert 'data: "log line one"' in body
+    assert 'data: "log line two"' in body
+    assert "event: end" in body
+
+    # The details endpoint tells a reloaded page that a stream is live.
+    assert client.get("/api/mpt/details").get_json()["logs_live"] is True
+
+    assert client.post("/api/mpt/logs/stop").status_code == 202
+    assert client.post("/api/mpt/logs/stop").status_code == 409  # already dead
+
+
+# ── the setup wizard: pick how MPT runs, commands derive ─────────────────────
+
+
+def test_setup_get_prefills_the_saved_choice(tmp_path):
+    client = _web_client(tmp_path)
+    body = client.get("/api/mpt/setup").get_json()
+    assert body["deployment"] is None
+    assert body["restart"] is None
+    assert body["logs"] is None
+    assert body["logs_kind"] == "none"
+
+    # Save a choice through the wizard's own endpoint, then read it back.
+    saved = client.post("/api/mpt/setup", json={"type": "docker", "name": "moneyprinter"})
+    assert saved.status_code == 200
+    body = saved.get_json()
+    assert body["deployment"] == {"type": "docker", "name": "moneyprinter"}
+    assert body["restart"] == "docker restart moneyprinter"
+    assert body["logs"] == "docker logs -f moneyprinter"
+    assert body["logs_kind"] == "command"
+
+    # And GET now serves the same view.
+    assert client.get("/api/mpt/setup").get_json() == body
+
+
+def test_setup_post_validates_and_rejects_injections(tmp_path):
+    client = _web_client(tmp_path)
+    for bad in (
+        {},  # no type
+        {"type": "wat", "name": "x"},
+        {"type": "systemd"},  # no name
+        {"type": "tmux", "name": "x"},  # tmux without a start command
+        {"type": "systemd", "name": "mpt\nrm -rf /"},  # the one injection
+    ):
+        answer = client.post("/api/mpt/setup", json=bad)
+        assert answer.status_code == 400, bad
+        assert answer.get_json()["error"]
+    # Nothing was saved by a rejected post.
+    assert client.get("/api/mpt/setup").get_json()["deployment"] is None
+
+
+def test_wizard_commands_drive_the_buttons_and_tmux_logs_poll(tmp_path, monkeypatch):
+    from mpt_autopilot.web import mpt_control as control_mod
+
+    client = _web_client(tmp_path)
+    saved = client.post(
+        "/api/mpt/setup", json={"type": "tmux", "name": "mpt", "start_command": "python app.py"}
+    )
+    assert saved.status_code == 200
+
+    # Restart runs the wizard-derived line, no config.yaml key involved.
+    calls: list[tuple[str, Path]] = []
+    monkeypatch.setattr(
+        control_mod,
+        "run_restart",
+        lambda command, cwd: (
+            calls.append((command, cwd)) or {"ok": True, "exit_code": 0, "output": []}
+        ),
+    )
+    body = client.post("/api/mpt/restart").get_json()
+    assert body["ok"] is True
+    assert calls == [("tmux kill-session -t mpt && python app.py", tmp_path.resolve())]
+
+    # tmux logs are a poller, not a command.
+    class FakePoller:
+        def __init__(self, session: str):
+            self.session = session
+            self.started = False
+
+        def start(self) -> None:
+            self.started = True
+
+        def is_live(self) -> bool:
+            return self.started
+
+        def stop(self) -> bool:
+            return self.started
+
+        def subscribe(self, last_id: int = 0):
+            yield (1, "pane line")
+
+    pollers: list[FakePoller] = []
+    monkeypatch.setattr(
+        control_mod,
+        "TmuxPollStream",
+        lambda session: pollers.append(FakePoller(session)) or pollers[-1],
+    )
+    assert client.post("/api/mpt/logs/start").status_code == 202
+    assert pollers[-1].session == "mpt"
+    assert pollers[-1].started
+    body = client.get("/api/mpt/logs/stream").get_data(as_text=True)
+    assert 'data: "pane line"' in body
+
+
+def test_a_manual_key_beats_the_wizard_through_the_api(tmp_path):
+    client = _web_client(tmp_path, 'web:\n  mpt_logs_command: "tail -f mpt.log"\n')
+    assert client.post("/api/mpt/setup", json={"type": "docker", "name": "mpt"}).status_code == 200
+    body = client.get("/api/mpt/setup").get_json()
+    # The manual logs key wins; the wizard only names the container.
+    assert body["logs"] == "tail -f mpt.log"
+    assert body["restart"] == "docker restart mpt"
+
+
+def test_the_settings_page_shows_the_wizard_with_the_saved_choice(tmp_path):
+    client = _web_client(tmp_path)
+    assert (
+        client.post(
+            "/api/mpt/setup", json={"type": "tmux", "name": "mpt", "start_command": "python app.py"}
+        ).status_code
+        == 200
+    )
+    body = client.get("/settings").get_data(as_text=True)
+    # The form is prefilled with the saved choice…
+    assert 'value="mpt"' in body
+    assert 'value="python app.py"' in body
+    # …the ssh row is gone entirely…
+    assert "setup-host" not in body
+    assert "SSH" not in body
+    # …and the derived commands light the buttons up without any config.yaml
+    # key ever being touched.
+    assert 'id="restart-mpt"' in body
+    assert 'id="logs-start"' in body

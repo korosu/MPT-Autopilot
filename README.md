@@ -223,10 +223,23 @@ What is in the screenshot, left to right:
   second pair, inside the form, does the same for the open stage only.
 - **Pipeline map** — `refill → batch → enrich → upload`, doubling as navigation.
 - **Header dots** — the current run's state (idle, running with elapsed time,
-  how the last run ended) and the MoneyPrinterTurbo API: green answers `/ping`,
-  amber means something else owns that port, red means nothing is listening.
+  how the last run ended) and the MoneyPrinterTurbo API: green means its task
+  list answers (the endpoint batch really calls), amber means something else
+  owns that port, red means nothing is listening.
 - **Run / Cancel / preview** — the preview line shows the exact command that
   will run before you start it.
+- **Settings** — the header link opens a page about the MoneyPrinterTurbo side:
+  the exact version behind the port (`/openapi.json`), whether a local
+  process owns it, and a setup wizard — pick how MPT
+  runs (a local systemd service, Docker, or tmux) and name
+  it, and the page derives the restart and logs commands from the answer
+  (saved in its own `web-settings.yaml`; hand-written
+  `web.mpt_restart_command` / `web.mpt_logs_command` keys still win per
+  command). Buttons to restart MPT and to stream its logs live; for tmux the
+  "stream" is a `capture-pane` poll showing only the new lines. Cancel is
+  also cleaner now: it signals the run first on POSIX and sweeps the dead
+  child's lock markers on Windows, so a cancelled batch never leaves a
+  `seen.txt` lock behind to block the next one.
 
 ![A run in flight: the log streaming line by line, the running dot with elapsed time](assets/web-run.png)
 

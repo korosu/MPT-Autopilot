@@ -5,7 +5,7 @@ The web layer never touches a process: it starts a run, subscribes to lines,
 and cancels. Everything here is deliberately plain threading, because the
 server is one process serving one person.
 
-Three decisions worth knowing:
+Four decisions worth knowing:
 
   * The run slot is a `threading.Lock`, not lock.py's `file_lock`. file_lock
     treats a lock older than 60 s as abandoned, and a `batch` run takes tens of
@@ -17,6 +17,15 @@ Three decisions worth knowing:
     several tabs can watch the same output.
   * The reader thread owns the slot's release, so the lock is held for exactly
     as long as the process lives — including when it dies of an exception.
+  * Cancel is graceful where the OS allows it, and the locks a hard kill
+    orphaned are swept afterwards. A `mpt batch` holds `<seen stem>.run.lock`
+    for the whole run (batch/run.py); a child killed without unwinding leaves
+    that marker behind, and the next batch then fails with "another process
+    appears to be writing it" until stale_after (30 min) expires. POSIX gets a
+    real graceful signal (SIGINT → KeyboardInterrupt → the child's `finally`
+    releases its locks); Windows has no usable one (see interrupt_group), so
+    cancel kills hard and _sweep_locks removes the markers whose recorded PID
+    is the child's — see lock.py's holder recording.
 """
 
 from __future__ import annotations
@@ -32,6 +41,8 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
+
+from mpt_autopilot.lock import sweep_orphan_locks
 
 # How long a subscriber waits before emitting a keepalive tick. Short enough
 # that a disconnected browser is noticed, long enough to stay quiet.
@@ -112,6 +123,31 @@ def spawn(argv: list[str], cwd: Path | None = None) -> subprocess.Popen[str]:
     )
 
 
+def interrupt_group(proc: ChildProcess) -> None:
+    """
+    Ask the child to stop *gracefully*, so its `finally` blocks run and the
+    stage's file locks are released instead of being left behind for
+    stale_after seconds.
+
+    POSIX: SIGINT the child's own process group (spawn() put it there with
+    start_new_session). CPython turns SIGINT into KeyboardInterrupt in the
+    main thread; batch/run.py catches it around the run lock, so the marker is
+    unlinked on the way out.
+
+    Windows: nothing to send. Both console paths are dead ends (verified
+    2026-10-22 against a local child): a bare CTRL_BREAK_EVENT kills the child
+    outright with exit 0xC000013A — no unwinding at all — and with a SIGBREAK
+    handler installed it does not interrupt the process. So Windows cancels
+    hard (kill_tree) and _sweep_locks removes what the child could not.
+    """
+    if sys.platform == "win32":
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+    except (ProcessLookupError, PermissionError, OSError):
+        proc.terminate()
+
+
 def kill_tree(proc: ChildProcess) -> None:
     """
     Kill the child and everything it started.
@@ -142,6 +178,19 @@ def kill_tree(proc: ChildProcess) -> None:
     ).start()
 
 
+def _escalate_after_grace(proc: ChildProcess) -> None:
+    """
+    Hard-kill a child that outlived the graceful signal (cancel's escalation).
+
+    The graceful signal has had KILL_ESCALATION_SECONDS to land; a survivor
+    goes through kill_tree, which sends SIGTERM and then escalates to SIGKILL
+    on its own — two levels, so a wedged ffmpeg cannot hold the slot.
+    """
+    time.sleep(KILL_ESCALATION_SECONDS)
+    if proc.poll() is None:
+        kill_tree(proc)
+
+
 def _escalate_to_sigkill(proc: ChildProcess) -> None:
     """
     SIGKILL the group if the child outlived the SIGTERM grace period (W-7).
@@ -169,6 +218,7 @@ class Runner:
         spawner: Callable[[list[str]], ChildProcess] | None = None,
         cwd: Path | None = None,
         buffer_lines: int = DEFAULT_BUFFER_LINES,
+        lock_dirs: Iterable[Path] | None = None,
     ) -> None:
         self._spawn = spawner or (lambda argv: spawn(argv, cwd))
         self._slot = threading.Lock()
@@ -178,6 +228,10 @@ class Runner:
         self._run_id = 0
         self._state: RunState | None = None
         self._proc: ChildProcess | None = None
+        # Directories whose `*.lock` markers are swept after a hard kill
+        # (app.create_app derives them from the config's paths). Empty disables
+        # the sweep — a runner nobody pointed at data dirs has nothing to clean.
+        self._lock_dirs: list[Path] = list(lock_dirs or [])
 
     # ── queries ──────────────────────────────────────────────────────────────
 
@@ -240,7 +294,23 @@ class Runner:
             if proc is None or state is None or state.finished:
                 return False
             self._state = replace(state, cancelled=True)
-        kill_tree(proc)
+        if sys.platform == "win32":
+            # No graceful console signal exists (interrupt_group explains why).
+            # The child cannot release its file locks on the way out, so the
+            # sweep in _pump's finally is what keeps <seen>.run.lock from
+            # blocking the next batch for half an hour.
+            kill_tree(proc)
+        else:
+            # SIGINT first: the child unwinds through its finally blocks and
+            # releases the locks itself. A survivor still gets kill_tree after
+            # the grace period (from a daemon thread, so cancel returns now).
+            interrupt_group(proc)
+            threading.Thread(
+                target=_escalate_after_grace,
+                args=(proc,),
+                name=f"mpt-web-cancel-{proc.pid}",
+                daemon=True,
+            ).start()
         return True
 
     # ── output ───────────────────────────────────────────────────────────────
@@ -283,16 +353,30 @@ class Runner:
         # localhost; index by offset if the buffer ever grows.
         return [item for item in self._lines if item[0] > last_id]
 
-    # ── the reader thread ────────────────────────────────────────────────────
-
     def _append(self, text: str) -> None:
         with self._cond:
             self._last_line += 1
             self._lines.append((self._last_line, text))
             self._cond.notify_all()
 
+    def _sweep_locks(self, dead_pid: int | None) -> None:
+        """
+        Remove lock markers the hard-killed child left behind.
+
+        Only markers naming THIS pid are touched — a live run's marker holds a
+        different PID and stays. The lines are appended to the log so the user
+        sees the cleanup instead of wondering why the next run failed.
+        """
+        if dead_pid is None or not self._lock_dirs:
+            return
+        for marker in sweep_orphan_locks(self._lock_dirs, dead_pid):
+            self._append(
+                f"[web] removed {marker.name} — its holder (PID {dead_pid}) is no longer running"
+            )
+
     def _pump(self, proc: ChildProcess) -> None:
         code: int | None = None
+        dead_pid = proc.pid
         try:
             if proc.stdout is not None:
                 for line in proc.stdout:
@@ -303,6 +387,13 @@ class Runner:
             self._append(f"[web] lost the output stream: {exc}")
             code = proc.poll()
         finally:
+            # Sweep BEFORE the state flips to finished: the sweep appends log
+            # lines, and a subscriber that sees finished first would return
+            # before they arrive. poll() returning None means the pipe died
+            # while the child still lives (the OSError path above) — its
+            # markers belong to a live process, not orphans, so no sweep.
+            if proc.poll() is not None:
+                self._sweep_locks(dead_pid)
             with self._cond:
                 if self._state is not None:
                     # W-4: cancel() marks the run cancelled before the kill

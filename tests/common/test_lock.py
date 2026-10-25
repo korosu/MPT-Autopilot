@@ -184,13 +184,15 @@ def test_non_stale_lock_is_not_removed_on_timeout(tmp_path):
 # ── lock content ─────────────────────────────────────────────────────────────
 
 
-def test_lock_file_is_empty(tmp_path):
-    """The lock file contains no data — it's just a marker."""
+def test_marker_records_the_holder_pid(tmp_path):
+    """The marker names its holder, so a survivor can tell an orphaned lock
+    from a live one — web Cancel's sweep (sweep_orphan_locks) depends on it."""
     target = tmp_path / "data.txt"
-    lock_path = target.with_name(target.name + ".lock")
 
     with file_lock(target):
-        assert lock_path.stat().st_size == 0
+        assert lock_mod.holder_pid(target) == os.getpid()
+    # Released → the marker is gone entirely, so there is no PID to read.
+    assert lock_mod.holder_pid(target) is None
 
 
 def test_lock_is_per_target(tmp_path):
@@ -228,6 +230,31 @@ def test_lock_released_between_check_and_stat(tmp_path):
 
     t.join(timeout=2)
     assert not lock_path.exists()
+
+
+# ── orphan sweep (web Cancel cleanup) ───────────────────────────────────────
+
+
+def test_sweep_removes_only_markers_of_the_dead_pid(tmp_path):
+    """sweep_orphan_locks must remove exactly the markers naming the killed
+    child and leave every other marker — a live run's, a garbage marker's —
+    strictly alone."""
+    dead = 111
+    (tmp_path / "a.lock").write_text(f"{dead}\n", encoding="ascii")
+    (tmp_path / "b.lock").write_text("222\n", encoding="ascii")
+    (tmp_path / "c.lock").write_text("not a pid", encoding="ascii")
+    (tmp_path / "d.lock").write_bytes(b"")
+
+    removed = lock_mod.sweep_orphan_locks([tmp_path], dead)
+
+    assert removed == [tmp_path / "a.lock"]
+    assert not (tmp_path / "a.lock").exists()
+    for name in ("b.lock", "c.lock", "d.lock"):
+        assert (tmp_path / name).exists()
+
+
+def test_sweep_tolerates_a_missing_directory(tmp_path):
+    assert lock_mod.sweep_orphan_locks([tmp_path / "nope"], 111) == []
 
 
 if __name__ == "__main__":

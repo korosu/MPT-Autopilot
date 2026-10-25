@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MPT Autopilot — Settings</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+
+<header>
+  <h1>MPT Autopilot</h1>
+  <code class="config" title="{{ config_path }}">{{ config_path }}</code>
+  <div class="header-actions">
+    <a href="/" title="Back to the stages and runs">&larr; Runs</a>
+  </div>
+  <div id="status-strip">
+    <span id="mpt-status" data-state="unknown">MPT API: checking…</span>
+  </div>
+</header>
+
+<main class="settings-page">
+  <section class="settings-card" aria-label="How MoneyPrinterTurbo runs">
+    <h2>How does MPT run?</h2>
+    <p class="help">Answer once — the Restart and Logs cards below derive their
+    commands from it. Hand-tuned lines still win: <code>web.mpt_restart_command</code>
+    / <code>web.mpt_logs_command</code> in config.yaml override the wizard per
+    command.</p>
+    <form id="mpt-setup">
+      <label>Deployment type
+        <select id="setup-type">
+          <option value="systemd"{% if deployment and deployment.type == "systemd" %} selected{% endif %}>systemd service (this machine)</option>
+          <option value="docker"{% if deployment and deployment.type == "docker" %} selected{% endif %}>Docker container</option>
+          <option value="tmux"{% if deployment and deployment.type == "tmux" %} selected{% endif %}>tmux session</option>
+        </select>
+      </label>
+      <label>Unit / container / session name
+        <input id="setup-name" value="{{ deployment.name if deployment else '' }}">
+      </label>
+      <label id="setup-start-row"{% if not deployment or deployment.type != "tmux" %} hidden{% endif %}>Command that starts MPT in the session
+        <input id="setup-start" value="{{ deployment.start_command if deployment and deployment.start_command else '' }}">
+      </label>
+      <div class="actions">
+        <button type="submit" id="setup-save">Save</button>
+      </div>
+      <p id="setup-error" class="help" hidden aria-live="polite"></p>
+    </form>
+    <p class="help">Saved to <code>web-settings.yaml</code> next to config.yaml —
+    the page never rewrites config.yaml itself, so its comments stay yours.</p>
+  </section>
+
+  <section class="settings-card" aria-label="MoneyPrinterTurbo status">
+    <h2>MoneyPrinterTurbo</h2>
+    <dl id="mpt-facts" class="facts"></dl>
+    <div class="actions">
+      <button type="button" id="recheck" title="Probe the MPT API again, right now">Re-check</button>
+    </div>
+  </section>
+
+  <section class="settings-card" aria-label="Restart MoneyPrinterTurbo">
+    <h2>Restart MPT</h2>
+    {% if restart_cmd %}
+      {% if restart_manual %}
+      <p class="help">Runs the command from <code>web.mpt_restart_command</code>:</p>
+      {% else %}
+      <p class="help">Runs the command derived from your wizard answer:</p>
+      {% endif %}
+      <code class="command">{{ restart_cmd }}</code>
+      <div class="actions">
+        <button type="button" id="restart-mpt">Restart MPT</button>
+      </div>
+      <pre id="restart-output" hidden aria-live="polite"></pre>
+    {% else %}
+      <p class="help">Not configured. Either answer the wizard above, or add to
+      config.yaml:</p>
+      <pre class="command-hint">web:
+  mpt_restart_command: 'sudo systemctl restart moneyprinter'</pre>
+      <p class="help">The page runs exactly what you put there — nothing is
+      hardcoded, because every deployment restarts MPT differently (systemd,
+      Docker, tmux…).</p>
+    {% endif %}
+  </section>
+
+  <section class="settings-card" aria-label="MoneyPrinterTurbo logs">
+    <h2>MPT logs</h2>
+    {% if logs_kind == "tmux" %}
+      <p class="help">Watches the tmux pane <code>{{ deployment.name if deployment else '' }}</code> —
+      tmux has no follow mode, so the page polls <code>tmux capture-pane</code>
+      and shows only the new lines.</p>
+      <div class="actions">
+        <button type="button" id="logs-start">Start</button>
+        <button type="button" id="logs-stop" hidden>Stop</button>
+      </div>
+      <pre id="mpt-log" aria-live="polite"></pre>
+    {% elif logs_cmd %}
+      {% if logs_manual %}
+      <p class="help">Streams the command from <code>web.mpt_logs_command</code> —
+      use a follow-mode command (<code>journalctl -f</code>, <code>tail -f</code>)
+      for live logs; a one-shot command shows its output and ends.</p>
+      {% else %}
+      <p class="help">Streams the command derived from your wizard answer —
+      follow-mode, so it stays open until you press Stop.</p>
+      {% endif %}
+      <code class="command">{{ logs_cmd }}</code>
+      <div class="actions">
+        <button type="button" id="logs-start">Start</button>
+        <button type="button" id="logs-stop" hidden>Stop</button>
+      </div>
+      <pre id="mpt-log" aria-live="polite"></pre>
+    {% else %}
+      <p class="help">Not configured. Either answer the wizard above, or add to
+      config.yaml:</p>
+      <pre class="command-hint">web:
+  mpt_logs_command: 'journalctl -u moneyprinter -f'</pre>
+    {% endif %}
+  </section>
+</main>
+
+<script src="{{ url_for('static', filename='settings.js') }}"></script>
+</body>
+</html>

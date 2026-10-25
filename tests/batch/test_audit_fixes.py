@@ -317,6 +317,39 @@ def test_limit_preview_counts_only_runnable_jobs(tmp_path: Path, capsys):
     assert "(--limit 5: only 1 job(s) available)" in out
 
 
+# ── Ctrl+C / web Cancel during the run loop (problem 2) ───────────────────────
+
+
+def test_interrupt_releases_the_run_lock_and_reports_cleanly(tmp_path: Path, capsys):
+    """A SIGINT mid-run (web Cancel on POSIX) must unwind the run lock, exit
+    clean, and leave the resume state exactly as the interrupted run wrote it —
+    no traceback, and no marker left blocking the next batch for half an hour."""
+    jobs_path = _limit_jobs(tmp_path, 3)
+    seen_file = tmp_path / "seen.txt"
+
+    with patch("mpt_autopilot.batch.run.health_check", return_value=True):
+        with patch("mpt_autopilot.batch.run.notify.alert"):
+            with patch("mpt_autopilot.batch.run.run_job", side_effect=KeyboardInterrupt):
+                code = run(
+                    jobs_path,
+                    _run_settings(tmp_path),  # type: ignore[arg-type]
+                    dry_run=False,
+                    seen_override=seen_file,
+                )
+
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "cancelled: 0 done, 0 failed, 0 skipped" in out
+    assert "resume on the next run" in out
+    # The KeyboardInterrupt unwound the `with file_lock(...)`, so the run
+    # marker is gone — the next batch must not stall on it.
+    assert not (tmp_path / "seen.run.lock").exists()
+    # in_progress.txt was never written (run_job raised before state.add),
+    # and seen stayed untouched: nothing to duplicate on the next run.
+    assert not (tmp_path / "seen.in_progress.txt").exists()
+    assert not seen_file.exists()
+
+
 def test_limit_preview_marks_jobs_past_the_cap(tmp_path: Path, capsys):
     jobs_path = _limit_jobs(tmp_path, 3)
 

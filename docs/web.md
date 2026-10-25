@@ -33,7 +33,7 @@ without it the page still works, that one list just reports itself unavailable.
 ```bash
 mpt web                                  # http://127.0.0.1:8765
 mpt web --port 9000
-mpt web --no-browser                     # for an SSH tunnel
+mpt web --no-browser                     # for a headless server
 mpt --config /srv/mpt/config.yaml web    # a config somewhere else
 ```
 
@@ -103,8 +103,10 @@ Above the form, a one-line map — **refill → batch → enrich → upload** �
 as navigation and shows where the selected stage sits in the pipeline. The dots
 on the right of the header report the current run's state (idle, running with
 elapsed time, or how the last run ended) and the MoneyPrinterTurbo API's state
-(green `/ping`, amber "not MPT", red "nothing there"). A first-time explainer
-sits under the map; ignore it after that.
+(green "up", amber "reachable but not MoneyPrinterTurbo", red "nothing
+there" — decided by `/api/v1/tasks`, see below). A first-time explainer sits
+under the map; ignore it after that. The **Settings** link in the header opens
+the page described in [Settings](#settings-page).
 
 ---
 
@@ -144,17 +146,28 @@ the real invocation) is not listed — only `mpt` itself and
 
 ## Cancelling
 
-**Cancel** kills the child *and its children*: `taskkill /F /T` on Windows,
-`SIGTERM` to the process group elsewhere. A bare `terminate()` would leave a
-running `youtubeuploader` behind, and a half-cancelled upload is worse than no
-cancel button.
+**Cancel** stops the child *and its children*, but the how depends on the OS,
+because the goal is not just a dead process — it is a clean exit that leaves no
+`*.lock` markers behind (a leftover `seen.txt.run.lock` blocks the next batch
+for up to half an hour, which is exactly the "I cancelled, now nothing runs"
+trap the sweep exists to close).
 
-On POSIX the group gets `SIGKILL` after a 10-second grace period if the child
-ignored the `SIGTERM` — a process that survives the graceful signal would hold
-the run slot forever. On Windows `taskkill /F` is already forceful.
+On POSIX the child's process group gets **SIGINT** first: the stage unwinds
+through its `finally` blocks, `batch/run.py` catches the `KeyboardInterrupt`,
+prints what finished and what stayed in the in-progress registry, and the run
+lock disappears because the child removed it itself. A group that ignores the
+signal gets `SIGTERM`, then `SIGKILL` after a 10-second grace period — a
+process that survives the graceful signal would hold the run slot forever.
+On Windows there is no usable console signal (a CTRL_BREAK kills outright
+without unwinding), so cancel goes straight to `taskkill /F /T` — and
+afterwards the web layer **sweeps the lock markers**: `lock.py` records the
+holder's PID in every marker it creates, so after the kill the server removes
+exactly the markers that name the dead child. A live run's or a terminal
+run's markers are never touched, and the sweep says what it did in the log
+pane.
 
-`batch` recovers from a kill through its in-progress registry, so the next run
-picks the state back up.
+Either way, `batch` recovers from the interruption through its in-progress
+registry: unfinished tasks re-attach on the next run instead of being re-done.
 
 ---
 
@@ -174,30 +187,109 @@ own file log (see `logger.py`) always has the whole thing.
 
 The header's second dot answers that, so the page never looks healthy while the
 render server is gone. Every ~15 s the page asks `GET /api/mpt-status`, which
-probes `{batch.api_url}/ping` with a 2 s timeout.
+probes `{batch.api_url}/api/v1/tasks` — the endpoint `batch` actually calls —
+with a 2 s timeout.
 
-MPT ships that endpoint itself: `GET /ping` answers `pong`
-(`app/controllers/ping.py`, upstream and in local installs alike; it sits
-outside the `x-api-key` protection, which covers only `/api/v1` and `/tasks`).
-The dot has three states, because "something answered" and "MoneyPrinterTurbo
-answered" are different facts:
+A 200 is not enough on its own: `/api/v1/tasks` is not a health endpoint, so
+the body must have the shape batch accepts (`batch/api.py:health_check`): a
+dict with a list at `data`, or a task list at `data.tasks`. When it does not,
+the probe falls back to `GET /ping` — the healthcheck newer MPT ships outside
+the `x-api-key` protection. The order matters: the reference deployment (MPT
+1.3.3 on a VPS) has no `/ping` route at all — it answers 404 — while
+`/api/v1/tasks` answers 200 for every batch run, so depending on `/ping` would
+paint that deployment amber forever. The dot has three states, because
+"something answered" and "MoneyPrinterTurbo answered" are different facts:
 
 | Answer | Dot | Text |
 |---|---|---|
-| `200 pong` | green | `MPT API: up (host, latency)` |
-| any other HTTP code | amber | `MPT API: no /ping, HTTP 404 — not MoneyPrinterTurbo? (host)` |
+| `200` + task-list shape (or `200 pong` on `/ping`) | green | `MPT API: up (host, /api/v1/tasks, latency)` |
+| any other HTTP code | amber | `MPT API: not MoneyPrinterTurbo — HTTP 404 (host)` (401/403 read "needs x-api-key") |
 | refused / timed out | red | `MPT API: down (host)` |
 | no `batch:` section | grey | `MPT API: not configured` |
 
 The amber state is the one worth reading twice: the port is taken by a server
-that is not MoneyPrinterTurbo — a hardened fork guarding `/ping`, or another
-service on the same port — so `mpt batch` would fail against it no matter how
+that is not MoneyPrinterTurbo — a different service on the same port, or a
+gateway error page — so `mpt batch` would fail against it no matter how
 healthy that server is. A config with no `batch:` section reads "not
 configured".
 
-How MPT runs is irrelevant to the check: tmux, systemd or a bare terminal all
-expose the same HTTP port, and `mpt batch` reaches the same URL from the same
-config — if a render could reach it, the probe can too.
+How MPT runs is irrelevant to the check: tmux, systemd, or a bare terminal
+all expose the same HTTP port, and `mpt batch` reaches the same URL from
+the same config — if a render could reach it, the probe can too.
+
+---
+
+## Settings page
+
+The **Settings** link in the header opens a page with four cards about the
+MoneyPrinterTurbo side of the pipeline. It exists so "MPT is wedged" has a
+next step short of opening a terminal.
+
+**How does MPT run?** — the setup wizard. Pick the deployment type — a
+local systemd service, a Docker container, or a tmux session — and name
+the thing (unit, container, or session name; tmux also asks for the
+command that starts MPT inside the session). The page derives the restart
+and logs commands from the answer and stores it in its own
+`web-settings.yaml` next to config.yaml — the
+page never rewrites config.yaml itself, so its comments stay yours. Every
+field must be a single line: the derived commands are assembled into full
+shell lines, and a newline in a field would splice in a second command —
+the one injection the wizard refuses (the server rejects the whole save,
+stores nothing). What each type derives:
+
+| Type | Restart | Logs |
+|---|---|---|
+| systemd (this machine) | `sudo systemctl restart NAME` | `journalctl -u NAME -f` |
+| Docker container | `docker restart NAME` | `docker logs -f NAME` |
+| tmux session | `tmux kill-session -t NAME && START_COMMAND` | no command — the page polls the pane (below) |
+
+journalctl deliberately runs **without** sudo: sudo without a TTY dies on
+the password prompt and would take the stream with it, and a user in the
+journal group can read their service's logs anyway. Restart with sudo
+stays synchronous and honest — a password prompt or a failure lands in
+the output pane, not behind a green checkmark.
+
+**Status card** — everything the header dot knows (state, endpoint, latency,
+the `via` that proved it) plus what the dot cannot know: the **version** behind
+the port (`GET /openapi.json`, `info.version`/`info.title` — FastAPI serves it
+unauthenticated on every known MPT release) and the **deployment**: who owns
+the port. `python` means MPT itself runs here, nothing
+listening means the dot is about to go red. Non-localhost URLs read
+"remote host" — the page does not pretend to scan another machine. **Re-check**
+runs the same probe the dot uses, on demand.
+
+**Restart MPT** and **MPT logs** run *only* what one of the two sources
+spelled out, per command: manual keys first, the wizard second. A
+hand-written `web.mpt_restart_command` / `web.mpt_logs_command` in
+config.yaml is the power-user escape hatch — a full command line, exactly
+yours, and it **wins** over the wizard's derived line for its own button.
+Nothing about the deployment is hardcoded, deliberately: the reference
+setup is a systemd unit on this server (`sudo systemctl restart
+moneyprinter`), someone else's is tmux, a third runs Docker — only your
+files know which, so only they
+decide. With neither source configured the card shows the exact snippet to
+copy instead of a button; with commands resolved the card shows what will
+run and where it came from (`web.*_command` vs the wizard), restart asks
+for a confirm, and its output appears under the button.
+
+Logs stream live over SSE, the same `EventSource` machinery a stage run
+uses: a follow-mode command (`journalctl -f`, `tail -f`) streams until you
+press **Stop**, a one-shot command shows its output and the pane reports
+"stream ended". A reload mid-stream re-attaches to the running command
+instead of starting a second one; Start on an already-live stream just
+attaches too. The logs stream is deliberately independent of the run slot —
+watching MPT's log while a render is in progress is the whole point.
+tmux answers differently: a pane has no follow mode, so **Start** begins a
+`tmux capture-pane` poll (every ~2 s) that shows only the new lines, marks
+capture failures ("is the session 'NAME' running?") and recovery ("the
+pane is back"), and — when more new lines arrived than the capture window
+holds — replays the whole pane behind a resync note rather than skipping
+lines. Stop just walks away from the pane; nothing is killed, the session
+belongs to MPT, not the page.
+
+Restart runs synchronously with a 60 s timeout and shows the command's own
+output, exit code included — a failed restart with a visible error beats a
+green checkmark over a dead service.
 
 ---
 
@@ -213,7 +305,7 @@ config — if a render could reach it, the probe can too.
 | terminal run alive | Run disabled; a line in the log pane names it; a forced start gets `409` |
 | server died mid-submit | red banner, the Run button is usable again |
 | MPT API unreachable | the header dot turns red — `mpt batch` would fail the same way |
-| MPT API answers, but not `/ping` | the header dot turns amber — that port is not MoneyPrinterTurbo |
+| MPT API answers, but not with a task list | the header dot turns amber — that port is not MoneyPrinterTurbo |
 | request to an unexpected Host | `403` — the DNS-rebinding guard |
 | Flask missing | `[ERROR] mpt web needs Flask — run: uv sync --extra web` |
 | `config.yaml` missing | the same `[ERROR]` every other stage prints |
@@ -239,7 +331,13 @@ There is no login. Three things stand between the page and the outside world:
   `403`, so a page on another site can't start an upload for you;
 - the embedded spec JSON is rendered with Flask's `| tojson`, so no argparse
   help string or `config.yaml` label can close the `<script>` tag and inject
-  markup.
+  markup;
+- the Settings page's Restart/Logs buttons run *nothing the user did not write
+  into `config.yaml` first* — the same file that holds every API key and
+  credential this tool uses. The trust boundary is the file, not the page:
+  anyone who can edit `config.yaml` can already run arbitrary commands, so the
+  buttons add no new power. That is also why both stay disabled (with the
+  snippet to enable them) until the keys exist.
 
 Werkzeug will warn that it is a development server. For one person on loopback
 that is fine. Don't put it on a public interface.
@@ -265,14 +363,20 @@ browser                  Flask (threaded)              child process
 | `web/spec.py` | argparse introspection → flag spec. Pure; loads no settings. |
 | `web/config_defaults.py` | config.yaml → the per-stage values "Fill from config" writes. Mirrors the stages' own resolution order; never raises. |
 | `web/argv.py` | form + spec → `list[str]`. The only place input becomes a command. |
-| `web/runner.py` | the run slot, the pipe reader, the line buffer, cancellation. |
-| `web/status.py` | the MPT `/ping` probe. Pure httpx; no Flask. |
+| `web/runner.py` | the run slot, the pipe reader, the line buffer, cancellation, and the post-kill lock sweep. |
+| `web/status.py` | the MPT health probe: `GET /api/v1/tasks` (body shape as in `batch/api.py:health_check`), `/ping` as fallback. Pure httpx; no Flask. |
+| `web/mpt_control.py` | the Settings page's MPT facts (openapi version, port-owner detect), the setup wizard (web-settings.yaml, per-type derived commands), its two narrow commands (restart, live logs), and the tmux pane poller — config- and wizard-driven, nothing hardcoded. |
 | `web/external.py` | process scan → runs started outside the page, read-only. |
 | `web/app.py` | Flask routes and SSE. Thin. |
 | `web/cli.py` | `mpt web` itself. Imports Flask lazily. |
 
-Arguments are always passed as a list with `shell=False`, so a value like
-`en; rm -rf /` stays one opaque string.
+Stage arguments are always passed as a list with `shell=False`, so a value
+like `en; rm -rf /` stays one opaque string. The two Settings-page commands are
+the deliberate exception: they are full command lines — authored by the
+*user* in `config.yaml` or assembled by
+the wizard from validated single-line answers — run with `shell=True`
+because splitting them would break exactly the quoting they depend on, and
+the trust boundary is those two files, not the form (see Security above).
 
 ---
 
@@ -281,24 +385,37 @@ Arguments are always passed as a list with `shell=False`, so a value like
 | Route | Contract |
 |---|---|
 | `GET /` | the page, with the flag spec and current state embedded |
+| `GET /settings` | the Settings page (wizard, MPT facts, restart, logs) |
 | `GET /api/status` | `{busy, run_id, stage, exit_code, cancelled, started_at}` |
-| `GET /api/mpt-status` | `{configured, up, reachable, status_code, latency_ms, api_url, host}` |
+| `GET /api/mpt-status` | `{configured, up, reachable, status_code, latency_ms, api_url, host, via}` |
+| `GET /api/mpt/details` | mpt-status plus `{version, title, deployment, logs_live}` |
+| `GET /api/mpt/setup` | `{deployment, restart, logs, logs_kind}` — the wizard's saved choice and what it resolves to |
+| `POST /api/mpt/setup` | `{type, name, start_command?}` → the same view after saving / `400` (bad type, blank or multiline field — nothing stored) |
 | `GET /api/external` | `{scanner: "psutil"\|"unavailable", runs: [{pid, stage, started, command, logs}]}` |
 | `POST /api/run` | `{stage, flags}` → `202 {run_id, command}` / `400` / `409` (own slot busy **or** a terminal mpt run alive) |
 | `GET /api/stream/<run_id>` | `text/event-stream`: `line`, `end`, keepalive comments |
 | `POST /api/cancel` | `202`, or `409` when nothing is running |
+| `POST /api/mpt/restart` | `200 {ok, exit_code, output}` / `400` (no `web.mpt_restart_command`, no wizard answer) |
+| `POST /api/mpt/logs/start` | `202` (follow command, or a tmux pane poll when the wizard said tmux) / `400` (not configured) / `409` (already live) |
+| `POST /api/mpt/logs/stop` | `202`, or `409` when the stream is not running |
+| `GET /api/mpt/logs/stream` | `text/event-stream` while a logs command runs; `404` before the first Start |
 
-`/api/mpt-status` probes on every call — one user polls it every ~15 s, so a
-cache would only make the dot lag behind reality.
+`/api/mpt-status` and `/api/mpt/details` probe on every call — one user polls
+them every ~15 s, so a cache would only make the dot lag behind reality.
 
 ---
 
 ## Limits
 
-- One run at a time, by design.
+- One run at a time, by design. One MPT log stream at a time too, but it is a
+  separate slot from the run — you can watch MPT's logs while a render runs.
 - No `config.yaml` editing.
 - No run history — each start clears the pane; past runs live in the stage logs.
 - The "runs started outside this page" list is read-only and same-machine only;
   without psutil in the `[web]` extra it reports `unavailable` rather than
   guessing — and the run gate opens with it, since there is nothing to see.
+- The Settings page restarts/logs against what YOUR files say — a manual
+  `web.*_command` key or the wizard's derived lines — it cannot discover or
+  fix a deployment neither of them covers. The wizard itself only writes
+  `web-settings.yaml`; a rejected save stores nothing.
 - `mpt web` does not appear as one of its own buttons.

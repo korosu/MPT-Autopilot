@@ -59,6 +59,7 @@ h1 { margin: 0; font-size: 1.25rem; }
 .header-actions { display: flex; gap: 0.4rem; }
 
 .header-actions button,
+.header-actions a,
 .actions button.ghost {
   font: inherit;
   font-size: 0.85em;
@@ -68,9 +69,12 @@ h1 { margin: 0; font-size: 1.25rem; }
   background: transparent;
   color: var(--muted);
   cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
 }
 
 .header-actions button:hover,
+.header-actions a:hover,
 .actions button.ghost:hover { color: var(--fg); border-color: var(--accent); }
 
 /* ── status strip: run state + MPT health ─────────────────────────────────── */
@@ -108,7 +112,7 @@ h1 { margin: 0; font-size: 1.25rem; }
 #run-state[data-state="bad"]::before { background: var(--bad); }
 
 #mpt-status[data-state="up"]::before { background: var(--ok); }
-/* Something answered, but not MoneyPrinterTurbo's /ping — the port is taken
+/* Something answered, but not MoneyPrinterTurbo's task list — the port is taken
    by another server, which a render would fail against. */
 #mpt-status[data-state="warn"]::before { background: var(--warn); }
 #mpt-status[data-state="down"]::before { background: var(--bad); }
@@ -292,7 +296,9 @@ summary { cursor: pointer; color: var(--muted); margin-bottom: 0.6rem; }
 #banner.warn { border-color: var(--warn); }
 #banner.bad  { border-color: var(--bad); }
 
-#log {
+#log,
+#mpt-log,
+#restart-output {
   margin: 0.75rem 0 0;
   padding: 0.75rem;
   min-height: 18rem;
@@ -304,6 +310,84 @@ summary { cursor: pointer; color: var(--muted); margin-bottom: 0.6rem; }
   font: 13px/1.45 ui-monospace, monospace;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+#restart-output {
+  min-height: 0;
+  max-height: 30vh;
+}
+
+#restart-output.ok  { border-color: var(--ok); }
+#restart-output.bad { border-color: var(--bad); }
+
+/* ── settings page ──────────────────────────────────────────────────────── */
+
+.settings-page {
+  max-width: 46rem;
+  margin: 0 auto;
+  display: grid;
+  gap: 1rem;
+}
+
+.settings-card {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0.9rem 1rem;
+}
+
+.settings-card h2 { margin: 0 0 0.5rem; font-size: 1.05rem; }
+.settings-card .actions { margin-top: 0.6rem; }
+
+.facts {
+  display: grid;
+  grid-template-columns: minmax(7rem, auto) 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0;
+}
+
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; word-break: break-word; }
+
+code.command,
+pre.command-hint {
+  display: block;
+  margin-top: 0.4rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px dashed var(--line);
+  border-radius: 5px;
+  font: 13px/1.45 ui-monospace, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+pre.command-hint { color: var(--muted); }
+
+/* The wizard form: stacked labels, one field per row. Its bare <input>
+   elements (no type attribute) fall outside the global input rule above,
+   so the wizard styles its own. */
+#mpt-setup {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+
+#mpt-setup label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-family: ui-monospace, monospace;
+  font-size: 0.9em;
+}
+
+#mpt-setup select,
+#mpt-setup input {
+  font: inherit;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: inherit;
+  min-width: 0;
 }
 
 /* ── external runs (started in a terminal, read-only here) ───────────────── */

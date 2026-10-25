@@ -165,7 +165,7 @@ reading and writing the same registry with the same semantics.
 
 Each `task_id` is written to a sidecar registry (`seen.in_progress.txt`, next to the seen file)
 as soon as MoneyPrinterTurbo accepts the job — before polling starts. If the run dies mid-poll
-(Ctrl-C, a reboot, a dropped SSH session), the next run re-attaches to that existing task and
+(Ctrl-C, a reboot, a dropped terminal), the next run re-attaches to that existing task and
 polls it to completion instead of submitting a duplicate. An entry naming a video that is
 already in the seen registry, or that no longer exists in the jobs file, is simply dropped.
 

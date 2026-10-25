@@ -653,6 +653,38 @@ pipeline:
   #   en: main-channel
   #   es: spanish-channel
 
+
+# =============================================================================
+# web: — `mpt web` (the Settings page; optional)
+#
+# The Settings page (the "Settings" link in the page header) shows MPT's
+# state, version, and deployment, and can restart MPT and stream its logs.
+# Two ways to tell it how, per command — manual keys here win, the wizard
+# fills the gaps:
+#   1. The "How does MPT run?" wizard ON THE PAGE: pick systemd / Docker /
+#      tmux, name the unit/container/session, and the page derives both
+#      commands. Saved in web-settings.yaml next to this file — this file
+#      is never rewritten from the page.
+#   2. The two manual keys below: full command lines, exactly yours.
+# Nothing is hardcoded: MPT Autopilot runs on the same server as MPT, but
+# your MPT might be a systemd unit, a tmux pane, or a Docker container —
+# you know how YOUR MPT runs. Leave both keys out (and skip the wizard)
+# and the cards show instructions instead of buttons.
+# =============================================================================
+web:
+  # Restart MoneyPrinterTurbo. Examples:
+  #   systemd:  'sudo systemctl restart moneyprinter'
+  #   Docker:   'docker restart moneyprinter'
+  # mpt_restart_command: 'sudo systemctl restart moneyprinter'
+
+  # Produce MPT's log lines. Use a follow-mode command for LIVE logs:
+  #   systemd:      'journalctl -u moneyprinter -f'
+  #   plain file:   'tail -f /root/MoneyPrinterTurbo/mpt.log'
+  # A one-shot command works too (journalctl -n 200, no -f): its output
+  # streams once and the pane reports "stream ended".
+  # (tmux needs neither key: the wizard polls `tmux capture-pane` instead.)
+  # mpt_logs_command: 'journalctl -u moneyprinter -f'
+
 # One join `mpt run` cannot make for you: each account's `videos_dir` in
 # accounts.yaml must be the directory batch renders that language into —
 # batch.output_dir plus the language's file_suffix. With the settings above:

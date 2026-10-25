@@ -625,6 +625,13 @@ def run(
     # strict mode turns "still locked" into a clean exit 1 rather than the
     # old silent 30-minute stall of a second batch.
     batch_lock_target = seen_file.with_name(seen_file.stem + ".run")
+    # Counters live before the try, not inside the lock: a Ctrl+C that lands
+    # while the lock is still being acquired (or during the "batch started"
+    # alert) would otherwise reach the KeyboardInterrupt handler below with
+    # these names unbound.
+    ok: list[str] = []
+    failed: list[str] = []
+    skipped: list[str] = []
     try:
         with file_lock(
             batch_lock_target,
@@ -642,9 +649,6 @@ def run(
                 settings,
             )
 
-            ok: list[str] = []
-            failed: list[str] = []
-            skipped: list[str] = []
             consecutive_failures = 0
             last_cleanup_at = 0
 
@@ -731,10 +735,22 @@ def run(
             if settings.cache_cleanup_enabled and len(ok) != last_cleanup_at:
                 cleanup_cache(settings)
     except TimeoutError as exc:
-        # Ctrl+C / exceptions unwind through the `with`, so the lock is
-        # released without the old dedicated signal handlers; only a SIGTERM
-        # kill leaves the marker behind, and stale_after then clears it.
         log(f"ERROR: {exc}", settings)
+        return 1
+    except KeyboardInterrupt:
+        # Ctrl+C here, or web Cancel's SIGINT (web/runner.py:interrupt_group):
+        # the interrupt unwound the `with file_lock(...)` above, so the run
+        # marker is already released. Only a hard kill (SIGTERM / Windows
+        # taskkill) leaves the marker behind — stale_after or the web lock
+        # sweep clear that. in_progress.txt keeps the in-flight task_ids, so
+        # the next batch re-attaches to the running MPT tasks instead of
+        # submitting duplicates; finished jobs are already in seen and stay.
+        log(
+            f"cancelled: {len(ok)} done, {len(failed)} failed, "
+            f"{len(skipped)} skipped — unfinished tasks stay in "
+            f"{in_progress_path.name} and resume on the next run",
+            settings,
+        )
         return 1
 
     return _print_summary(ok, failed, skipped, settings, started_at=start_time)

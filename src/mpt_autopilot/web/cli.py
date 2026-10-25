@@ -57,7 +57,7 @@ EPILOG = """
 Examples:
   mpt web                                  # http://127.0.0.1:8765
   mpt web --port 9000
-  mpt web --no-browser                     # for a remote SSH tunnel
+  mpt web --no-browser                     # for a headless server
 
   # One config somewhere else entirely
   mpt --config /srv/mpt/config.yaml web
