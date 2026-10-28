@@ -68,13 +68,17 @@ defaults:
   # video_count > 1 silently forces random concat in MPT (overriding
   # video_concat_mode) — keep 1 unless you know that.
   video_count: 1
+  # image_motion (MPT 1.3.9): "zoom" = slow zoom on still/AI images (default),
+  # "static" = no motion. For a truly still picture, MPT documents
+  # image_motion: "static" + no transition.
+  image_motion: "zoom"
   # Order materials by narration + round-robin downloads across video_terms;
   # with it on, MPT forces sequential concat. Needs 8+ video_terms to shine.
   match_materials_to_script: true
   video_source: "pexels"
-  # Other supported sources: "pixabay", "coverr", "wavespeed" (AI text-to-video),
-  # "volcengine_seedance", "ofox" (multi-model video API), "metaso_minimax",
-  # "loomloom", "openai_image", "local"
+  # Other supported sources (MPT 1.3.9): "pixabay", "coverr", "wavespeed" (AI
+  # text-to-video), "volcengine_seedance", "ofox" (multi-model video API),
+  # "metaso_minimax", "muapi", "loomloom", "openai_image", "infistar", "local"
   video_materials:
     - provider: "pexels"
       url: ""

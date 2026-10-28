@@ -184,6 +184,10 @@ _VALID_TRANSITION_MODES = {
 }
 _VALID_DISPLAY_MODES = {"sentence", "word_by_word"}
 _VALID_ANIMATIONS = {"none", "pop_spring"}
+# ImageMotion (MPT 1.3.9): zoom = slow zoom on still/AI images (server
+# default), static = no motion. New field — "a still image without transition
+# effects" now selects Static + transition none.
+_VALID_IMAGE_MOTIONS = {"static", "zoom"}
 
 
 def _num_default(defaults: dict, key: str, fallback: float) -> float:
@@ -347,6 +351,13 @@ def _validate_against_config(job: dict, lang_cfg: LangSettings) -> dict:
     # subtitle_animation: subtitle pop-in animation
     if out.get("subtitle_animation") not in _VALID_ANIMATIONS:
         out["subtitle_animation"] = defaults.get("subtitle_animation", "none")
+
+    # image_motion (MPT 1.3.9): still/AI-image motion. Absent means the
+    # server default (zoom = slow zoom) applies; "static" is the new lever for
+    # a dead-still image — MPT documents Static + transition none as the pair
+    # for that. Only rewrite invalid values, matching the whitelists above.
+    if out.get("image_motion") not in _VALID_IMAGE_MOTIONS:
+        out["image_motion"] = defaults.get("image_motion", "zoom")
 
     # rounded_subtitle_background: rounded corners on the subtitle plate.
     # Only renders together with a real text_background_color value (MPT

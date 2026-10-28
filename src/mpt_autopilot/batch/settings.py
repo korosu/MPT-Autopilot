@@ -108,6 +108,13 @@ class Settings:
     # AI-generated so true is the right default, but the choice belongs in
     # config.yaml, not in code.
     upload_post_contains_synthetic_media: bool = True
+    # YouTube's "made for kids" audience declaration (selfDeclaredMadeForKids,
+    # MPT 1.3.9): upload-post.com requires an explicit declaration and its
+    # default changed from an implicit "not made for kids" to an explicit
+    # one — mirroring MPT's own upload_post_youtube_made_for_kids default of
+    # false. A children's channel must flip this in config.yaml (or MPT's
+    # config.toml via mpt.config_path).
+    upload_post_made_for_kids: bool = False
 
 
 # Accept both YAML true and 1 as truthy for cache_cleanup_enabled (YAML
@@ -187,6 +194,7 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
         "username": "upload_post_username",
         "platforms": "upload_post_platforms",
         "youtube_privacy_status": "upload_post_youtube_privacy_status",
+        "made_for_kids": "upload_post_youtube_made_for_kids",
     }
 
     def _up(key: str, default: object) -> object:
@@ -208,6 +216,10 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
     # config.yaml-only (not an [app] key in MPT's config.toml): _up falls to
     # the default when neither config.yaml nor MPT carries it.
     up_contains_synthetic_media = bool(_up("contains_synthetic_media", True))
+    # Mirrors MPT's upload_post_youtube_made_for_kids: falls back to MPT's
+    # config.toml value when config.yaml is silent (B-13's rule applies — an
+    # explicitly-disabled MPT key and an absent one must stay distinguishable).
+    up_made_for_kids = bool(_up("made_for_kids", False))
 
     s = Settings(
         api_url=str(cfg.require(SECTION, "api_url")).rstrip("/"),
@@ -242,6 +254,7 @@ def load(config_path: Path | None = None, env_path: Path | None = None) -> Setti
         upload_post_youtube_privacy_status=up_youtube_privacy,
         upload_post_privacy_level=up_privacy_level,
         upload_post_contains_synthetic_media=up_contains_synthetic_media,
+        upload_post_made_for_kids=up_made_for_kids,
     )
     validate(s)
     return s

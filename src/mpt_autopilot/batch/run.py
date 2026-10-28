@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import shutil
@@ -58,6 +59,8 @@ from mpt_autopilot.config import ConfigError
 from mpt_autopilot.lock import file_lock, lock_path_for
 from mpt_autopilot.logger import Logger, configure_root
 from mpt_autopilot.uploader.metadata import title_from_filename
+
+_log = logging.getLogger(__name__)
 
 # Stale threshold for the batch run lock: a run can legitimately take hours
 # (max_wait_seconds defaults to 2400s per task), so the keepalive in run()
@@ -324,7 +327,40 @@ def build_payload(job: dict, defaults: dict, voice_pool: dict) -> dict:
         **defaults,
         **{k: v for k, v in job.items() if k not in meta_keys},
     }
-    return voices.resolve(payload, voice_pool)
+    payload = voices.resolve(payload, voice_pool)
+    warn_api_bounds(job, payload)
+    return payload
+
+
+# TaskVideoRequest caps MPT 1.3.7+ enforces on /api/v1/videos. The HTTP layer
+# rejects out-of-range values with 400 — PayloadRejected — which batch does not
+# retry (the payload never changes between attempts), so a stale value burned
+# every retry, one per max_retries, and killed the run. Warn at payload-build
+# time instead: still the job's own fetch-and-fail, but named before submission.
+_API_BOUNDS = {
+    "video_count": (1, 5),
+    "video_clip_duration": (1, 15),
+    "n_threads": (1, 16),
+}
+
+
+def warn_api_bounds(job: dict, payload: dict) -> None:
+    """Warn when the payload carries values MPT's API request schema rejects."""
+    name = job.get("name", job.get("output_file", "?"))
+    for key, (lo, hi) in _API_BOUNDS.items():
+        value = payload.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        if not lo <= value <= hi:
+            _log.warning(
+                "job %s: %s=%r is outside MPT's API bound %d..%d — the server "
+                "will reject it with HTTP 400 (PayloadRejected, no retry)",
+                name,
+                key,
+                value,
+                lo,
+                hi,
+            )
 
 
 def run_job(

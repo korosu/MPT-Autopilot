@@ -52,6 +52,7 @@ Python/
 .pytest_cache/
 # pytest drops these into cwd when basetemp can't be created
 pytest-cache-files-*/
+.pytest-basetemp/
 # agent scratch dirs
 .tmptest*/
 tmptest/

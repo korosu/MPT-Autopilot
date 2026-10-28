@@ -27,6 +27,7 @@ _REQUIRED_KEYS = (
     "upload_post_enabled",
     "upload_post_platforms",
     "upload_post_youtube_privacy_status",
+    "upload_post_youtube_made_for_kids",
 )
 
 

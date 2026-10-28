@@ -7,6 +7,8 @@ Covered here:
   - M-29: a job without output_file fails that job, not the whole run
   - M-31: log() routes through the shared Logger (level prefix, rotation)
   - poll interval comes from settings (audit L: hardcoded 10s)
+  - MPT 1.3.7+: TaskVideoRequest API caps warn in build_payload;
+    upload-post made-for-kids declaration (MPT 1.3.9)
 """
 
 from __future__ import annotations
@@ -49,6 +51,7 @@ def _up_settings(**overrides):
         "upload_post_youtube_privacy_status": "public",
         "upload_post_privacy_level": None,
         "upload_post_contains_synthetic_media": True,
+        "upload_post_made_for_kids": False,
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -122,6 +125,23 @@ def test_privacy_status_none_falls_back_to_settings(tmp_path: Path):
     assert data["privacyStatus"] == "private"
 
 
+# ── made-for-kids declaration (MPT 1.3.9) ─────────────────────────────────────
+
+
+def test_made_for_kids_false_is_sent_explicitly(tmp_path: Path):
+    """upload-post.com requires an explicit boolean on every YouTube upload;
+    the default declaration is "not made for children"."""
+    _, data = _upload(tmp_path, _up_settings())
+    assert data["selfDeclaredMadeForKids"] == "false"
+
+
+def test_made_for_kids_true_is_sent(tmp_path: Path):
+    """A children's channel flips the declaration — YouTube requires COPPA
+    audience settings to be truthful on upload."""
+    _, data = _upload(tmp_path, _up_settings(upload_post_made_for_kids=True))
+    assert data["selfDeclaredMadeForKids"] == "true"
+
+
 # ── build_payload (M-28) ──────────────────────────────────────────────────────
 
 
@@ -149,6 +169,50 @@ def test_build_payload_raises_key_error_for_unknown_voice_alias():
     an unknown voice alias instead of only the real run."""
     with pytest.raises(KeyError, match="voice alias"):
         build_payload({"voice": "no_such_alias"}, {}, {})
+
+
+# ── MPT 1.3.7+ TaskVideoRequest API caps ─────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("video_count", 6),  # API cap 5
+        ("video_clip_duration", 20),  # API cap 15
+        ("n_threads", 32),  # API cap 16
+    ],
+)
+def test_build_payload_warns_outside_mpt_api_bounds(
+    key: str, value: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    """TaskVideoRequest rejects values outside these bounds with HTTP 400 —
+    PayloadRejected, which batch does not retry, so a stale value burned every
+    retry. The warning names the job and the bound before submission."""
+    with caplog.at_level(logging.WARNING, logger="mpt_autopilot.batch.run"):
+        build_payload({"name": "j", key: value}, {}, {})
+
+    assert key in caplog.text
+    assert "MPT's API bound" in caplog.text
+
+
+def test_build_payload_does_not_warn_inside_mpt_api_bounds(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """In-bounds values (including the common defaults) must stay silent."""
+    with caplog.at_level(logging.WARNING, logger="mpt_autopilot.batch.run"):
+        payload = build_payload(
+            {
+                "name": "j",
+                "video_count": 1,
+                "video_clip_duration": 15,
+                "n_threads": 16,
+            },
+            {},
+            {},
+        )
+
+    assert payload["video_clip_duration"] == 15
+    assert "API bound" not in caplog.text
 
 
 # ── jobs without output_file (M-29) ───────────────────────────────────────────

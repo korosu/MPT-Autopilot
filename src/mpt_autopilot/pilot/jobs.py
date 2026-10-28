@@ -89,6 +89,8 @@ _KEY_ORDER = [
     "stroke_width",
     # Rendering
     "n_threads",
+    # Still/AI-image motion (MPT 1.3.9): zoom (slow-zoom, server default) or static
+    "image_motion",
 ]
 
 # ── Reading ───────────────────────────────────────────────────────────────────

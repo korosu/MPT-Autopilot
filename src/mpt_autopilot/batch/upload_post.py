@@ -132,6 +132,16 @@ def upload_video(
                 "containsSyntheticMedia": (
                     "true" if settings.upload_post_contains_synthetic_media else "false"
                 ),
+                # Made-for-kids audience declaration (selfDeclaredMadeForKids).
+                # upload-post.com now requires an explicit boolean; absent used
+                # to fall back to an implicit "not made for kids", which its
+                # current API stopped doing silently. False is the default —
+                # a children's channel sets batch.upload_post.made_for_kids in
+                # config.yaml (MPT 1.3.9 mirrors this as
+                # upload_post_youtube_made_for_kids in its config.toml).
+                "selfDeclaredMadeForKids": (
+                    "true" if settings.upload_post_made_for_kids else "false"
+                ),
             }
         )
         # tags[] as simple string list — httpx encodes as repeated multipart keys.

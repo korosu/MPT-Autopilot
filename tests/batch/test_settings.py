@@ -105,3 +105,49 @@ def test_upload_post_privacy_level_is_configurable(tmp_path: Path) -> None:
     settings = load(config, tmp_path / ".env")
 
     assert settings.upload_post_privacy_level == "PRIVATE_TO_SELF"
+
+
+def test_made_for_kids_defaults_to_false(tmp_path: Path) -> None:
+    """MPT 1.3.9: upload-post.com requires an explicit made-for-kids boolean.
+    Our default must be false ("not made for children"), independent of any
+    youtube_privacy_status — the two settings are orthogonal."""
+    config = tmp_path / "config.yaml"
+    config.write_text(_BASE + "  mpt_songs_dir: ./songs\n", encoding="utf-8")
+
+    settings = load(config, tmp_path / ".env")
+
+    assert settings.upload_post_made_for_kids is False
+
+
+def test_made_for_kids_is_configurable(tmp_path: Path) -> None:
+    """A children's channel flips the declaration — same override chain as the
+    other upload_post keys (config.yaml wins)."""
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        _BASE + "  mpt_songs_dir: ./songs\n  upload_post:\n    made_for_kids: true\n",
+        encoding="utf-8",
+    )
+
+    settings = load(config, tmp_path / ".env")
+
+    assert settings.upload_post_made_for_kids is True
+
+
+def test_made_for_kids_falls_back_to_mpt_config_toml(tmp_path: Path) -> None:
+    """B-13's contract for the whole upload_post family: config.yaml silent →
+    MPT's config.toml [app] value is used (extract_upload_post returns only
+    keys the section really carries)."""
+    mpt_toml = tmp_path / "mpt.toml"
+    mpt_toml.write_text(
+        "[app]\nupload_post_youtube_made_for_kids = true\n",
+        encoding="utf-8",
+    )
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        _BASE + "  mpt_songs_dir: ./songs\n" + "mpt:\n  config_path: mpt.toml\n",
+        encoding="utf-8",
+    )
+
+    settings = load(config, tmp_path / ".env")
+
+    assert settings.upload_post_made_for_kids is True

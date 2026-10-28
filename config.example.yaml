@@ -290,6 +290,12 @@ batch:
     # upload when youtube_privacy_status is non-public and no explicit
     # privacy_level is given, rather than silently publishing publicly.
     # privacy_level: "PUBLIC_TO_EVERYONE"
+    # YouTube "made for kids" audience declaration (selfDeclaredMadeForKids,
+    # MPT 1.3.9). upload-post.com now requires an explicit boolean for every
+    # YouTube upload; false is the default ("not made for children"). Set true
+    # for a children's channel — it also reads from MPT's config.toml as
+    # upload_post_youtube_made_for_kids when left unset here.
+    # made_for_kids: false
 
   # ── Voice presets ────────────────────────────────────────────────────────
   #

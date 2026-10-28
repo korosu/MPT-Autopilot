@@ -27,6 +27,7 @@ from mpt_autopilot.pilot.refill import (
     _VALID_CONCAT_MODES,
     _VALID_DISPLAY_MODES,
     _VALID_FIT_MODES,
+    _VALID_IMAGE_MOTIONS,
     _VALID_TRANSITION_MODES,
 )
 
@@ -98,6 +99,19 @@ def test_display_mode_whitelist_matches_the_schema_enum():
 
 def test_animation_whitelist_matches_the_schema_enum():
     assert _VALID_ANIMATIONS == set(ENUMS["subtitle_animation"])
+
+
+def test_image_motion_whitelist_matches_the_schema_enum():
+    """MPT 1.3.9's new ImageMotion enum: zoom = slow zoom (server default),
+    static = no motion on still/AI images."""
+    assert _VALID_IMAGE_MOTIONS == set(ENUMS["image_motion"])
+
+
+def test_image_motion_is_writable_by_the_pilot():
+    """image_motion is a real VideoParams field, so the pilot may write it and
+    _validate_against_config must normalise into it (not drop it)."""
+    assert "image_motion" in _KEY_ORDER
+    assert "image_motion" in FIELDS
 
 
 def test_bgm_types_match_what_get_bgm_file_honours():
